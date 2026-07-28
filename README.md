@@ -11,6 +11,12 @@
 
 ---
 
+## Why NiriZan?
+
+Modern AI systems are probabilistic rather than deterministic. Traditional software testing alone cannot determine whether a retrieval pipeline, language model, or AI agent is performing correctly. NiriZan exists to provide continuous, reproducible evaluation infrastructure that enables teams to measure quality, detect regressions, compare experiments, and build confidence in production AI systems.
+
+---
+
 ## What is NiriZan?
 
 NiriZan is an open-source continuous evaluation infrastructure for production AI systems. It enables engineers and researchers to systematically measure, benchmark, validate, and monitor the quality of:
@@ -20,7 +26,7 @@ NiriZan is an open-source continuous evaluation infrastructure for production AI
 - **Large Language Model (LLM)** applications
 - **Custom AI workflows**
 
-Rather than focusing on model orchestration, NiriZan focuses on trustworthy AI engineering. It provides:
+Unlike orchestration frameworks that focus on building AI applications, NiriZan focuses on engineering confidence in AI systems. It provides:
 
 | Capability | Description |
 |---|---|
@@ -41,15 +47,10 @@ The long-term vision of NiriZan is to become the **engineering quality layer for
 
 NiriZan is a fusion of two words from two languages, each contributing a core idea behind the project.
 
-### Niri
-> **Origin:** নিরীক্ষা (*Nirikkha*) — Bangla/Bengali
->
-> **Meaning:** Inspection · Evaluation · Verification · Audit
-
-### Zan
-> **Origin:** ميزان (*Mīzān*) — Arabic
->
-> **Meaning:** Scale · Balance · Measurement · Criterion
+| Niri | Zan |
+|---|---|
+| **Origin:** নিরীক্ষা (*Nirikkha*) — Bangla/Bengali | **Origin:** ميزان (*Mīzān*) — Arabic |
+| **Meaning:** Inspection · Evaluation · Verification · Audit | **Meaning:** Scale · Balance · Measurement · Criterion |
 
 Together, **Niri + Zan** captures the essence of the project: inspecting AI systems and measuring them against a balanced standard of quality.
 
