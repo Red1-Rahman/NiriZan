@@ -1,0 +1,31 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below. If NiriZan has an associated paper by the time you are citing it, prefer that citation instead; check the repository for a preferred-citation entry or a linked publication."
+type: software
+title: "NiriZan"
+abstract: >
+  NiriZan is an open-source continuous evaluation infrastructure for
+  production AI systems. It enables engineers and researchers to
+  systematically measure, benchmark, validate, and monitor the quality of
+  Retrieval-Augmented Generation (RAG) pipelines, AI agents, Large Language
+  Model (LLM) applications, and custom AI workflows, treating evaluation as
+  a continuous, reproducible engineering discipline rather than a one-time
+  pre-release check.
+authors:
+  - family-names: "Rahman"
+    given-names: "Redwan"
+    email: "redwanrahman2002@outlook.com"
+repository-code: "https://github.com/Red1-Rahman/NiriZan"
+url: "https://github.com/Red1-Rahman/NiriZan"
+license: "GPL-3.0-or-later"
+keywords:
+  - "AI evaluation"
+  - "LLM evaluation"
+  - "retrieval-augmented generation"
+  - "RAG evaluation"
+  - "AI agents"
+  - "regression detection"
+  - "MLOps"
+  - "LLMOps"
+  - "continuous evaluation"
+  - "software quality"
+version: "0.0.0"
