@@ -1,0 +1,75 @@
+name: Bug Report
+description: Something isn't working the way docs/contracts.md or docs/architecture.md says it should.
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a bug. NiriZan is pre-implementation and moving through the phases in its roadmap, so please check first whether the component you're reporting on is expected to exist yet.
+
+  - type: dropdown
+    id: phase
+    attributes:
+      label: Which phase does this affect?
+      description: See CONTRIBUTING.md if you're unsure which phase a component belongs to.
+      options:
+        - "Phase 1: Instrumentation & Trace Storage"
+        - "Phase 2: RAG Triad Metrics"
+        - "Phase 3: Experiment Tracking & Baselines"
+        - "Phase 4: Regression Detection & CI Gate"
+        - "Phase 5: Drift & Judge-Reliability Layer"
+        - Not sure / spans multiple phases
+    validations:
+      required: true
+
+  - type: input
+    id: component
+    attributes:
+      label: Component or file
+      description: e.g. instrumentation/tracer.py, metrics/rag_triad.py
+      placeholder: src/nirizan/...
+    validations:
+      required: false
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you expect instead? Include the exact error message if there is one.
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: Minimal steps, or a minimal code snippet, that reproduces the issue.
+      render: python
+    validations:
+      required: false
+
+  - type: input
+    id: version
+    attributes:
+      label: NiriZan version or commit
+      placeholder: e.g. 0.1.0, or a git commit hash
+    validations:
+      required: false
+
+  - type: input
+    id: python-version
+    attributes:
+      label: Python version
+      placeholder: "3.10 or 3.11 (per pyproject.toml)"
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: terms
+    attributes:
+      label: Code of Conduct
+      description: By submitting this issue, you agree to follow this project's [Code of Conduct](../../CODE_OF_CONDUCT.md).
+      options:
+        - label: I agree to follow this project's Code of Conduct.
+          required: true
