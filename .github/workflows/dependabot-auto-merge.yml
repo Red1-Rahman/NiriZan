@@ -1,0 +1,128 @@
+name: Dependabot auto-merge
+
+# Runs only on pull requests opened by Dependabot. Every dependency bump,
+# regardless of semver level, must pass the full check suite here before
+# anything is auto-merged. Patch and minor updates that pass are merged
+# automatically. Major updates are never auto-merged, even if every check
+# is green, since a passing test suite does not prove a major bump (e.g.
+# pydantic v2 -> v3) is safe. It only proves the tests we happened to
+# write still pass against the new version.
+on:
+  pull_request:
+    branches: ["main"]
+
+permissions:
+  contents: write
+  pull-requests: write
+  checks: read
+
+jobs:
+  # Guard: only ever run the rest of this workflow for Dependabot PRs.
+  # A human PR that happens to touch pyproject.toml must never be
+  # auto-merged by this workflow.
+  guard:
+    if: github.actor == 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Dependabot PR confirmed, proceeding to checks."
+
+  # Full check suite: pytest, mypy --strict, and the import-linter layer
+  # contract from docs/import-boundaries.md. All three must pass. This is
+  # the step that catches the failure modes a version bump can quietly
+  # introduce: a behavioral regression (pytest), a type-contract violation
+  # from an upstream API change (mypy --strict), or a new import that
+  # breaks the layer direction because a dependency changed how a module
+  # re-exports something (import-linter). None of the three subsumes the
+  # others, so all three run every time, not just on suspicion.
+  checks:
+    needs: guard
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install project with dev dependencies
+        run: pip install -e ".[dev]"
+
+      - name: Run pytest
+        run: pytest
+
+      - name: Run mypy --strict
+        run: mypy
+
+      - name: Run import-linter (layer contract)
+        run: lint-imports
+
+  # Determine the semver level of the bump using dependabot's own
+  # metadata action, rather than parsing the PR title or branch name.
+  # This is the source of truth fetch-metadata is built for.
+  metadata:
+    needs: guard
+    runs-on: ubuntu-latest
+    outputs:
+      update-type: ${{ steps.metadata.outputs.update-type }}
+      dependency-names: ${{ steps.metadata.outputs.dependency-names }}
+    steps:
+      - name: Fetch Dependabot metadata
+        id: metadata
+        uses: dependabot/fetch-metadata@v2
+        with:
+          github-token: "${{ secrets.GITHUB_TOKEN }}"
+
+  # Patch and minor bumps: if checks passed, enable GitHub's native
+  # auto-merge. This does not force-merge immediately; it tells GitHub to
+  # merge once all required status checks (including the `checks` job
+  # above) report green, so this step is safe to run even if some other
+  # required check outside this workflow is still pending.
+  auto-merge-patch-minor:
+    needs: [checks, metadata]
+    if: |
+      needs.metadata.outputs.update-type == 'version-update:semver-patch' ||
+      needs.metadata.outputs.update-type == 'version-update:semver-minor'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Enable auto-merge for patch/minor update
+        run: gh pr merge --auto --squash "$PR_URL"
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Major bumps: never auto-merged, regardless of check outcome. Leave the
+  # PR open, label it, and post a comment explaining why, so it's obvious
+  # at a glance this needs a human rather than looking stalled or ignored.
+  flag-major-for-review:
+    needs: [checks, metadata]
+    if: needs.metadata.outputs.update-type == 'version-update:semver-major'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Label PR for manual review
+        run: gh pr edit "$PR_URL" --add-label "needs-manual-review,major-update"
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Comment explaining why this was not auto-merged
+        run: |
+          gh pr comment "$PR_URL" --body "$(cat <<'EOF'
+          This is a **major** semver update (${{ needs.metadata.outputs.dependency-names }}).
+
+          Major updates are never auto-merged by this workflow, even when
+          pytest, mypy --strict, and import-linter all pass. A green check
+          suite here only proves the existing tests still pass against the
+          new version, not that the new version is safe: major bumps are
+          exactly where ABI mismatches, changed default behavior, or
+          removed APIs tend to surface outside what the test suite covers.
+
+          This PR needs manual review before merging. See
+          docs/import-boundaries.md and docs/contracts.md if the update
+          touches a dependency those documents assume a specific version
+          or behavior of.
+          EOF
+          )"
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
