@@ -1,0 +1,40 @@
+version: 2
+
+updates:
+  # Python dependencies declared in pyproject.toml.
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 10
+    groups:
+      # Patch and minor bumps are grouped into one PR per group per run,
+      # so a routine week doesn't produce a dozen separate PRs. Major
+      # bumps are deliberately excluded from grouping: each one gets its
+      # own PR, since docs/import-boundaries.md and contracts.md both
+      # treat a major dependency change (e.g. pydantic v2 -> v3) as an
+      # event that deserves individual attention, not batching.
+      python-patch-and-minor:
+        update-types:
+          - "patch"
+          - "minor"
+    labels:
+      - "dependencies"
+      - "python"
+
+  # Versions pinned inside .github/workflows/*.yml (e.g. actions/checkout@vN).
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 10
+    groups:
+      actions-patch-and-minor:
+        update-types:
+          - "patch"
+          - "minor"
+    labels:
+      - "dependencies"
+      - "github-actions"
