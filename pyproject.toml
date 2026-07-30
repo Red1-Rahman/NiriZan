@@ -1,0 +1,71 @@
+[project]
+name = "nirizan"
+version = "0.1.0"
+description = "Continuous evaluation infrastructure for production AI systems"
+readme = "README.md"
+license = { text = "GPL-3.0-or-later" }
+authors = [{ name = "Redwan Rahman" }]
+requires-python = ">=3.11"
+dependencies = [
+    "pydantic>=2.7,<3.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "ruff>=0.6",
+    "import-linter>=2.0",
+    "mypy>=1.10",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/nirizan"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "TID", "UP", "B"]
+ignore = []
+
+[tool.ruff.lint.flake8-tidy-imports]
+ban-relative-imports = "all"
+
+[tool.importlinter]
+root_packages = ["nirizan"]
+
+[[tool.importlinter.contracts]]
+name = "NiriZan layer direction"
+type = "layers"
+layers = [
+    "nirizan.reporting",
+    "nirizan.gate",
+    "nirizan.regression",
+    "nirizan.storage",
+    "nirizan.trust",
+    "nirizan.metrics",
+    "nirizan.orchestrator",
+    "nirizan.instrumentation",
+]
+
+[[tool.importlinter.contracts]]
+name = "storage.models may import metrics.base, nothing else from metrics"
+type = "forbidden"
+source_modules = ["nirizan.storage.models"]
+forbidden_modules = ["nirizan.regression", "nirizan.gate", "nirizan.reporting", "nirizan.trust"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+files = ["src/nirizan"]
