@@ -20,18 +20,22 @@ class TraceCollector:
         self._running = False
 
     async def start(self) -> None:
-        """Start the background processing queue worker."""
+        """Start the background worker processor."""
         if self._running:
             return
         self._running = True
         self._worker_task = asyncio.create_task(self._process_queue())
 
     async def stop(self) -> None:
-        """Flush remaining queue items and stop the worker task."""
+        """Flush remaining queue items and gracefully stop the worker task."""
         self._running = False
         await self.queue.join()
         if self._worker_task:
             self._worker_task.cancel()
+            try:
+                await self._worker_task
+            except asyncio.CancelledError:
+                pass
 
     async def enqueue_trace(self, trace: Trace) -> None:
         """Non-blocking trace push into the processing buffer."""
