@@ -1,0 +1,66 @@
+name: Feature Request
+description: Propose a new capability, metric, or improvement for NiriZan.
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before proposing new work, check `docs/architecture.md` and `docs/contracts.md`: if what you're proposing isn't reflected in either, that's worth flagging explicitly rather than assuming it fits.
+
+  - type: dropdown
+    id: phase
+    attributes:
+      label: Which phase does this belong to?
+      description: Prefer proposing work for the current or next phase over jumping ahead. If this is a later-phase idea, say so explicitly.
+      options:
+        - "Phase 1: Instrumentation & Trace Storage"
+        - "Phase 2: RAG Triad Metrics"
+        - "Phase 3: Experiment Tracking & Baselines"
+        - "Phase 4: Regression Detection & CI Gate"
+        - "Phase 5: Drift & Judge-Reliability Layer"
+        - Beyond the current roadmap / future work
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve?
+      description: Describe the gap or limitation this addresses. Reference a specific section of docs/architecture.md or docs/literature-review.md if relevant.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: What would you build? If this touches a data model or interface, name it explicitly.
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: contract-impact
+    attributes:
+      label: Contract impact
+      description: Does this require changing anything in docs/contracts.md?
+      options:
+        - label: This requires a new or changed contract in docs/contracts.md (consider using the Contract Change template instead).
+          required: false
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Any other approaches you considered and why you didn't propose them instead.
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: terms
+    attributes:
+      label: Code of Conduct
+      description: By submitting this issue, you agree to follow this project's [Code of Conduct](../../CODE_OF_CONDUCT.md).
+      options:
+        - label: I agree to follow this project's Code of Conduct.
+          required: true

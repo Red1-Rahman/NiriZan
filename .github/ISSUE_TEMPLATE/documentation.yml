@@ -1,0 +1,49 @@
+name: Documentation
+description: Report an issue with, or propose an improvement to, NiriZan's documentation.
+title: "[Docs]: "
+labels: ["documentation"]
+body:
+  - type: dropdown
+    id: doc-area
+    attributes:
+      label: Which document does this concern?
+      options:
+        - README.md
+        - CONTRIBUTING.md
+        - SECURITY.md
+        - CODE_OF_CONDUCT.md
+        - CODE_OF_ETHICS.md
+        - docs/architecture.md
+        - docs/contracts.md
+        - docs/literature-review.md
+        - docs/governance/DATA_POLICY.md
+        - docs/governance/KPI-Definitions.md
+        - docs/standards/ (ISO-IEC-IEEE, Washington-Accord, EUR-ACE, UN-SDG)
+        - Something else / not listed
+    validations:
+      required: true
+
+  - type: textarea
+    id: issue
+    attributes:
+      label: What's wrong, missing, or unclear?
+      description: Quote the specific section if possible.
+    validations:
+      required: true
+
+  - type: textarea
+    id: suggestion
+    attributes:
+      label: Suggested fix
+      description: If you have a specific rewording or addition in mind, share it here.
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: terms
+    attributes:
+      label: Code of Conduct
+      description: By submitting this issue, you agree to follow this project's [Code of Conduct](../../CODE_OF_CONDUCT.md).
+      options:
+        - label: I agree to follow this project's Code of Conduct.
+          required: true

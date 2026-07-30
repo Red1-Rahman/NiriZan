@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Security Vulnerability Report
+    url: https://github.com/Red1-Rahman/NiriZan/security/advisories/new
+    about: Do not open a public issue for security vulnerabilities. See SECURITY.md and report privately instead.
+  - name: General Question
+    url: https://github.com/Red1-Rahman/NiriZan/discussions
+    about: Ask a usage or design question that isn't a bug, feature request, or contract change.

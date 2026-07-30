@@ -1,0 +1,86 @@
+name: Contract Change
+description: Propose adding to or modifying a data model or interface defined in docs/contracts.md.
+title: "[Contract]: "
+labels: ["contract-change"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        `docs/contracts.md` is the single source of truth for every pydantic model and plugin interface NiriZan's components agree on. Per CONTRIBUTING.md, a contract change is discussed and merged on its own, before any implementation PR that depends on it. This form is for proposing that discussion, not for shipping an implementation directly.
+
+  - type: input
+    id: contract-name
+    attributes:
+      label: Which contract does this affect?
+      description: Name the exact model, protocol, or interface (e.g. Span, MetricResult, RegressionVerdict).
+      placeholder: e.g. Span, Trace, Metric, RegressionVerdict, AttributionVerdict
+    validations:
+      required: true
+
+  - type: dropdown
+    id: phase
+    attributes:
+      label: Which phase's contracts does this belong to?
+      options:
+        - "Phase 1: Instrumentation & Trace Storage"
+        - "Phase 2: RAG Triad Metrics"
+        - "Phase 3: Experiment Tracking & Baselines"
+        - "Phase 4: Regression Detection & CI Gate"
+        - "Phase 5: Drift & Judge-Reliability Layer"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: change-type
+    attributes:
+      label: Is this additive or breaking?
+      description: Per the Versioning Rule at the end of docs/contracts.md. Additive means a new optional field with a default. Breaking means anything else (removed field, changed meaning, narrowed type).
+      options:
+        - Additive (new optional field with a default value)
+        - Breaking (removed field, changed meaning, or narrowed type)
+        - Not sure
+    validations:
+      required: true
+
+  - type: textarea
+    id: current-shape
+    attributes:
+      label: Current contract (if modifying an existing one)
+      description: Paste the relevant model or protocol as it exists today in docs/contracts.md.
+      render: python
+    validations:
+      required: false
+
+  - type: textarea
+    id: proposed-shape
+    attributes:
+      label: Proposed contract
+      description: The new or changed model/protocol definition, in the same style as docs/contracts.md.
+      render: python
+    validations:
+      required: true
+
+  - type: textarea
+    id: rationale
+    attributes:
+      label: Why is this needed?
+      description: What does the current contract get wrong or fail to support?
+    validations:
+      required: true
+
+  - type: textarea
+    id: migration
+    attributes:
+      label: Migration path (required if breaking)
+      description: If this is a breaking change, describe how any already-persisted data using the old shape would be migrated.
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: terms
+    attributes:
+      label: Code of Conduct
+      description: By submitting this issue, you agree to follow this project's [Code of Conduct](../../CODE_OF_CONDUCT.md).
+      options:
+        - label: I agree to follow this project's Code of Conduct.
+          required: true
