@@ -14,14 +14,12 @@ def init_tracer(
     application_name: str = "nirizan_app",
     exporter: BaseExporter | None = None,
 ) -> Tracer:
-    """Initialize the global SDK tracer instance."""
     global _GLOBAL_TRACER
     _GLOBAL_TRACER = Tracer(application_name=application_name, exporter=exporter)
     return _GLOBAL_TRACER
 
 
 def get_tracer() -> Tracer:
-    """Retrieve the current global tracer instance, or lazy-initialize a default one."""
     global _GLOBAL_TRACER
     if _GLOBAL_TRACER is None:
         _GLOBAL_TRACER = Tracer(application_name="default_app")
@@ -33,8 +31,6 @@ def trace_span(
     name: str | None = None,
     tracer: Tracer | None = None,
 ) -> Callable[[F], F]:
-    """Decorator to automatically instrument asynchronous functions with tracing."""
-
     def decorator(func: F) -> F:
         span_name = name or func.__name__
 
@@ -47,8 +43,11 @@ def trace_span(
                 name=span_name,
                 kind=kind,
                 input_payload=input_repr,
-            ):
-                return await func(*args, **kwargs)
+            ) as handle:
+                result = await func(*args, **kwargs)
+                if result is not None:
+                    handle.output_payload = str(result)
+                return result
 
         return wrapper  # type: ignore[return-value]
 
