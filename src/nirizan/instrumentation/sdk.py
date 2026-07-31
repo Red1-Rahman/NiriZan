@@ -1,5 +1,5 @@
 import functools
-from typing import Any, Callable, TypeVar
+from typing import Any, Awaitable, Callable, ParamSpec, TypeVar
 
 from nirizan.instrumentation.exporters import BaseExporter
 from nirizan.instrumentation.spans import SpanKind
@@ -7,7 +7,8 @@ from nirizan.instrumentation.tracer import Tracer
 
 _GLOBAL_TRACER: Tracer | None = None
 
-F = TypeVar("F", bound=Callable[..., Any])
+P = ParamSpec("P")
+R = TypeVar("R")
 
 
 def init_tracer(
@@ -30,12 +31,12 @@ def trace_span(
     kind: SpanKind,
     name: str | None = None,
     tracer: Tracer | None = None,
-) -> Callable[[F], F]:
-    def decorator(func: F) -> F:
+) -> Callable[[Callable[P, Awaitable[R]]], Callable[P, Awaitable[R]]]:
+    def decorator(func: Callable[P, Awaitable[R]]) -> Callable[P, Awaitable[R]]:
         span_name = name or func.__name__
 
         @functools.wraps(func)
-        async def wrapper(*args: Any, **kwargs: Any) -> Any:
+        async def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
             active_tracer = tracer or get_tracer()
             input_repr = str(args[0]) if args else (str(kwargs) if kwargs else None)
 
@@ -49,6 +50,6 @@ def trace_span(
                     handle.output_payload = str(result)
                 return result
 
-        return wrapper  # type: ignore[return-value]
+        return wrapper
 
     return decorator
