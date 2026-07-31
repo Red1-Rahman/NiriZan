@@ -13,13 +13,10 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     handlers=[logging.StreamHandler(sys.stdout)],
 )
-
 logger = logging.getLogger("rag_demo")
 
 
 # --- Simulated Instrumented RAG Services ---
-
-
 @trace_span(kind=SpanKind.RETRIEVAL, name="qdrant_vector_search")
 async def retrieve_context(query: str) -> list[str]:
     """Simulate fetching relevant documents from a vector store."""
@@ -49,11 +46,9 @@ async def run_rag_pipeline(user_query: str) -> str:
 
 
 # --- End-to-End Application Execution ---
-
-
 async def main() -> None:
     print("=" * 60)
-    print("🚀 Running NiriZan Instrumented RAG Pipeline Demo")
+    print("Running NiriZan Instrumented RAG Pipeline Demo")
     print("=" * 60)
 
     # 1. Initialize persistent storage engine & background collector
@@ -71,39 +66,37 @@ async def main() -> None:
         "How does NiriZan handle context propagation?",
         "What is the role of the TraceCollector?",
     ]
-
     for q in queries:
         print(f"\n[User Query]: {q}")
         response = await run_rag_pipeline(q)
         print(f"[LLM Answer]: {response}")
 
     # 4. Gracefully shutdown collector (flushes background queue)
-    print("\n⏳ Stopping collector and flushing remaining traces to SQLite...")
+    print("\nStopping collector and flushing remaining traces to SQLite...")
     await collector.stop()
 
     # 5. Query and verify persisted traces from storage
-    print("\n📊 Storage Verification (Querying SQLite Database):")
-    traces = await repository.list_traces(
+
+    print("\nStorage Verification (Querying SQLite Database):")
+    traces = await repository.list_by_application(
         application_name="rag_pipeline_demo", limit=10
     )
     print(f"Total Traces Persisted: {len(traces)}\n")
 
-    for idx, trace_record in enumerate(traces, start=1):
-        print(
-            f"Trace #{idx} [ID: {trace_record.trace_id}] - {len(trace_record.spans)} Spans Captured"
-        )
-        for span in trace_record.spans:
+    for idx, trace in enumerate(traces, start=1):
+        print(f"Trace #{idx} [ID: {trace.trace_id}] - {len(trace.spans)} Spans Captured")
+        for span in trace.spans:
             parent_info = (
-                f" (Parent: {span.parent_span_id[:8]}...)"
+                f" (Parent: {str(span.parent_span_id)[:8]}...)"
                 if span.parent_span_id
                 else " (ROOT)"
             )
             print(
-                f"  └─ [{span.kind.upper()}] {span.name}{parent_info} | {span.started_at}"
+                f"  \u2514\u2500 [{span.kind.value.upper()}] {span.name}{parent_info} | {span.started_at}"
             )
 
     repository.close()
-    print("\n✅ Demo run completed successfully!")
+    print("\nDemo run completed successfully!")
 
 
 if __name__ == "__main__":
