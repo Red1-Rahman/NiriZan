@@ -3,9 +3,10 @@ from datetime import datetime
 from typing import Optional
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from nirizan.instrumentation.spans import Span, SpanKind, Trace
+from nirizan.metrics.base import MetricResult
 
 
 class SpanRecord(BaseModel):
@@ -24,7 +25,6 @@ class SpanRecord(BaseModel):
 
     @classmethod
     def from_span(cls, span: Span) -> "SpanRecord":
-        """Convert an in-memory Span model into a persistent SpanRecord."""
         return cls(
             span_id=str(span.span_id),
             trace_id=str(span.trace_id),
@@ -39,7 +39,7 @@ class SpanRecord(BaseModel):
         )
 
     def to_span(self) -> Span:
-        """Convert a persistent SpanRecord back into an in-memory Span model."""
+        """Inverse of from_span; keeps this record shape an internal storage detail on the read path too."""
         return Span(
             span_id=UUID(self.span_id),
             trace_id=UUID(self.trace_id),
@@ -64,7 +64,6 @@ class TraceRecord(BaseModel):
 
     @classmethod
     def from_trace(cls, trace: Trace) -> "TraceRecord":
-        """Convert an in-memory Trace model into a persistent TraceRecord."""
         return cls(
             trace_id=str(trace.trace_id),
             application_name=trace.application_name,
@@ -73,12 +72,23 @@ class TraceRecord(BaseModel):
         )
 
     def to_trace(self) -> Trace:
-        """Convert a persistent TraceRecord back into an in-memory Trace model.
-        Inverse of from_trace. See SpanRecord.to_span for why this exists.
-        """
+        """Inverse of from_trace."""
         return Trace(
             trace_id=UUID(self.trace_id),
             application_name=self.application_name,
             created_at=datetime.fromisoformat(self.created_at),
             spans=[s.to_span() for s in self.spans],
         )
+
+
+class Run(BaseModel):
+    """A trace plus the MetricResults computed against it, versioned by code commit and data snapshot."""
+
+    model_config = ConfigDict(strict=True)
+
+    run_id: UUID
+    trace_id: UUID
+    code_commit: str = Field(min_length=7, max_length=40)  # git SHA, short or full
+    data_snapshot_id: str = Field(min_length=1)
+    metric_results: list[MetricResult] = Field(default_factory=list)
+    created_at: datetime
