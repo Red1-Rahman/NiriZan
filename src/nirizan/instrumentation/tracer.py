@@ -1,5 +1,6 @@
 from contextlib import asynccontextmanager
 import contextvars
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, AsyncGenerator
 from uuid import UUID, uuid4
@@ -14,6 +15,14 @@ _CURRENT_TRACE_ID: contextvars.ContextVar[UUID | None] = contextvars.ContextVar(
 _CURRENT_SPAN_ID: contextvars.ContextVar[UUID | None] = contextvars.ContextVar(
     "nirizan_current_span_id", default=None
 )
+
+
+@dataclass
+class SpanHandle:
+    """A mutable handle to the span currently being recorded."""
+
+    span_id: UUID
+    output_payload: str | None = None
 
 
 class Tracer:
@@ -35,7 +44,7 @@ class Tracer:
         kind: SpanKind,
         attributes: dict[str, Any] | None = None,
         input_payload: str | None = None,
-    ) -> AsyncGenerator[UUID, None]:
+    ) -> AsyncGenerator[SpanHandle, None]:
         """Async context manager to automatically open, track, and close execution spans."""
         trace_id = _CURRENT_TRACE_ID.get()
         is_root = trace_id is None
@@ -50,9 +59,10 @@ class Tracer:
 
         # Update current active span context token
         token_span = _CURRENT_SPAN_ID.set(span_id)
+        handle = SpanHandle(span_id=span_id)
 
         try:
-            yield span_id
+            yield handle
         finally:
             ended_at = datetime.now(timezone.utc)
 
@@ -75,6 +85,7 @@ class Tracer:
                 ended_at=ended_at,
                 attributes=clean_attrs,
                 input_payload=input_payload,
+                output_payload=handle.output_payload,
             )
             self._spans.append(completed_span)
 
