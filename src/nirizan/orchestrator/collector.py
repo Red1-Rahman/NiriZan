@@ -1,19 +1,21 @@
 import asyncio
 import logging
-from typing import Optional
+from typing import Optional, Protocol
 
 from nirizan.instrumentation.exporters import BaseExporter
 from nirizan.instrumentation.spans import Trace
-from nirizan.storage.models import TraceRecord
-from nirizan.storage.trace_repository import BaseTraceRepository
 
 logger = logging.getLogger(__name__)
+
+
+class TraceSink(Protocol):
+    async def save(self, trace: Trace) -> None: ...
 
 
 class TraceCollector:
     """Async ingestion orchestrator that buffers incoming traces for persistence."""
 
-    def __init__(self, repository: BaseTraceRepository) -> None:
+    def __init__(self, repository: TraceSink) -> None:
         self.repository = repository
         self.queue: asyncio.Queue[Trace] = asyncio.Queue()
         self._worker_task: Optional[asyncio.Task] = None
@@ -45,8 +47,7 @@ class TraceCollector:
         while self._running or not self.queue.empty():
             try:
                 trace = await asyncio.wait_for(self.queue.get(), timeout=0.1)
-                record = TraceRecord.from_trace(trace)
-                await self.repository.save_trace(record)
+                await self.repository.save(trace)
                 self.queue.task_done()
             except asyncio.TimeoutError:
                 continue
