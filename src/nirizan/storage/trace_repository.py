@@ -2,7 +2,9 @@ from abc import ABC, abstractmethod
 import asyncio
 import sqlite3
 from typing import Optional
+from uuid import UUID
 
+from nirizan.instrumentation.spans import Trace
 from nirizan.storage.models import SpanRecord, TraceRecord
 
 
@@ -10,23 +12,25 @@ class BaseTraceRepository(ABC):
     """Abstract storage interface for persisting, querying, and managing traces."""
 
     @abstractmethod
-    async def save_trace(self, trace_record: TraceRecord) -> None:
-        """Persist a TraceRecord and its child spans."""
+    async def save(self, trace: Trace) -> None:
+        """Persist a Trace and its child spans."""
         pass
 
     @abstractmethod
-    async def get_trace(self, trace_id: str) -> Optional[TraceRecord]:
-        """Retrieve a TraceRecord by trace_id."""
+    async def get(self, trace_id: UUID) -> Optional[Trace]:
+        """Retrieve a Trace by trace_id. Returns None if not found, never raises
+        for a missing trace (see contracts.md: "the repository stays a dumb,
+        honest store")."""
         pass
 
     @abstractmethod
-    async def list_traces(
+    async def list_by_application(
         self,
-        application_name: Optional[str] = None,
-        limit: int = 50,
+        application_name: str,
+        limit: int = 100,
         offset: int = 0,
-    ) -> list[TraceRecord]:
-        """Retrieve paginated traces with optional application filtering."""
+    ) -> list[Trace]:
+        """Retrieve paginated traces filtered by application name."""
         pass
 
     @abstractmethod
@@ -80,7 +84,9 @@ class SQLiteTraceRepository(BaseTraceRepository):
                 """
             )
 
-    async def save_trace(self, trace_record: TraceRecord) -> None:
+    async def save(self, trace: Trace) -> None:
+        trace_record = TraceRecord.from_trace(trace)
+
         def _insert() -> None:
             with self._conn:
                 self._conn.execute(
@@ -115,10 +121,12 @@ class SQLiteTraceRepository(BaseTraceRepository):
 
         await asyncio.to_thread(_insert)
 
-    async def get_trace(self, trace_id: str) -> Optional[TraceRecord]:
+    async def get(self, trace_id: UUID) -> Optional[Trace]:
+        trace_id_str = str(trace_id)
+
         def _query() -> Optional[TraceRecord]:
             trace_row = self._conn.execute(
-                "SELECT * FROM traces WHERE trace_id = ?", (trace_id,)
+                "SELECT * FROM traces WHERE trace_id = ?", (trace_id_str,)
             ).fetchone()
 
             if not trace_row:
@@ -126,7 +134,7 @@ class SQLiteTraceRepository(BaseTraceRepository):
 
             span_rows = self._conn.execute(
                 "SELECT * FROM spans WHERE trace_id = ? ORDER BY started_at ASC",
-                (trace_id,),
+                (trace_id_str,),
             ).fetchall()
 
             spans = [
@@ -152,21 +160,21 @@ class SQLiteTraceRepository(BaseTraceRepository):
                 spans=spans,
             )
 
-        return await asyncio.to_thread(_query)
+        record = await asyncio.to_thread(_query)
+        return record.to_trace() if record is not None else None
 
-    async def list_traces(
+    async def list_by_application(
         self,
-        application_name: Optional[str] = None,
-        limit: int = 50,
+        application_name: str,
+        limit: int = 100,
         offset: int = 0,
-    ) -> list[TraceRecord]:
+    ) -> list[Trace]:
         def _query_list() -> list[TraceRecord]:
-            if application_name:
-                query = "SELECT * FROM traces WHERE application_name = ? ORDER BY created_at DESC LIMIT ? OFFSET ?"
-                params = (application_name, limit, offset)
-            else:
-                query = "SELECT * FROM traces ORDER BY created_at DESC LIMIT ? OFFSET ?"
-                params = (limit, offset)
+            query = (
+                "SELECT * FROM traces WHERE application_name = ? "
+                "ORDER BY created_at DESC LIMIT ? OFFSET ?"
+            )
+            params = (application_name, limit, offset)
 
             rows = self._conn.execute(query, params).fetchall()
             results = []
@@ -201,7 +209,8 @@ class SQLiteTraceRepository(BaseTraceRepository):
                 )
             return results
 
-        return await asyncio.to_thread(_query_list)
+        records = await asyncio.to_thread(_query_list)
+        return [r.to_trace() for r in records]
 
     async def purge_older_than(self, created_before_iso: str) -> int:
         def _delete() -> int:
