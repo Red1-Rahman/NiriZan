@@ -172,6 +172,21 @@ class MetricDispatcher(Protocol):
 **Contract guarantees:**
 - `register` is called explicitly at application startup (in the CLI entry point or a setup module), never via import-time side effects in `metrics/*.py`. This is the specific mechanism that keeps `metrics/` from depending on `orchestrator/` and `orchestrator/` from needing to import every metric module by name. See the Import Direction rule below.
 
+### `RunRepository` interface (`storage/run_repository.py`)
+
+A minimal, additive interface for persisting a `Run` (a trace's `MetricResult`s, per Phase 2's `Run` model in `storage/models.py`) ahead of Phase 3's fuller `ExperimentStore`. This exists because the Phase 2 architecture diagram already draws metric results flowing into storage (`METRICS --> S1`); `RunRepository` is the honest, narrow version of that edge for this phase, not a workaround.
+
+```python
+class RunRepository(Protocol):
+    async def save_run(self, run: Run) -> None: ...
+    async def get_run(self, run_id: UUID) -> Run | None: ...
+```
+
+**Contract guarantees:**
+- `get_run` returns `None` for a missing run, it does not raise. Same "dumb, honest store" guarantee as `TraceRepository.get` in Phase 1.
+- `RunRepository` is deliberately narrower than Phase 3's `ExperimentStore`: no `diff`, no baseline comparison, no versioning-aware queries. Those arrive in Phase 3 as an extension, not a redefinition, of what a `Run` can do once persisted. `ExperimentStore` in Phase 3 is expected to satisfy `RunRepository`'s shape as a subset of its own interface, so nothing built against `RunRepository` in Phase 2 needs to change when Phase 3 lands.
+- Lives in `storage/`, same as `TraceRepository`; `RunRepository` does not replace or extend `TraceRepository`, they are separate interfaces persisting separate things (`Trace` vs. `Run`).
+
 ---
 
 ## Phase 3 Contracts: Experiment Tracking & Baselines
