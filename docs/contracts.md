@@ -64,6 +64,9 @@ class Trace(BaseModel):
     application_name: str = Field(min_length=1)
     spans: list[Span] = Field(default_factory=list)
     created_at: datetime
+    code_commit: str | None = None       # Phase 3: stamped by collector.py at ingest
+    data_snapshot_id: str | None = None  # Phase 3: stamped by collector.py at ingest
+    session_id: UUID | None = None       # Phase 3: set when captured inside Tracer.session(...)
 
     def spans_of_kind(self, kind: SpanKind) -> list[Span]:
         return [s for s in self.spans if s.kind == kind]
@@ -72,6 +75,7 @@ class Trace(BaseModel):
 **Contract guarantees:**
 - Every `Span` in `spans` must share the same `trace_id` as the `Trace` itself. Enforce this with a `model_validator`, do not rely on callers to get it right.
 - `Trace` is the only object the Instrumentation Layer hands to the Orchestrator. Nothing calls `Span` in isolation across that boundary.
+- `code_commit`, `data_snapshot_id`, and `session_id` are additive Phase 3 fields, all optional with a `None` default, per this document's Versioning Rule. `None` means the value genuinely wasn't available at ingest (e.g. traces captured outside a git checkout, or outside a `Tracer.session(...)` block); callers must not treat `None` as a placeholder to be filled in later, only as "not applicable to this trace."
 
 ### `TraceExporter` protocol (`instrumentation/exporters.py`)
 
