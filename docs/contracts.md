@@ -248,6 +248,38 @@ class RunDiff(BaseModel):
 **Contract guarantees:**
 - `diff` computes a difference, full stop. It does not judge whether that difference is a regression. That judgment is `regression/comparator.py`'s job in Phase 4, and Phase 4's `Comparator` takes a `RunDiff` as input rather than recomputing it. This boundary is deliberate: the ledger records, the accountant judges, and they are different files for a reason.
 
+### `Session` (`instrumentation/sessions.py`)
+
+Groups multiple `Trace`s (by `trace_id`) belonging to one multi-turn agent conversation. Lives in `instrumentation/`, sibling to `Span`/`Trace` in the layer they belong to, but defined in its own file rather than `spans.py` since it doesn't share `Span`/`Trace`'s validation coupling — it only references `Trace` objects by ID, the same "named pointer, not embedded copy" pattern this document already uses for `Baseline` referencing `Run`.
+
+```python
+class Session(BaseModel):
+    model_config = ConfigDict(strict=True)
+
+    session_id: UUID
+    application_name: str = Field(min_length=1)
+    trace_ids: list[UUID] = Field(default_factory=list)
+    started_at: datetime
+    ended_at: datetime | None = None
+```
+
+**Contract guarantees:**
+- Unlike `Span`, `Session` is **not frozen**. A session is open and accumulates `trace_ids` as turns happen; `ended_at` is `None` while the session is ongoing, set once the session is explicitly closed.
+- `Session` does not embed `Trace` objects, only their IDs, for the same reason `Baseline` doesn't embed `Run` objects: it keeps the Trace Repository as the single owner of `Trace` data.
+- A `Trace`'s optional `session_id` field (see the Phase 1 `Trace` contract) is how a `Trace` is linked back to the `Session` that produced it; `Session.trace_ids` and `Trace.session_id` are expected to agree, but nothing in this contract enforces that bidirectionally at construction time. Callers that need that guarantee enforce it themselves.
+
+### `SessionRepository` interface (`storage/session_repository.py`)
+
+```python
+class SessionRepository(Protocol):
+    async def save_session(self, session: Session) -> None: ...
+    async def get_session(self, session_id: UUID) -> Session | None: ...
+```
+
+**Contract guarantees:**
+- `get_session` returns `None` for a missing session, it does not raise. Same "dumb, honest store" guarantee as `TraceRepository.get` (Phase 1) and `RunRepository.get_run` (Phase 2).
+- Same relationship to any future, fuller session-management interface as `RunRepository` has to `ExperimentStore`: deliberately minimal now, expected to be satisfied as a subset by anything richer added later, not redefined by it.
+
 ---
 
 ## Phase 4 Contracts: Regression Detection & CI Gate
