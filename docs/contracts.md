@@ -228,6 +228,22 @@ class Baseline(BaseModel):
 **Contract guarantees:**
 - A `Baseline` references `Run` objects by ID, it does not embed them. This keeps the Experiment Store as the single owner of `Run` data; `Baseline` is a named pointer, not a copy.
 
+### `BaselineRepository` interface (`storage/baselines.py`)
+
+Validated in `experiments/03_experiment_tracking_baselines.ipynb` before being made official.
+ 
+````python
+class BaselineRepository(Protocol):
+    async def save_baseline(self, baseline: Baseline) -> None: ...
+    async def get_baseline(self, baseline_id: UUID) -> Baseline | None: ...
+    async def list_baselines(self, system_type: str) -> list[Baseline]: ...
+````
+ 
+**Contract guarantees:**
+- `get_baseline` returns `None` for a missing baseline, it does not raise. Same "dumb, honest store" guarantee as `TraceRepository.get`, `RunRepository.get_run`, and `SessionRepository.get_session`.
+- `list_baselines` is filtered by `system_type`, satisfying the roadmap's "baseline management and *querying*" deliverable; it is the one method here with query semantics beyond single-record lookup.
+- `BaselineRepository` does not implement selection logic (i.e. it does not decide which runs *should* become a baseline). It only persists and retrieves `Baseline` objects a caller has already constructed. Any future automatic baseline-selection heuristic belongs in a different component, not here.
+
 ### `ExperimentStore` interface (`storage/experiment_store.py`)
 
 ```python
