@@ -1,5 +1,7 @@
 import asyncio
 import logging
+import os
+import subprocess
 from typing import Optional, Protocol
 
 from nirizan.instrumentation.exporters import BaseExporter
@@ -8,18 +10,44 @@ from nirizan.instrumentation.spans import Trace
 logger = logging.getLogger(__name__)
 
 
+def _resolve_code_commit() -> Optional[str]:
+    """GIT_COMMIT_SHA env var first, then `git rev-parse HEAD`, else None (never fabricated)."""
+    env_value = os.environ.get("GIT_COMMIT_SHA")
+    if env_value:
+        return env_value
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD"], capture_output=True, text=True, check=True,
+        )
+        return result.stdout.strip()
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return None
+
+
+def _resolve_data_snapshot_id() -> Optional[str]:
+    """NIRIZAN_DATA_SNAPSHOT_ID env var only; no generic fallback exists, so None is honest if unset."""
+    return os.environ.get("NIRIZAN_DATA_SNAPSHOT_ID")
+
+
 class TraceSink(Protocol):
+    """The shape TraceCollector needs from a repository; keeps orchestrator/ from importing storage/ (see docs/import-boundaries.md)."""
+
     async def save(self, trace: Trace) -> None: ...
 
 
 class TraceCollector:
-    """Async ingestion orchestrator that buffers incoming traces for persistence."""
+    """Async ingestion orchestrator that buffers incoming traces for persistence, tagging each with commit/snapshot at ingest."""
 
     def __init__(self, repository: TraceSink) -> None:
         self.repository = repository
         self.queue: asyncio.Queue[Trace] = asyncio.Queue()
         self._worker_task: Optional[asyncio.Task] = None
         self._running = False
+        # Resolved once per collector, not per-trace: the running commit and
+        # data snapshot don't change mid-process, and a git subprocess call
+        # on every single trace would be wasteful.
+        self._code_commit = _resolve_code_commit()
+        self._data_snapshot_id = _resolve_data_snapshot_id()
 
     async def start(self) -> None:
         """Start the background worker processor."""
@@ -40,8 +68,12 @@ class TraceCollector:
                 pass
 
     async def enqueue_trace(self, trace: Trace) -> None:
-        """Non-blocking trace push into the processing buffer."""
-        await self.queue.put(trace)
+        """Tag the trace with commit hash + data snapshot at ingest, then push into the processing buffer."""
+        tagged_trace = trace.model_copy(update={
+            "code_commit": self._code_commit,
+            "data_snapshot_id": self._data_snapshot_id,
+        })
+        await self.queue.put(tagged_trace)
 
     async def _process_queue(self) -> None:
         while self._running or not self.queue.empty():
