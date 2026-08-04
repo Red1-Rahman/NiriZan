@@ -1,5 +1,7 @@
 import functools
+from contextlib import AbstractAsyncContextManager
 from typing import Any, Awaitable, Callable, ParamSpec, TypeVar
+from uuid import UUID
 
 from nirizan.instrumentation.exporters import BaseExporter
 from nirizan.instrumentation.spans import SpanKind
@@ -25,6 +27,20 @@ def get_tracer() -> Tracer:
     if _GLOBAL_TRACER is None:
         _GLOBAL_TRACER = Tracer(application_name="default_app")
     return _GLOBAL_TRACER
+
+
+def start_session(
+    session_id: UUID | None = None,
+    tracer: Tracer | None = None,
+) -> AbstractAsyncContextManager[UUID]:
+    """SDK-level convenience wrapper around Tracer.session(), mirroring trace_span's relationship to start_span.
+
+    Unlike trace_span, this is not a decorator: a session spans multiple
+    turns/calls, so it's used as `async with start_session(): ...` around a
+    sequence of trace_span-decorated calls, not around a single function.
+    """
+    active_tracer = tracer or get_tracer()
+    return active_tracer.session(session_id)
 
 
 def trace_span(
