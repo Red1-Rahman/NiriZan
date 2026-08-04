@@ -6,7 +6,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field
 
 from nirizan.instrumentation.spans import Span, SpanKind, Trace
-from nirizan.metrics.base import MetricResult
+from nirizan.metrics.base import MetricResult as MetricResult
 
 
 class SpanRecord(BaseModel):
@@ -61,6 +61,9 @@ class TraceRecord(BaseModel):
     application_name: str
     created_at: str
     spans: list[SpanRecord] = Field(default_factory=list)
+    code_commit: Optional[str] = None
+    data_snapshot_id: Optional[str] = None
+    session_id: Optional[str] = None
 
     @classmethod
     def from_trace(cls, trace: Trace) -> "TraceRecord":
@@ -69,6 +72,9 @@ class TraceRecord(BaseModel):
             application_name=trace.application_name,
             created_at=trace.created_at.isoformat(),
             spans=[SpanRecord.from_span(s) for s in trace.spans],
+            code_commit=trace.code_commit,
+            data_snapshot_id=trace.data_snapshot_id,
+            session_id=str(trace.session_id) if trace.session_id else None,
         )
 
     def to_trace(self) -> Trace:
@@ -78,6 +84,9 @@ class TraceRecord(BaseModel):
             application_name=self.application_name,
             created_at=datetime.fromisoformat(self.created_at),
             spans=[s.to_span() for s in self.spans],
+            code_commit=self.code_commit,
+            data_snapshot_id=self.data_snapshot_id,
+            session_id=UUID(self.session_id) if self.session_id else None,
         )
 
 
@@ -92,3 +101,15 @@ class Run(BaseModel):
     data_snapshot_id: str = Field(min_length=1)
     metric_results: list[MetricResult] = Field(default_factory=list)
     created_at: datetime
+
+
+class Baseline(BaseModel):
+    """A named, queryable set of 'known good' historical runs; references Run objects by ID, never embeds them."""
+
+    model_config = ConfigDict(strict=True)
+
+    baseline_id: UUID
+    system_type: str
+    run_ids: list[UUID] = Field(min_length=1)
+    established_at: datetime
+    label: str = Field(min_length=1)  # e.g. "pre-v0.3-release", "weekly-2026-08"
