@@ -9,7 +9,14 @@ from nirizan.storage.models import SpanRecord, TraceRecord
 
 
 class BaseTraceRepository(ABC):
-    """Abstract storage interface for persisting, querying, and managing traces."""
+    """Abstract storage interface for persisting, querying, and managing traces.
+
+    Per docs/contracts.md's TraceRepository interface, this operates on Trace
+    directly at the public boundary. TraceRecord is a storage-internal
+    serialization detail (see storage/models.py) and never crosses this
+    interface; callers outside storage/ (e.g. orchestrator/collector.py)
+    should never need to import TraceRecord to use a repository.
+    """
 
     @abstractmethod
     async def save(self, trace: Trace) -> None:
@@ -57,7 +64,10 @@ class SQLiteTraceRepository(BaseTraceRepository):
                 CREATE TABLE IF NOT EXISTS traces (
                     trace_id TEXT PRIMARY KEY,
                     application_name TEXT NOT NULL,
-                    created_at TEXT NOT NULL
+                    created_at TEXT NOT NULL,
+                    code_commit TEXT,
+                    data_snapshot_id TEXT,
+                    session_id TEXT
                 );
 
                 CREATE TABLE IF NOT EXISTS spans (
@@ -90,11 +100,19 @@ class SQLiteTraceRepository(BaseTraceRepository):
         def _insert() -> None:
             with self._conn:
                 self._conn.execute(
-                    "INSERT OR REPLACE INTO traces (trace_id, application_name, created_at) VALUES (?, ?, ?)",
+                    """
+                    INSERT OR REPLACE INTO traces (
+                        trace_id, application_name, created_at,
+                        code_commit, data_snapshot_id, session_id
+                    ) VALUES (?, ?, ?, ?, ?, ?)
+                    """,
                     (
                         trace_record.trace_id,
                         trace_record.application_name,
                         trace_record.created_at,
+                        trace_record.code_commit,
+                        trace_record.data_snapshot_id,
+                        trace_record.session_id,
                     ),
                 )
                 for span in trace_record.spans:
@@ -158,6 +176,9 @@ class SQLiteTraceRepository(BaseTraceRepository):
                 application_name=trace_row["application_name"],
                 created_at=trace_row["created_at"],
                 spans=spans,
+                code_commit=trace_row["code_commit"],
+                data_snapshot_id=trace_row["data_snapshot_id"],
+                session_id=trace_row["session_id"],
             )
 
         record = await asyncio.to_thread(_query)
@@ -205,6 +226,9 @@ class SQLiteTraceRepository(BaseTraceRepository):
                         application_name=row["application_name"],
                         created_at=row["created_at"],
                         spans=spans,
+                        code_commit=row["code_commit"],
+                        data_snapshot_id=row["data_snapshot_id"],
+                        session_id=row["session_id"],
                     )
                 )
             return results
