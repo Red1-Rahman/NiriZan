@@ -78,9 +78,7 @@ async def main() -> None:
     # 5. Query and verify persisted traces from storage
 
     print("\nStorage Verification (Querying SQLite Database):")
-    traces = await repository.list_by_application(
-        application_name="rag_pipeline_demo", limit=10
-    )
+    traces = await repository.list_by_application(application_name="rag_pipeline_demo", limit=10)
     print(f"Total Traces Persisted: {len(traces)}\n")
 
     for idx, trace in enumerate(traces, start=1):

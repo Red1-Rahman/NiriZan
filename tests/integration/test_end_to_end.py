@@ -21,6 +21,7 @@ from nirizan.storage.run_repository import InMemoryRunRepository
 # Fake scorer: deterministic, zero-dependency, satisfies the Scorer protocol
 # ---------------------------------------------------------------------------
 
+
 class FakeScorer:
     """Deterministic scorer for integration tests. Returns a fixed score
     so assertions are stable without ML backend variability."""
@@ -35,6 +36,7 @@ class FakeScorer:
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture
 def fake_scorer() -> FakeScorer:
@@ -94,6 +96,7 @@ def run_scheduler(
 # ---------------------------------------------------------------------------
 # Integration test
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_end_to_end_rag_pipeline_evaluation(
