@@ -17,10 +17,7 @@ class SpanKind(str, Enum):
 
 
 class Span(BaseModel):
-    """The atomic unit of instrumentation.
-
-    Represents a single step in an AI execution graph.
-    """
+    """The atomic unit of instrumentation: one step in an AI execution graph."""
 
     model_config = ConfigDict(frozen=True, strict=True)
 
@@ -45,6 +42,9 @@ class Trace(BaseModel):
     application_name: str = Field(min_length=1)
     spans: list[Span] = Field(default_factory=list)
     created_at: datetime
+    code_commit: str | None = None       # Phase 3: stamped by collector.py at ingest
+    data_snapshot_id: str | None = None  # Phase 3: stamped by collector.py at ingest
+    session_id: UUID | None = None       # Phase 3: set when captured inside Tracer.session(...)
 
     @model_validator(mode="after")
     def validate_span_trace_ids(self) -> Trace:
