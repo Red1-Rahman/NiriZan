@@ -1,13 +1,59 @@
+from __future__ import annotations
+
 import asyncio
+import functools
 import logging
 import os
 import subprocess
-from typing import Optional, Protocol
+from typing import Any, Callable, Coroutine, Optional, Protocol, TypeVar
 
 from nirizan.instrumentation.exporters import BaseExporter
-from nirizan.instrumentation.spans import Trace
+from nirizan.instrumentation.spans import SpanKind, Trace
+from nirizan.instrumentation.tracer import Tracer
 
 logger = logging.getLogger(__name__)
+
+_GLOBAL_TRACER: Optional[Tracer] = None
+
+
+def init_tracer(
+    application_name: str, exporter: Optional[BaseExporter] = None
+) -> Tracer:
+    """Initialize and register the global tracer instance."""
+    global _GLOBAL_TRACER
+    tracer = Tracer(application_name=application_name, exporter=exporter)
+    _GLOBAL_TRACER = tracer
+    return tracer
+
+
+def get_tracer() -> Optional[Tracer]:
+    """Return the currently configured global tracer instance."""
+    return _GLOBAL_TRACER
+
+
+F = TypeVar("F", bound=Callable[..., Coroutine[Any, Any, Any]])
+
+
+def trace_span(kind: SpanKind, name: str) -> Callable[[F], F]:
+    """Decorator to instrument an async function as an execution span."""
+    def decorator(func: F) -> F:
+        @functools.wraps(func)
+        async def wrapper(*args: Any, **kwargs: Any) -> Any:
+            tracer = get_tracer()
+            if tracer is None:
+                raise RuntimeError(
+                    "Tracer is not initialized. Call init_tracer() before executing traced code."
+                )
+
+            async with tracer.start_span(name=name, kind=kind) as handle:
+                result = await func(*args, **kwargs)
+                if result is not None and handle.output_payload is None:
+                    handle.output_payload = str(result)
+                return result
+
+        return wrapper  # type: ignore[return-value]
+
+    return decorator
 
 
 def _resolve_code_commit() -> Optional[str]:
