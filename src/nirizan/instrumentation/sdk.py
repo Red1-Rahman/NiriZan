@@ -35,7 +35,7 @@ def get_tracer() -> Optional[Tracer]:
     return _GLOBAL_TRACER
 
 
-def start_session(session_id: Optional[UUID] = None):
+def start_session(session_id: Optional[UUID] = None) -> Any:
     """SDK-level context manager pass-through for grouping traces into a session."""
     tracer = get_tracer()
     if tracer is None:
