@@ -94,7 +94,7 @@ def run_scheduler(
 
 
 # ---------------------------------------------------------------------------
-# Integration test
+# Integration test: Phase 1 + Phase 2
 # ---------------------------------------------------------------------------
 
 
@@ -234,3 +234,91 @@ async def test_end_to_end_rag_pipeline_evaluation(
     assert len(re_fetched_trace.spans) == 3
     assert re_fetched_trace.spans[0].input_payload == query
     assert re_fetched_trace.spans[2].output_payload == answer
+
+
+# ---------------------------------------------------------------------------
+# Integration test: Phase 3 — multi-turn session tracing + collector tagging
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_end_to_end_agent_session_and_versioning_tagging(
+    trace_repo: SQLiteTraceRepository,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    Multi-turn agent session tracing (Tracer.session()) and collector-side
+    commit/snapshot tagging, exercised together through the same real
+    pipeline as the Phase 1/2 test above.
+
+    Builds its own TraceCollector locally (rather than using the shared
+    trace_collector fixture) because TraceCollector resolves code_commit
+    and data_snapshot_id once, at __init__, not per-trace. The shared
+    fixture would construct its collector before this test's
+    monkeypatch.setenv() calls run, so the mocked env vars would never be
+    picked up.
+    """
+    monkeypatch.setenv("GIT_COMMIT_SHA", "deadbeefcafebabe1234567890abcdef12345678")
+    monkeypatch.setenv("NIRIZAN_DATA_SNAPSHOT_ID", "test-snapshot-v1")
+
+    app_name = "test-agent-app"
+    collector = TraceCollector(repository=trace_repo)
+    await collector.start()
+
+    exporter = CollectorExporter(collector=collector)
+    tracer = Tracer(application_name=app_name, exporter=exporter)
+
+    turns = ["search docs", "call calculator", "summarize"]
+
+    async with tracer.session() as session_id:
+        for turn in turns:
+            async with tracer.start_span(
+                name="agent_turn",
+                kind=SpanKind.TOOL_USE,
+                input_payload=turn,
+            ) as handle:
+                handle.output_payload = f"result of: {turn}"
+
+    await collector.queue.join()
+    await collector.stop()
+
+    persisted_traces = await trace_repo.list_by_application(app_name)
+    assert len(persisted_traces) == len(turns), "One trace per turn"
+
+    for trace in persisted_traces:
+        # All turns belong to the same session
+        assert trace.session_id == session_id
+
+        # Collector tagged every trace with the resolved commit + snapshot,
+        # not just the root trace of the session
+        assert trace.code_commit == "deadbeefcafebabe1234567890abcdef12345678"
+        assert trace.data_snapshot_id == "test-snapshot-v1"
+
+
+@pytest.mark.asyncio
+async def test_end_to_end_trace_outside_session_has_no_session_id(
+    trace_collector: TraceCollector,
+    trace_repo: SQLiteTraceRepository,
+) -> None:
+    """
+    Backward compatibility: a trace captured outside any Tracer.session()
+    block must have session_id=None, not a leaked value from a prior
+    session elsewhere in the process (contextvars must reset cleanly on
+    exit from the session() block).
+    """
+    app_name = "test-no-session-app"
+    exporter = CollectorExporter(collector=trace_collector)
+    tracer = Tracer(application_name=app_name, exporter=exporter)
+
+    async with tracer.start_span(
+        name="standalone_call",
+        kind=SpanKind.PLANNING,
+        input_payload="no session here",
+    ) as handle:
+        handle.output_payload = "done"
+
+    await trace_collector.queue.join()
+
+    persisted_traces = await trace_repo.list_by_application(app_name)
+    assert len(persisted_traces) == 1
+    assert persisted_traces[0].session_id is None
