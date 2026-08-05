@@ -10,10 +10,10 @@ async def test_tracer_parent_child_linking() -> None:
     exporter = InMemoryExporter()
     tracer = Tracer(application_name="test_tracer_app", exporter=exporter)
 
-    async with tracer.start_span("root_span", SpanKind.PLANNING) as root_id:
-        async with tracer.start_span("child_span_1", SpanKind.RETRIEVAL) as child1_id:
+    async with tracer.start_span("root_span", SpanKind.PLANNING) as root_handle:
+        async with tracer.start_span("child_span_1", SpanKind.RETRIEVAL) as child1_handle:
             pass
-        async with tracer.start_span("child_span_2", SpanKind.GENERATION) as child2_id:
+        async with tracer.start_span("child_span_2", SpanKind.GENERATION) as child2_handle:
             pass
 
     traces = exporter.get_traces()
@@ -26,11 +26,11 @@ async def test_tracer_parent_child_linking() -> None:
     child_spans = [s for s in trace.spans if s.parent_span_id is not None]
 
     assert len(root_spans) == 1
-    assert root_spans[0].span_id == root_id
+    assert root_spans[0].span_id == root_handle.span_id
     assert len(child_spans) == 2
 
     for child in child_spans:
-        assert child.parent_span_id == root_id
+        assert child.parent_span_id == root_handle.span_id
         assert child.trace_id == trace.trace_id
 
 
@@ -46,7 +46,7 @@ async def test_tracer_attributes_cleaning() -> None:
         "complex_obj": [1, 2, 3],
     }
 
-    async with tracer.start_span("attr_span", SpanKind.TOOL, attributes=raw_attributes):
+    async with tracer.start_span("attr_span", SpanKind.TOOL_USE, attributes=raw_attributes):
         pass
 
     trace = exporter.get_traces()[0]
