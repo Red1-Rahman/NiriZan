@@ -8,18 +8,21 @@ from uuid import UUID, uuid4
 from nirizan.instrumentation.exporters import BaseExporter
 from nirizan.instrumentation.spans import Span, SpanKind, Trace
 
-# Context variables ensuring async-safe context propagation across coroutines
+# Async-safe context propagation across coroutines
 _CURRENT_TRACE_ID: contextvars.ContextVar[UUID | None] = contextvars.ContextVar(
     "nirizan_current_trace_id", default=None
 )
 _CURRENT_SPAN_ID: contextvars.ContextVar[UUID | None] = contextvars.ContextVar(
     "nirizan_current_span_id", default=None
 )
+_CURRENT_SESSION_ID: contextvars.ContextVar[UUID | None] = contextvars.ContextVar(
+    "nirizan_current_session_id", default=None
+)
 
 
 @dataclass
 class SpanHandle:
-    """A mutable handle to the span currently being recorded."""
+    """Mutable handle yielded by start_span so output_payload can be set after the wrapped call returns, before the frozen Span is built."""
 
     span_id: UUID
     output_payload: str | None = None
@@ -38,6 +41,18 @@ class Tracer:
         self._spans: list[Span] = []
 
     @asynccontextmanager
+    async def session(
+        self, session_id: UUID | None = None
+    ) -> AsyncGenerator[UUID, None]:
+        """Scope subsequent traces to a session; every Trace assembled inside this block picks up session_id automatically."""
+        sid = session_id or uuid4()
+        token = _CURRENT_SESSION_ID.set(sid)
+        try:
+            yield sid
+        finally:
+            _CURRENT_SESSION_ID.reset(token)
+
+    @asynccontextmanager
     async def start_span(
         self,
         name: str,
@@ -45,7 +60,7 @@ class Tracer:
         attributes: dict[str, Any] | None = None,
         input_payload: str | None = None,
     ) -> AsyncGenerator[SpanHandle, None]:
-        """Async context manager to automatically open, track, and close execution spans."""
+        """Open, track, and close an execution span; yields a SpanHandle for setting output_payload before the block exits."""
         trace_id = _CURRENT_TRACE_ID.get()
         is_root = trace_id is None
 
@@ -109,6 +124,7 @@ class Tracer:
             application_name=self.application_name,
             spans=matching_spans,
             created_at=datetime.now(timezone.utc),
+            session_id=_CURRENT_SESSION_ID.get(),
         )
 
     def clear(self) -> None:
