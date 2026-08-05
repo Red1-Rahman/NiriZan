@@ -1,0 +1,33 @@
+name: CI
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install project with dev dependencies
+        run: pip install -e ".[dev]"
+
+      - name: Run pytest
+        run: pytest
+
+      - name: Run mypy --strict
+        run: mypy
+
+      - name: Run import-linter (layer contract)
+        run: lint-imports
