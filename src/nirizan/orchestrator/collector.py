@@ -41,7 +41,7 @@ class TraceCollector:
     def __init__(self, repository: TraceSink) -> None:
         self.repository = repository
         self.queue: asyncio.Queue[Trace] = asyncio.Queue()
-        self._worker_task: Optional[asyncio.Task] = None
+        self._worker_task: Optional[asyncio.Task[None]] = None
         self._running = False
         # Resolved once per collector, not per-trace: the running commit and
         # data snapshot don't change mid-process, and a git subprocess call
