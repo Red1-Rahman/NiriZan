@@ -385,7 +385,7 @@ async def test_end_to_end_phase3_experiment_and_baseline_workflow(
     assert trace_a.code_commit == "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
     assert trace_a.session_id == session_a_id
 
-    metric_results_a = await metric_dispatcher.dispatch(sys_type, trace_a)
+    metric_results_a = await metric_dispatcher.dispatch(trace_a, sys_type)
     run_a = Run(
         run_id=UUID("11111111-1111-1111-1111-111111111111"),
         trace_id=trace_a.trace_id,
@@ -448,7 +448,7 @@ async def test_end_to_end_phase3_experiment_and_baseline_workflow(
         if t.code_commit == "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
     ][0]
 
-    metric_results_b = await metric_dispatcher.dispatch(sys_type, trace_b)
+    metric_results_b = await metric_dispatcher.dispatch(trace_b, sys_type)
     run_b = Run(
         run_id=UUID("22222222-2222-2222-2222-222222222222"),
         trace_id=trace_b.trace_id,
