@@ -1,20 +1,25 @@
+# tests/integration/test_end_to_end.py
 from __future__ import annotations
 
 import os
 import tempfile
 from datetime import datetime, timezone
+from pathlib import Path
 from uuid import UUID
 
 import pytest
 
 from nirizan.instrumentation.spans import SpanKind, Trace
 from nirizan.instrumentation.tracer import Tracer
+from nirizan.metrics.rag_triad import RAGTriadMetric
 from nirizan.orchestrator.collector import CollectorExporter, TraceCollector
 from nirizan.orchestrator.dispatcher import MetricDispatcher
 from nirizan.orchestrator.scheduler import RunScheduler
-from nirizan.metrics.rag_triad import RAGTriadMetric
-from nirizan.storage.trace_repository import SQLiteTraceRepository
+from nirizan.storage.baselines import SQLiteBaselineRepository
+from nirizan.storage.experiment_store import SQLiteExperimentStore
+from nirizan.storage.models import Baseline, Run
 from nirizan.storage.run_repository import InMemoryRunRepository
+from nirizan.storage.trace_repository import SQLiteTraceRepository
 
 
 # ---------------------------------------------------------------------------
@@ -250,13 +255,6 @@ async def test_end_to_end_agent_session_and_versioning_tagging(
     Multi-turn agent session tracing (Tracer.session()) and collector-side
     commit/snapshot tagging, exercised together through the same real
     pipeline as the Phase 1/2 test above.
-
-    Builds its own TraceCollector locally (rather than using the shared
-    trace_collector fixture) because TraceCollector resolves code_commit
-    and data_snapshot_id once, at __init__, not per-trace. The shared
-    fixture would construct its collector before this test's
-    monkeypatch.setenv() calls run, so the mocked env vars would never be
-    picked up.
     """
     monkeypatch.setenv("GIT_COMMIT_SHA", "deadbeefcafebabe1234567890abcdef12345678")
     monkeypatch.setenv("NIRIZAN_DATA_SNAPSHOT_ID", "test-snapshot-v1")
@@ -289,8 +287,7 @@ async def test_end_to_end_agent_session_and_versioning_tagging(
         # All turns belong to the same session
         assert trace.session_id == session_id
 
-        # Collector tagged every trace with the resolved commit + snapshot,
-        # not just the root trace of the session
+        # Collector tagged every trace with the resolved commit + snapshot
         assert trace.code_commit == "deadbeefcafebabe1234567890abcdef12345678"
         assert trace.data_snapshot_id == "test-snapshot-v1"
 
@@ -302,9 +299,7 @@ async def test_end_to_end_trace_outside_session_has_no_session_id(
 ) -> None:
     """
     Backward compatibility: a trace captured outside any Tracer.session()
-    block must have session_id=None, not a leaked value from a prior
-    session elsewhere in the process (contextvars must reset cleanly on
-    exit from the session() block).
+    block must have session_id=None.
     """
     app_name = "test-no-session-app"
     exporter = CollectorExporter(collector=trace_collector)
@@ -322,3 +317,157 @@ async def test_end_to_end_trace_outside_session_has_no_session_id(
     persisted_traces = await trace_repo.list_by_application(app_name)
     assert len(persisted_traces) == 1
     assert persisted_traces[0].session_id is None
+
+
+# ---------------------------------------------------------------------------
+# Integration test: Phase 3 — Full Experiment, Baseline, and Diff Pipeline
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_end_to_end_phase3_experiment_and_baseline_workflow(
+    trace_repo: SQLiteTraceRepository,
+    metric_dispatcher: MetricDispatcher,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """
+    Full Phase 3 pipeline:
+    1. Instrument multi-turn session traces under Commit A and Commit B.
+    2. Collect and verify version tags on persisted traces.
+    3. Evaluate traces into Runs and record them in SQLiteExperimentStore.
+    4. Save a Baseline referencing Commit A's run in SQLiteBaselineRepository.
+    5. Compute a RunDiff between Commit A and Commit B runs.
+    """
+    app_name = "test-phase3-rag-agent"
+    sys_type = "rag_pipeline"
+
+    exp_db = str(tmp_path / "experiments.db")
+    base_db = str(tmp_path / "baselines.db")
+
+    experiment_store = SQLiteExperimentStore(db_path=exp_db)
+    baseline_repo = SQLiteBaselineRepository(db_path=base_db)
+
+    # ------------------------------------------------------------------
+    # 1. Commit A execution & trace capture
+    # ------------------------------------------------------------------
+    monkeypatch.setenv("GIT_COMMIT_SHA", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+    monkeypatch.setenv("NIRIZAN_DATA_SNAPSHOT_ID", "snapshot-v1.0")
+
+    collector_a = TraceCollector(repository=trace_repo)
+    await collector_a.start()
+    exporter_a = CollectorExporter(collector=collector_a)
+    tracer_a = Tracer(application_name=app_name, exporter=exporter_a)
+
+    async with tracer_a.session() as session_a_id:
+        async with tracer_a.start_span(
+            name="plan", kind=SpanKind.PLANNING, input_payload="Query A"
+        ) as plan:
+            plan.output_payload = "Query A"
+            async with tracer_a.start_span(
+                name="retrieve", kind=SpanKind.RETRIEVAL, input_payload="Query A"
+            ) as ret:
+                ret.output_payload = "Context A"
+                async with tracer_a.start_span(
+                    name="generate", kind=SpanKind.GENERATION, input_payload="Query A"
+                ) as gen:
+                    gen.output_payload = "Answer A"
+
+    await collector_a.queue.join()
+    await collector_a.stop()
+
+    # ------------------------------------------------------------------
+    # 2. Evaluate Commit A trace & record in ExperimentStore
+    # ------------------------------------------------------------------
+    traces_a = await trace_repo.list_by_application(app_name)
+    assert len(traces_a) == 1
+    trace_a = traces_a[0]
+    assert trace_a.code_commit == "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    assert trace_a.session_id == session_a_id
+
+    metric_results_a = await metric_dispatcher.dispatch(sys_type, trace_a)
+    run_a = Run(
+        run_id=UUID("11111111-1111-1111-1111-111111111111"),
+        trace_id=trace_a.trace_id,
+        code_commit=trace_a.code_commit,
+        data_snapshot_id=trace_a.data_snapshot_id or "snapshot-v1.0",
+        metric_results=metric_results_a,
+        created_at=datetime.now(timezone.utc),
+    )
+    await experiment_store.record_run(run_a)
+
+    # ------------------------------------------------------------------
+    # 3. Establish Baseline from Commit A run
+    # ------------------------------------------------------------------
+    baseline_id = UUID("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")
+    baseline = Baseline(
+        baseline_id=baseline_id,
+        system_type=sys_type,
+        run_ids=[run_a.run_id],
+        established_at=datetime.now(timezone.utc),
+        label="v1.0-gold-baseline",
+    )
+    await baseline_repo.save_baseline(baseline)
+
+    retrieved_baseline = await baseline_repo.get_baseline(baseline_id)
+    assert retrieved_baseline is not None
+    assert retrieved_baseline.run_ids == [run_a.run_id]
+
+    # ------------------------------------------------------------------
+    # 4. Commit B execution & trace capture
+    # ------------------------------------------------------------------
+    monkeypatch.setenv("GIT_COMMIT_SHA", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+    monkeypatch.setenv("NIRIZAN_DATA_SNAPSHOT_ID", "snapshot-v1.0")
+
+    collector_b = TraceCollector(repository=trace_repo)
+    await collector_b.start()
+    exporter_b = CollectorExporter(collector=collector_b)
+    tracer_b = Tracer(application_name=app_name, exporter=exporter_b)
+
+    async with tracer_b.session():
+        async with tracer_b.start_span(
+            name="plan", kind=SpanKind.PLANNING, input_payload="Query B"
+        ) as plan:
+            plan.output_payload = "Query B"
+            async with tracer_b.start_span(
+                name="retrieve", kind=SpanKind.RETRIEVAL, input_payload="Query B"
+            ) as ret:
+                ret.output_payload = "Context B"
+                async with tracer_b.start_span(
+                    name="generate", kind=SpanKind.GENERATION, input_payload="Query B"
+                ) as gen:
+                    gen.output_payload = "Answer B"
+
+    await collector_b.queue.join()
+    await collector_b.stop()
+
+    all_traces = await trace_repo.list_by_application(app_name)
+    trace_b = [
+        t
+        for t in all_traces
+        if t.code_commit == "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    ][0]
+
+    metric_results_b = await metric_dispatcher.dispatch(sys_type, trace_b)
+    run_b = Run(
+        run_id=UUID("22222222-2222-2222-2222-222222222222"),
+        trace_id=trace_b.trace_id,
+        code_commit=trace_b.code_commit,
+        data_snapshot_id=trace_b.data_snapshot_id or "snapshot-v1.0",
+        metric_results=metric_results_b,
+        created_at=datetime.now(timezone.utc),
+    )
+    await experiment_store.record_run(run_b)
+
+    # ------------------------------------------------------------------
+    # 5. Diff Run A vs Run B
+    # ------------------------------------------------------------------
+    diff = await experiment_store.diff(run_a.run_id, run_b.run_id)
+    assert diff.run_a == run_a.run_id
+    assert diff.run_b == run_b.run_id
+    assert "context_relevance" in diff.metric_deltas
+    assert "groundedness" in diff.metric_deltas
+    assert "answer_relevance" in diff.metric_deltas
+
+    experiment_store.close()
+    baseline_repo.close()
