@@ -26,6 +26,7 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["src/nirizan"]
 
+
 [tool.ruff]
 line-length = 100
 target-version = "py311"
@@ -38,6 +39,7 @@ ignore = []
 [tool.ruff.lint.flake8-tidy-imports]
 ban-relative-imports = "all"
 
+
 [tool.importlinter]
 root_packages = ["nirizan"]
 
@@ -48,18 +50,20 @@ layers = [
     "nirizan.reporting",
     "nirizan.gate",
     "nirizan.regression",
-    "nirizan.storage",
-    "nirizan.trust",
-    "nirizan.metrics",
     "nirizan.orchestrator",
+    "nirizan.trust",
+    "nirizan.storage",
+    "nirizan.metrics",
     "nirizan.instrumentation",
 ]
+
 
 [[tool.importlinter.contracts]]
 name = "storage.models may import metrics.base, nothing else from metrics"
 type = "forbidden"
 source_modules = ["nirizan.storage.models"]
 forbidden_modules = ["nirizan.regression", "nirizan.gate", "nirizan.reporting", "nirizan.trust"]
+
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
