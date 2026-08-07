@@ -16,7 +16,7 @@ def test_span_record_round_trip() -> None:
         span_id=uuid4(),
         trace_id=uuid4(),
         parent_span_id=uuid4(),
-        kind=SpanKind.LLM,
+        kind=SpanKind.GENERATION,
         name="test_llm_call",
         started_at=now,
         ended_at=now,
@@ -66,12 +66,20 @@ def test_trace_record_round_trip() -> None:
 
 def test_run_validation() -> None:
     now = datetime.now(timezone.utc)
+    trace_id = uuid4()
     valid_run = Run(
         run_id=uuid4(),
-        trace_id=uuid4(),
+        trace_id=trace_id,
         code_commit="1234567",  # minimum 7 characters
         data_snapshot_id="snap_1",
-        metric_results=[MetricResult(metric_name="accuracy", score=0.95)],
+        metric_results=[
+            MetricResult(
+                metric_name="accuracy",
+                trace_id=trace_id,
+                score=0.95,
+                computed_at=now,
+            )
+        ],
         created_at=now,
     )
     assert valid_run.code_commit == "1234567"
@@ -80,7 +88,7 @@ def test_run_validation() -> None:
     with pytest.raises(ValidationError):
         Run(
             run_id=uuid4(),
-            trace_id=uuid4(),
+            trace_id=trace_id,
             code_commit="123456",
             data_snapshot_id="snap_1",
             created_at=now,
@@ -90,7 +98,7 @@ def test_run_validation() -> None:
     with pytest.raises(ValidationError):
         Run(
             run_id=uuid4(),
-            trace_id=uuid4(),
+            trace_id=trace_id,
             code_commit="1234567",
             data_snapshot_id="",
             created_at=now,
