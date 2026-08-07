@@ -30,8 +30,18 @@ async def test_record_and_get_run(experiment_store: SQLiteExperimentStore) -> No
         code_commit="abcdef1234567890",
         data_snapshot_id="snapshot_v1",
         metric_results=[
-            MetricResult(metric_name="latency", score=120.5),
-            MetricResult(metric_name="accuracy", score=0.92),
+            MetricResult(
+                metric_name="latency_score",
+                trace_id=trace_id,
+                score=0.85,
+                computed_at=now,
+            ),
+            MetricResult(
+                metric_name="accuracy",
+                trace_id=trace_id,
+                score=0.92,
+                computed_at=now,
+            ),
         ],
         created_at=now,
     )
@@ -46,8 +56,8 @@ async def test_record_and_get_run(experiment_store: SQLiteExperimentStore) -> No
     assert retrieved.data_snapshot_id == "snapshot_v1"
     assert retrieved.created_at == now
     assert len(retrieved.metric_results) == 2
-    assert retrieved.metric_results[0].metric_name == "latency"
-    assert retrieved.metric_results[0].score == 120.5
+    assert retrieved.metric_results[0].metric_name == "latency_score"
+    assert retrieved.metric_results[0].score == 0.85
 
 
 @pytest.mark.asyncio
@@ -60,30 +70,62 @@ async def test_get_nonexistent_run_returns_none(experiment_store: SQLiteExperime
 async def test_diff_runs(experiment_store: SQLiteExperimentStore) -> None:
     run_a_id = uuid4()
     run_b_id = uuid4()
+    trace_a_id = uuid4()
+    trace_b_id = uuid4()
     now = datetime.now(timezone.utc)
 
     run_a = Run(
         run_id=run_a_id,
-        trace_id=uuid4(),
+        trace_id=trace_a_id,
         code_commit="commit_a_12345",
         data_snapshot_id="snap_1",
         metric_results=[
-            MetricResult(metric_name="accuracy", score=0.80),
-            MetricResult(metric_name="latency", score=200.0),
-            MetricResult(metric_name="only_in_a", score=1.0),
+            MetricResult(
+                metric_name="accuracy",
+                trace_id=trace_a_id,
+                score=0.80,
+                computed_at=now,
+            ),
+            MetricResult(
+                metric_name="faithfulness",
+                trace_id=trace_a_id,
+                score=0.90,
+                computed_at=now,
+            ),
+            MetricResult(
+                metric_name="only_in_a",
+                trace_id=trace_a_id,
+                score=0.50,
+                computed_at=now,
+            ),
         ],
         created_at=now,
     )
 
     run_b = Run(
         run_id=run_b_id,
-        trace_id=uuid4(),
+        trace_id=trace_b_id,
         code_commit="commit_b_67890",
         data_snapshot_id="snap_1",
         metric_results=[
-            MetricResult(metric_name="accuracy", score=0.88),  # delta = +0.08
-            MetricResult(metric_name="latency", score=150.0),   # delta = -50.0
-            MetricResult(metric_name="only_in_b", score=5.0),
+            MetricResult(
+                metric_name="accuracy",
+                trace_id=trace_b_id,
+                score=0.88,  # delta = +0.08
+                computed_at=now,
+            ),
+            MetricResult(
+                metric_name="faithfulness",
+                trace_id=trace_b_id,
+                score=0.60,  # delta = -0.30
+                computed_at=now,
+            ),
+            MetricResult(
+                metric_name="only_in_b",
+                trace_id=trace_b_id,
+                score=0.70,
+                computed_at=now,
+            ),
         ],
         created_at=now,
     )
@@ -96,7 +138,7 @@ async def test_diff_runs(experiment_store: SQLiteExperimentStore) -> None:
     assert diff_result.run_a == run_a_id
     assert diff_result.run_b == run_b_id
     assert pytest.approx(diff_result.metric_deltas["accuracy"], abs=1e-5) == 0.08
-    assert pytest.approx(diff_result.metric_deltas["latency"], abs=1e-5) == -50.0
+    assert pytest.approx(diff_result.metric_deltas["faithfulness"], abs=1e-5) == -0.30
     assert "only_in_a" not in diff_result.metric_deltas
     assert "only_in_b" not in diff_result.metric_deltas
 
