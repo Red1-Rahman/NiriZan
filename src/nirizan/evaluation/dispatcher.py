@@ -1,4 +1,5 @@
 # src/nirizan/evaluation/dispatcher.py
+
 from __future__ import annotations
 
 from nirizan.instrumentation.spans import Trace
@@ -26,13 +27,13 @@ class MetricDispatcher:
         trace: Trace,
         system_type: str,
     ) -> list[MetricResult]:
-        """Evaluate all metrics registered for the given system type."""
+        """Evaluate all registered metrics for a trace."""
 
         metrics = self._registry.get(system_type, [])
 
-        results: list[MetricResult] = []
+        all_results: list[MetricResult] = []
 
         for metric in metrics:
-            results.extend(await metric.evaluate(trace))
+            all_results.extend(await metric.evaluate(trace))
 
-        return results
+        return all_results
