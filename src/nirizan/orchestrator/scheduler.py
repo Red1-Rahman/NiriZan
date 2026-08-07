@@ -1,3 +1,4 @@
+# src/nirizan/orchestrator/scheduler.py
 from __future__ import annotations
 
 from datetime import datetime, timezone
@@ -28,8 +29,8 @@ class TraceSource(Protocol):
 class RunSink(Protocol):
     """The shape RunScheduler needs from run persistence.
 
-    Deliberately narrower than RunRepository: the scheduler only persists
-    newly-created runs and never retrieves them.
+    Kept local to avoid coupling the scheduler to a broader repository
+    interface, following the same pattern as TraceCollector's TraceSink.
     """
 
     async def save_run(self, run: Run) -> None:
@@ -43,11 +44,11 @@ class RunScheduler:
         self,
         trace_source: TraceSource,
         dispatcher: MetricDispatcher,
-        run_sink: RunSink,
+        run_repository: RunSink,
     ) -> None:
         self.trace_source = trace_source
         self.dispatcher = dispatcher
-        self.run_sink = run_sink
+        self.run_repository = run_repository
 
     async def run_on_demand(
         self,
@@ -69,7 +70,7 @@ class RunScheduler:
                 created_at=datetime.now(timezone.utc),
             )
 
-            await self.run_sink.save_run(run)
+            await self.run_repository.save_run(run)
             runs.append(run)
 
         return runs
