@@ -60,9 +60,9 @@ jobs:
               'answer_relevance': rng.normal(loc=0.90, scale=0.03, size=30).clip(0, 1),
           }
           candidate_scores = {
-              'context_relevance': rng.normal(loc=0.87, scale=0.03, size=30).clip(0, 1),
-              'groundedness': rng.normal(loc=0.84, scale=0.03, size=30).clip(0, 1),
-              'answer_relevance': rng.normal(loc=0.89, scale=0.03, size=30).clip(0, 1),
+              'context_relevance': rng.normal(loc=0.88, scale=0.03, size=30).clip(0, 1),
+              'groundedness': rng.normal(loc=0.85, scale=0.03, size=30).clip(0, 1),
+              'answer_relevance': rng.normal(loc=0.90, scale=0.03, size=30).clip(0, 1),
           }
 
           comparator = BaselineComparator()
