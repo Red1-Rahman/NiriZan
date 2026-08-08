@@ -8,6 +8,8 @@ authors = [{ name = "Redwan Rahman" }]
 requires-python = ">=3.11"
 dependencies = [
     "pydantic>=2.7,<3.0",
+    "numpy>=1.26.0",
+    "scipy>=1.10.0",
 ]
 
 [project.optional-dependencies]
