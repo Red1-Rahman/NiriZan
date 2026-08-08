@@ -1,5 +1,5 @@
+# src/nirizan/__init__.py
 """NiriZan: Continuous evaluation infrastructure for production AI systems."""
-
 from nirizan._logging import (
     disable_logging,
     enable_logging,
