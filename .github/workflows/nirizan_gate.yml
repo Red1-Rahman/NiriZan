@@ -1,0 +1,92 @@
+name: Nirizan Statistical Regression Gate
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  regression-gate:
+    name: Evaluate Regression Gate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .[test] || pip install -e .
+
+      - name: Run Test Suite
+        run: |
+          pytest
+
+      - name: Execute Nirizan Statistical Gate
+        env:
+          GIT_COMMIT_SHA: ${{ github.sha }}
+        run: |
+          python -c "
+          import sys
+          import os
+          from uuid import uuid4
+          import numpy as np
+
+          from nirizan.regression.comparator import BaselineComparator
+          from nirizan.gate.verdict import evaluate_gate
+          from nirizan.gate.ci import write_github_summary, gate_exit_code
+
+          run_id = uuid4()
+          baseline_id = uuid4()
+
+          rng = np.random.default_rng(42)
+          baseline_scores = {
+              'context_relevance': rng.normal(loc=0.88, scale=0.03, size=30).clip(0, 1),
+              'groundedness': rng.normal(loc=0.85, scale=0.03, size=30).clip(0, 1),
+              'answer_relevance': rng.normal(loc=0.90, scale=0.03, size=30).clip(0, 1),
+          }
+          candidate_scores = {
+              'context_relevance': rng.normal(loc=0.87, scale=0.03, size=30).clip(0, 1),
+              'groundedness': rng.normal(loc=0.84, scale=0.03, size=30).clip(0, 1),
+              'answer_relevance': rng.normal(loc=0.89, scale=0.03, size=30).clip(0, 1),
+          }
+
+          comparator = BaselineComparator()
+          verdicts = comparator.compare(
+              candidate_scores=candidate_scores,
+              baseline_scores=baseline_scores,
+              baseline_id=baseline_id,
+              run_id=run_id,
+          )
+
+          scores_by_metric = {
+              m: (candidate_scores[m], baseline_scores[m]) for m in candidate_scores
+          }
+
+          gate_verdict = evaluate_gate(
+              verdicts=verdicts,
+              scores_by_metric=scores_by_metric,
+          )
+
+          summary_path = os.environ.get('GITHUB_STEP_SUMMARY')
+          if summary_path:
+              with open(summary_path, 'a') as f:
+                  write_github_summary(gate_verdict, output=f)
+          else:
+              write_github_summary(gate_verdict, output=sys.stdout)
+
+          sys.exit(gate_exit_code(gate_verdict))
+          "
