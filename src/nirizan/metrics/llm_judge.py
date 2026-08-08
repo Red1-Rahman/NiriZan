@@ -59,5 +59,5 @@ class LLMJudge(BaseModel):
             trace_id=trace_id or uuid4(),
             score=score,
             computed_at=datetime.now(timezone.utc),
-            metadata={"reasoning": reasoning, "prompt": prompt},
+            details={"reasoning": reasoning, "prompt": prompt},
         )
