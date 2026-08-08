@@ -7,7 +7,11 @@ from typing import Any, Protocol
 from uuid import UUID, uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
+
+from nirizan._logging import get_logger
 from nirizan.metrics.base import MetricResult
+
+logger = get_logger(__name__)
 
 
 class ClassificationModel(Protocol):
@@ -42,16 +46,42 @@ class LightweightJudge(BaseModel):
         *,
         trace_id: UUID | None = None,
     ) -> MetricResult:
+        actual_trace_id = trace_id or uuid4()
+        logger.info(
+            "Evaluating LightweightJudge metric_name='%s' for trace_id=%s",
+            self.metric_name,
+            actual_trace_id,
+        )
+
         if not text or not text.strip():
+            logger.warning(
+                "Empty or whitespace-only text provided for metric_name='%s' on trace_id=%s. Returning score 0.0.",
+                self.metric_name,
+                actual_trace_id,
+            )
             score = 0.0
         else:
             probas = self.classifier.predict_proba(text)
+            logger.debug(
+                "Classifier probabilities for metric_name='%s' on trace_id=%s: %s",
+                self.metric_name,
+                actual_trace_id,
+                probas,
+            )
             score = float(probas.get(self.target_class, 0.0))
 
         score = max(0.0, min(1.0, score))
+
+        logger.info(
+            "LightweightJudge metric_name='%s' evaluated score=%.4f for trace_id=%s",
+            self.metric_name,
+            score,
+            actual_trace_id,
+        )
+
         return MetricResult(
             metric_name=self.metric_name,
-            trace_id=trace_id or uuid4(),
+            trace_id=actual_trace_id,
             score=score,
             computed_at=datetime.now(timezone.utc),
         )
