@@ -6,10 +6,13 @@ from uuid import UUID
 import numpy as np
 from pydantic import BaseModel, ConfigDict, Field
 
+from nirizan._logging import get_logger
 from nirizan.regression.comparator import (
     RegressionSeverity,
     RegressionVerdict,
 )
+
+logger = get_logger(__name__)
 
 
 class GateVerdict(BaseModel):
@@ -51,6 +54,14 @@ def bootstrap_delta_ci(
             "confidence must be between 0 and 1."
         )
 
+    logger.debug(
+        "Computing bootstrap delta CI: n_bootstrap=%d, confidence=%.2f, candidate_n=%d, baseline_n=%d",
+        n_bootstrap,
+        confidence,
+        candidate.size,
+        baseline.size,
+    )
+
     rng = np.random.default_rng(seed)
 
     candidate_samples = rng.choice(
@@ -72,10 +83,12 @@ def bootstrap_delta_ci(
 
     alpha = 1.0 - confidence
 
-    return (
+    ci = (
         float(np.quantile(deltas, alpha / 2.0)),
         float(np.quantile(deltas, 1.0 - alpha / 2.0)),
     )
+    logger.debug("Bootstrap CI computed: [%.6f, %.6f]", ci[0], ci[1])
+    return ci
 
 
 def select_decision_metric(
@@ -84,7 +97,7 @@ def select_decision_metric(
     if not verdicts:
         raise ValueError("At least one verdict is required.")
 
-    return min(
+    selected = min(
         verdicts,
         key=lambda verdict: (
             -SEVERITY_WEIGHT[verdict.severity],
@@ -95,6 +108,13 @@ def select_decision_metric(
             ),
         ),
     )
+    logger.debug(
+        "Selected decision metric '%s' (severity=%s, effect_size=%s)",
+        selected.metric_name,
+        selected.severity.value,
+        selected.effect_size,
+    )
+    return selected
 
 
 def evaluate_gate(
@@ -110,6 +130,8 @@ def evaluate_gate(
             "Gate requires at least one regression verdict."
         )
 
+    logger.info("Evaluating gate across %d regression verdict(s)", len(verdicts))
+
     decision_metric = select_decision_metric(verdicts)
 
     candidate_scores, baseline_scores = scores_by_metric[
@@ -121,10 +143,24 @@ def evaluate_gate(
         baseline_scores,
     )
 
-    passed = not any(
-        verdict.severity == RegressionSeverity.BLOCKING
+    blocking_verdicts = [
+        verdict
         for verdict in verdicts
-    )
+        if verdict.severity == RegressionSeverity.BLOCKING
+    ]
+    passed = len(blocking_verdicts) == 0
+
+    if passed:
+        logger.info(
+            "Gate evaluation result: PASSED for run_id=%s",
+            decision_metric.run_id,
+        )
+    else:
+        logger.warning(
+            "Gate evaluation result: BLOCKED for run_id=%s (%d blocking regression(s))",
+            decision_metric.run_id,
+            len(blocking_verdicts),
+        )
 
     return GateVerdict(
         passed=passed,
