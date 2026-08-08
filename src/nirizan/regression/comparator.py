@@ -8,6 +8,7 @@ from uuid import UUID
 import numpy as np
 from pydantic import BaseModel, ConfigDict, Field
 
+from nirizan._logging import get_logger
 from nirizan.regression.thresholds import (
     DEFAULT_ALPHA,
     DEFAULT_BLOCKING_EFFECT,
@@ -16,6 +17,8 @@ from nirizan.regression.thresholds import (
     mann_whitney_regression,
     validate_scores,
 )
+
+logger = get_logger(__name__)
 
 
 class RegressionSeverity(str, Enum):
@@ -108,6 +111,13 @@ class BaselineComparator:
         self.warning_effect = warning_effect
         self.blocking_effect = blocking_effect
 
+        logger.debug(
+            "Initialized BaselineComparator (alpha=%.4f, warning_effect=%.2f, blocking_effect=%.2f)",
+            alpha,
+            warning_effect,
+            blocking_effect,
+        )
+
     def compare_metric(
         self,
         *,
@@ -119,6 +129,13 @@ class BaselineComparator:
     ) -> RegressionVerdict:
         validate_scores(candidate)
         validate_scores(baseline)
+
+        logger.debug(
+            "Comparing metric '%s' for candidate run_id=%s vs baseline_id=%s",
+            metric_name,
+            run_id,
+            baseline_id,
+        )
 
         _, p_value = mann_whitney_regression(
             candidate,
@@ -135,6 +152,23 @@ class BaselineComparator:
         )
 
         delta = mean_delta(candidate, baseline)
+
+        logger.debug(
+            "Metric '%s': delta=%.4f, p_value=%.4e, cohens_d=%.3f -> severity=%s",
+            metric_name,
+            delta,
+            p_value,
+            effect,
+            severity.value,
+        )
+
+        if severity == RegressionSeverity.BLOCKING:
+            logger.warning(
+                "Blocking regression detected on metric '%s' (Cohen's d=%.3f, p=%.4e)",
+                metric_name,
+                effect,
+                p_value,
+            )
 
         return RegressionVerdict(
             metric_name=metric_name,
@@ -162,6 +196,13 @@ class BaselineComparator:
         """Compare all metrics and apply family-wise correction."""
         metric_names = sorted(
             set(candidate_scores) | set(baseline_scores)
+        )
+
+        logger.info(
+            "Comparing %d metric(s) between candidate run_id=%s and baseline_id=%s",
+            len(metric_names),
+            run_id,
+            baseline_id,
         )
 
         verdicts: list[RegressionVerdict] = []
@@ -205,6 +246,11 @@ class BaselineComparator:
                 verdict.severity != RegressionSeverity.NONE
                 and not corrected.get(verdict.metric_name, False)
             ):
+                logger.info(
+                    "Reclassified metric '%s' severity from %s to NONE after Holm-Bonferroni correction",
+                    verdict.metric_name,
+                    verdict.severity.value,
+                )
                 final.append(
                     verdict.model_copy(
                         update={
@@ -219,5 +265,11 @@ class BaselineComparator:
                 )
             else:
                 final.append(verdict)
+
+        logger.info(
+            "Baseline comparison complete for run_id=%s (%d verdict(s) generated)",
+            run_id,
+            len(final),
+        )
 
         return final
