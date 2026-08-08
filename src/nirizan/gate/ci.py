@@ -4,7 +4,10 @@ from __future__ import annotations
 import json
 from typing import TextIO
 
+from nirizan._logging import get_logger
 from nirizan.gate.verdict import GateVerdict
+
+logger = get_logger(__name__)
 
 
 def format_gate_summary(verdict: GateVerdict) -> str:
@@ -51,15 +54,26 @@ def write_github_summary(
     *,
     output: TextIO,
 ) -> None:
+    logger.info(
+        "Writing GitHub CI summary for run_id=%s (passed=%s)",
+        verdict.run_id,
+        verdict.passed,
+    )
     output.write(format_gate_summary(verdict))
     output.write("\n")
 
 
 def gate_exit_code(verdict: GateVerdict) -> int:
-    return 0 if verdict.passed else 1
+    if verdict.passed:
+        logger.info("CI Gate PASSED for run_id=%s", verdict.run_id)
+        return 0
+    else:
+        logger.error("CI Gate BLOCKED for run_id=%s", verdict.run_id)
+        return 1
 
 
 def serialize_gate_verdict(verdict: GateVerdict) -> str:
+    logger.debug("Serializing GateVerdict for run_id=%s", verdict.run_id)
     return json.dumps(
         verdict.model_dump(mode="json"),
         indent=2,
