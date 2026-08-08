@@ -1,3 +1,4 @@
+# src/nirizan/metrics/__init__.py
 """Metrics evaluation layer.
 
 Contains plugin interfaces and concrete metrics including RAG Triad,
