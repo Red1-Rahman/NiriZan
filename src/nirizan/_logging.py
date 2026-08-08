@@ -11,6 +11,11 @@ _ENV_VAR_LOG_LEVEL = "NIRIZAN_LOG_LEVEL"
 
 LogLevel = Union[int, str]
 
+
+class _NiriZanStreamHandler(logging.StreamHandler):
+    """Internal StreamHandler subclass used to identify NiriZan-managed handlers."""
+
+
 # Library-safe default: silence by default, let the host app opt in.
 logging.getLogger(_ROOT_LOGGER_NAME).addHandler(logging.NullHandler())
 
@@ -24,7 +29,7 @@ def get_logger(module_name: str) -> logging.Logger:
 
 
 class NiriZanFormatter(logging.Formatter):
-    """Formats a record with millisecond precision:
+    """Formats a record with millisecond precision and full exception trace support:
 
     [INFO] 2026-08-07 14:40:23.279 [NiriZan] tracer.py:182 Started trace 4baf5d17
     """
@@ -32,14 +37,25 @@ class NiriZanFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
         ts = self.formatTime(record, "%Y-%m-%d %H:%M:%S")
         ts = f"{ts}.{int(record.msecs):03d}"
-        return (
+        
+        msg = (
             f"[{record.levelname}] {ts} [NiriZan] "
             f"{record.filename}:{record.lineno} {record.getMessage()}"
         )
 
+        if record.exc_info:
+            if not record.exc_text:
+                record.exc_text = self.formatException(record.exc_info)
+            msg = f"{msg}\n{record.exc_text}"
+
+        if record.stack_info:
+            msg = f"{msg}\n{self.formatStack(record.stack_info)}"
+
+        return msg
+
 
 def _parse_level(level: LogLevel | None) -> int:
-    """Helper to parse int, string, or environment variable into a valid logging level."""
+    """Parse int, string, or environment variable into a valid logging level."""
     if level is None:
         env_val = os.getenv(_ENV_VAR_LOG_LEVEL, "INFO").upper()
         return getattr(logging, env_val, logging.INFO)
@@ -63,21 +79,20 @@ def enable_logging(
     If no level is supplied, checks the `NIRIZAN_LOG_LEVEL` environment variable,
     defaulting to `INFO`.
 
-    Idempotent: replace only NiriZan-managed handlers without touching
+    Idempotent: replaces only NiriZan-managed handlers without touching
     handlers attached by host applications.
     """
     target_level = _parse_level(level)
-    root = logging.getLogger(_ROOT_LOGGER_NAME)
+    root = logging.getLogger(_ROOT_ROOT_LOGGER_NAME if "_ROOT_ROOT_LOGGER_NAME" in locals() else _ROOT_LOGGER_NAME)
     root.setLevel(target_level)
 
     # Clean up prior NiriZan-managed handlers
     for existing in list(root.handlers):
-        if getattr(existing, "_nirizan_managed", False):
+        if isinstance(existing, _NiriZanStreamHandler):
             root.removeHandler(existing)
 
-    handler = logging.StreamHandler(stream or sys.stderr)
+    handler = _NiriZanStreamHandler(stream or sys.stderr)
     handler.setFormatter(NiriZanFormatter())
-    handler._nirizan_managed = True  # type: ignore[attr-defined]
     root.addHandler(handler)
 
     return root
@@ -94,5 +109,5 @@ def disable_logging() -> None:
     """Remove all NiriZan-managed handlers and silence output."""
     root = logging.getLogger(_ROOT_LOGGER_NAME)
     for existing in list(root.handlers):
-        if getattr(existing, "_nirizan_managed", False):
+        if isinstance(existing, _NiriZanStreamHandler):
             root.removeHandler(existing)
