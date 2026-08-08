@@ -16,4 +16,4 @@ def test_llm_judge_evaluation():
     res = judge.evaluate(input_text="Sky color?", output_text="Blue")
     assert res.score == 0.85
     assert res.metric_name == "groundedness"
-    assert res.metadata["reasoning"] == "Output aligns with input."
+    assert res.details["reasoning"] == "Output aligns with input."
