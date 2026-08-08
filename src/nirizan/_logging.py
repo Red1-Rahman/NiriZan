@@ -12,7 +12,7 @@ _ENV_VAR_LOG_LEVEL = "NIRIZAN_LOG_LEVEL"
 LogLevel = Union[int, str]
 
 
-class _NiriZanStreamHandler(logging.StreamHandler):
+class _NiriZanStreamHandler(logging.StreamHandler[TextIO]):
     """Internal StreamHandler subclass used to identify NiriZan-managed handlers."""
 
 
@@ -37,7 +37,7 @@ class NiriZanFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
         ts = self.formatTime(record, "%Y-%m-%d %H:%M:%S")
         ts = f"{ts}.{int(record.msecs):03d}"
-        
+
         msg = (
             f"[{record.levelname}] {ts} [NiriZan] "
             f"{record.filename}:{record.lineno} {record.getMessage()}"
@@ -83,7 +83,7 @@ def enable_logging(
     handlers attached by host applications.
     """
     target_level = _parse_level(level)
-    root = logging.getLogger(_ROOT_ROOT_LOGGER_NAME if "_ROOT_ROOT_LOGGER_NAME" in locals() else _ROOT_LOGGER_NAME)
+    root = logging.getLogger(_ROOT_LOGGER_NAME)
     root.setLevel(target_level)
 
     # Clean up prior NiriZan-managed handlers
