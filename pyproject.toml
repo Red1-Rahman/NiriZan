@@ -19,6 +19,7 @@ dev = [
     "ruff>=0.6",
     "import-linter>=2.0",
     "mypy>=1.10",
+    "scipy-stubs",
 ]
 
 [build-system]
