@@ -1,12 +1,7 @@
 name: Publish to TestPyPI
 
 on:
-  workflow_run:
-    workflows: ["Packaging"]
-    types:
-      - completed
-    branches:
-      - main
+  workflow_dispatch:
 
 permissions:
   contents: read
