@@ -16,6 +16,7 @@ body:
         - docs/architecture.md
         - docs/contracts.md
         - docs/literature-review.md
+        - docs/modules/ (per-package reference docs)
         - docs/governance/DATA_POLICY.md
         - docs/governance/KPI-Definitions.md
         - docs/standards/ (ISO-IEC-IEEE, Washington-Accord, EUR-ACE, UN-SDG)
