@@ -33,5 +33,115 @@ jobs:
           run-id: ${{ github.event.workflow_run.id }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Install packaging tools
+        run: python -m pip install --upgrade packaging
+
+      - name: Determine package version
+        id: package
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          from packaging.metadata import parse_email
+          import tarfile
+          import zipfile
+
+          files = list(Path("dist").iterdir())
+
+          if len(files) != 2:
+              raise RuntimeError(f"Expected 2 distribution files, found {len(files)}")
+
+          metadata_text = None
+
+          for path in files:
+              if path.suffix == ".whl":
+                  with zipfile.ZipFile(path) as archive:
+                      metadata_files = [
+                          name
+                          for name in archive.namelist()
+                          if name.endswith(".dist-info/METADATA")
+                      ]
+                      if len(metadata_files) != 1:
+                          raise RuntimeError(
+                              f"Expected exactly one METADATA file in {path}"
+                          )
+                      metadata_text = archive.read(metadata_files[0]).decode()
+                      break
+
+              if path.suffix == ".gz" and path.name.endswith(".tar.gz"):
+                  with tarfile.open(path, "r:gz") as archive:
+                      metadata_files = [
+                          member
+                          for member in archive.getmembers()
+                          if member.name.endswith(".dist-info/METADATA")
+                      ]
+                      if len(metadata_files) != 1:
+                          raise RuntimeError(
+                              f"Expected exactly one METADATA file in {path}"
+                          )
+                      metadata_text = archive.extractfile(metadata_files[0]).read().decode()
+                      break
+
+          if metadata_text is None:
+              raise RuntimeError("Could not find package metadata")
+
+          message = parse_email(metadata_text)[1]
+          name = message["Name"]
+          version = message["Version"]
+
+          print(f"Package: {name}")
+          print(f"Version: {version}")
+
+          with open(
+              "${GITHUB_OUTPUT}",
+              "a",
+              encoding="utf-8",
+          ) as output:
+              output.write(f"name={name}\n")
+              output.write(f"version={version}\n")
+          PY
+
+      - name: Check whether version exists on PyPI
+        id: check
+        env:
+          PACKAGE_NAME: ${{ steps.package.outputs.name }}
+          PACKAGE_VERSION: ${{ steps.package.outputs.version }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import urllib.error
+          import urllib.request
+
+          name = os.environ["PACKAGE_NAME"]
+          version = os.environ["PACKAGE_VERSION"]
+
+          url = f"https://pypi.org/pypi/{name}/{version}/json"
+
+          try:
+              with urllib.request.urlopen(url) as response:
+                  exists = response.status == 200
+          except urllib.error.HTTPError as error:
+              if error.code == 404:
+                  exists = False
+              else:
+                  raise
+
+          print(f"{name} {version} already exists on PyPI: {exists}")
+
+          with open(
+              os.environ["GITHUB_OUTPUT"],
+              "a",
+              encoding="utf-8",
+          ) as output:
+              output.write(f"exists={'true' if exists else 'false'}\n")
+          PY
+
       - name: Publish distributions to PyPI
+        if: ${{ steps.check.outputs.exists == 'false' }}
         uses: pypa/gh-action-pypi-publish@release/v1
+
+      - name: Skip publication
+        if: ${{ steps.check.outputs.exists == 'true' }}
+        run: |
+          echo "Version ${{ steps.package.outputs.name }}==${{ steps.package.outputs.version }} already exists on PyPI."
+          echo "No publication is necessary."
