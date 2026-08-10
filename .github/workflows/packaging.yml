@@ -34,3 +34,10 @@ jobs:
 
       - name: Validate distributions
         run: twine check dist/*
+
+      - name: Upload distributions
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-distributions
+          path: dist/
+          if-no-files-found: error
