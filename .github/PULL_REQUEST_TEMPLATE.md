@@ -1,7 +1,8 @@
 <!--
-Thanks for opening a PR. NiriZan is pre-implementation and moving through
-the phases in its roadmap — please fill in every section below rather than
-deleting what doesn't seem to apply; "N/A" is a valid answer.
+Thanks for opening a PR. Phases 1-5 are implemented and CI-enforced;
+Phase 6 (evaluation & benchmarking) is in progress. Please fill in every
+section below rather than deleting what doesn't seem to apply; "N/A" is a
+valid answer.
 -->
 
 ## Summary
@@ -17,6 +18,7 @@ deleting what doesn't seem to apply; "N/A" is a valid answer.
 - [ ] Phase 3: Experiment Tracking & Baselines
 - [ ] Phase 4: Regression Detection & CI Gate
 - [ ] Phase 5: Drift & Judge-Reliability Layer
+- [ ] Phase 6: Evaluation Ablation & Benchmarking
 - [ ] Not phase-specific (docs, tooling, dependency update, etc.)
 
 ## Related issue(s)
@@ -28,7 +30,10 @@ deleting what doesn't seem to apply; "N/A" is a valid answer.
 <!--
 Per docs/contracts.md and CONTRIBUTING.md: a change to any pydantic model
 or plugin interface in docs/contracts.md is discussed and approved via a
-Contract Change issue BEFORE the implementation PR, not alongside it.
+Contract Change issue BEFORE the implementation PR, not alongside it. Note:
+JudgeReliabilityMetrics and DashboardSnapshot currently ship without a
+docs/contracts.md entry, a known, tracked gap; don't treat their existing
+shape as precedent for skipping this process on new work.
 -->
 
 - [ ] This PR does **not** touch `docs/contracts.md`.
