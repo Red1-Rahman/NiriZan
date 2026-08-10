@@ -6,7 +6,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        Thanks for reporting a bug. NiriZan is pre-implementation and moving through the phases in its roadmap, so please check first whether the component you're reporting on is expected to exist yet.
+        Thanks for reporting a bug. Phases 1-5 are implemented and CI-tested; if you're on a later phase, check CONTRIBUTING.md first since that component may be early or not-yet-built work.
 
   - type: dropdown
     id: phase
@@ -19,6 +19,7 @@ body:
         - "Phase 3: Experiment Tracking & Baselines"
         - "Phase 4: Regression Detection & CI Gate"
         - "Phase 5: Drift & Judge-Reliability Layer"
+        - "Phase 6: Evaluation Ablation & Benchmarking"
         - Not sure / spans multiple phases
     validations:
       required: true
@@ -61,7 +62,7 @@ body:
     id: python-version
     attributes:
       label: Python version
-      placeholder: "3.10 or 3.11 (per pyproject.toml)"
+      placeholder: "3.11 or later (per pyproject.toml)"
     validations:
       required: false
 
