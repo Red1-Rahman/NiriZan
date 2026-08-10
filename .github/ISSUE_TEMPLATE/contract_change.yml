@@ -8,12 +8,14 @@ body:
       value: |
         `docs/contracts.md` is the single source of truth for every pydantic model and plugin interface NiriZan's components agree on. Per CONTRIBUTING.md, a contract change is discussed and merged on its own, before any implementation PR that depends on it. This form is for proposing that discussion, not for shipping an implementation directly.
 
+        Note: `JudgeReliabilityMetrics` and `DashboardSnapshot` (Phase 5, `reporting/`) currently ship without a corresponding entry here, a known, tracked documentation gap, not an example to follow. A Contract Change issue backfilling those two is itself a welcome first contribution.
+
   - type: input
     id: contract-name
     attributes:
       label: Which contract does this affect?
       description: Name the exact model, protocol, or interface (e.g. Span, MetricResult, RegressionVerdict).
-      placeholder: e.g. Span, Trace, Metric, RegressionVerdict, AttributionVerdict
+      placeholder: e.g. Span, Trace, Metric, RegressionVerdict, AttributionVerdict, JudgeReliabilityMetrics, DashboardSnapshot
     validations:
       required: true
 
@@ -27,6 +29,7 @@ body:
         - "Phase 3: Experiment Tracking & Baselines"
         - "Phase 4: Regression Detection & CI Gate"
         - "Phase 5: Drift & Judge-Reliability Layer"
+        - "Phase 6: Evaluation Ablation & Benchmarking"
     validations:
       required: true
 
@@ -46,7 +49,7 @@ body:
     id: current-shape
     attributes:
       label: Current contract (if modifying an existing one)
-      description: Paste the relevant model or protocol as it exists today in docs/contracts.md.
+      description: Paste the relevant model or protocol as it exists today in docs/contracts.md. If it's implemented in src/ but not yet documented here (see the note above), paste the real src/ definition instead and say so.
       render: python
     validations:
       required: false
