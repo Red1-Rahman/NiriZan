@@ -19,42 +19,71 @@ jobs:
 
     environment:
       name: pypi
-      url: https://pypi.org/p/nirizan
+      url: https://pypi.org/project/nirizan/
 
     permissions:
+      contents: read
+      actions: read
       id-token: write
 
     steps:
       - name: Download distributions
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@v4
         with:
           name: python-distributions
           path: dist/
           run-id: ${{ github.event.workflow_run.id }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Check downloaded distributions
+      - name: Verify distributions exist
+        shell: bash
         run: |
+          shopt -s nullglob
+          files=(dist/*.whl dist/*.tar.gz)
+          if [ "${#files[@]}" -ne 2 ]; then
+            echo "Expected exactly 2 distribution files, found ${#files[@]}"
+            exit 1
+          fi
+          wheel_count=(dist/*.whl)
+          sdist_count=(dist/*.tar.gz)
+          if [ "${#wheel_count[@]}" -ne 1 ]; then
+            echo "Expected exactly 1 wheel, found ${#wheel_count[@]}"
+            exit 1
+          fi
+          if [ "${#sdist_count[@]}" -ne 1 ]; then
+            echo "Expected exactly 1 source distribution, found ${#sdist_count[@]}"
+            exit 1
+          fi
           echo "Downloaded distributions:"
           ls -lah dist/
 
-      - name: Determine package version
+      - name: Install packaging tools
+        run: python -m pip install --upgrade packaging
+
+      - name: Determine package version from wheel
         id: package
         run: |
           python - <<'PY'
+          import glob
           import os
-          import tomllib
+          from packaging.utils import parse_wheel_filename
 
-          with open("pyproject.toml", "rb") as f:
-              project = tomllib.load(f)["project"]
+          wheels = glob.glob("dist/*.whl")
+          if len(wheels) != 1:
+              raise SystemExit(
+                  f"Expected exactly one wheel, found {len(wheels)}"
+              )
 
-          name = project["name"]
-          version = project["version"]
+          name, version, _, _ = parse_wheel_filename(wheels[0])
 
           print(f"Package: {name}")
           print(f"Version: {version}")
 
-          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+          with open(
+              os.environ["GITHUB_OUTPUT"],
+              "a",
+              encoding="utf-8",
+          ) as output:
               output.write(f"name={name}\n")
               output.write(f"version={version}\n")
           PY
@@ -88,8 +117,14 @@ jobs:
           print(f"Version: {version}")
           print(f"Already exists on PyPI: {exists}")
 
-          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
-              output.write(f"exists={'true' if exists else 'false'}\n")
+          with open(
+              os.environ["GITHUB_OUTPUT"],
+              "a",
+              encoding="utf-8",
+          ) as output:
+              output.write(
+                  f"exists={'true' if exists else 'false'}\n"
+              )
           PY
 
       - name: Publish distributions to PyPI
