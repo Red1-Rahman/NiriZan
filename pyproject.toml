@@ -6,6 +6,36 @@ readme = "README.md"
 license = { text = "GPL-3.0-or-later" }
 authors = [{ name = "Redwan Rahman" }]
 requires-python = ">=3.11"
+keywords = [
+    "llm-evaluation",
+    "rag-evaluation",
+    "ai-observability",
+    "ai-testing",
+    "llm-as-a-judge",
+    "drift-detection",
+    "regression-testing",
+    "statistical-gating",
+    "rag-triad",
+    "hallucination-detection",
+    "ci-cd-for-ai",
+    "llm-benchmarking",
+    "llm-reliability",
+    "evaluation-framework",
+    "opentelemetry-tracing"
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: GNU General Public License v3 or later (GPLv3+)",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Software Development :: Testing",
+    "Topic :: Software Development :: Quality Assurance",
+    "Framework :: AsyncIO",
+    "Typing :: Typed",
+]
 dependencies = [
     "pydantic>=2.7,<3.0",
     "numpy>=1.26.0",
