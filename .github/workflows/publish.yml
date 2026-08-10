@@ -33,69 +33,28 @@ jobs:
           run-id: ${{ github.event.workflow_run.id }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Install packaging tools
-        run: python -m pip install --upgrade packaging
+      - name: Check downloaded distributions
+        run: |
+          echo "Downloaded distributions:"
+          ls -lah dist/
 
       - name: Determine package version
         id: package
         run: |
           python - <<'PY'
-          from pathlib import Path
-          from packaging.metadata import parse_email
-          import tarfile
-          import zipfile
+          import os
+          import tomllib
 
-          files = list(Path("dist").iterdir())
+          with open("pyproject.toml", "rb") as f:
+              project = tomllib.load(f)["project"]
 
-          if len(files) != 2:
-              raise RuntimeError(f"Expected 2 distribution files, found {len(files)}")
-
-          metadata_text = None
-
-          for path in files:
-              if path.suffix == ".whl":
-                  with zipfile.ZipFile(path) as archive:
-                      metadata_files = [
-                          name
-                          for name in archive.namelist()
-                          if name.endswith(".dist-info/METADATA")
-                      ]
-                      if len(metadata_files) != 1:
-                          raise RuntimeError(
-                              f"Expected exactly one METADATA file in {path}"
-                          )
-                      metadata_text = archive.read(metadata_files[0]).decode()
-                      break
-
-              if path.suffix == ".gz" and path.name.endswith(".tar.gz"):
-                  with tarfile.open(path, "r:gz") as archive:
-                      metadata_files = [
-                          member
-                          for member in archive.getmembers()
-                          if member.name.endswith(".dist-info/METADATA")
-                      ]
-                      if len(metadata_files) != 1:
-                          raise RuntimeError(
-                              f"Expected exactly one METADATA file in {path}"
-                          )
-                      metadata_text = archive.extractfile(metadata_files[0]).read().decode()
-                      break
-
-          if metadata_text is None:
-              raise RuntimeError("Could not find package metadata")
-
-          message = parse_email(metadata_text)[1]
-          name = message["Name"]
-          version = message["Version"]
+          name = project["name"]
+          version = project["version"]
 
           print(f"Package: {name}")
           print(f"Version: {version}")
 
-          with open(
-              "${GITHUB_OUTPUT}",
-              "a",
-              encoding="utf-8",
-          ) as output:
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
               output.write(f"name={name}\n")
               output.write(f"version={version}\n")
           PY
@@ -107,7 +66,6 @@ jobs:
           PACKAGE_VERSION: ${{ steps.package.outputs.version }}
         run: |
           python - <<'PY'
-          import json
           import os
           import urllib.error
           import urllib.request
@@ -126,13 +84,11 @@ jobs:
               else:
                   raise
 
-          print(f"{name} {version} already exists on PyPI: {exists}")
+          print(f"Package: {name}")
+          print(f"Version: {version}")
+          print(f"Already exists on PyPI: {exists}")
 
-          with open(
-              os.environ["GITHUB_OUTPUT"],
-              "a",
-              encoding="utf-8",
-          ) as output:
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
               output.write(f"exists={'true' if exists else 'false'}\n")
           PY
 
@@ -143,5 +99,6 @@ jobs:
       - name: Skip publication
         if: ${{ steps.check.outputs.exists == 'true' }}
         run: |
-          echo "Version ${{ steps.package.outputs.name }}==${{ steps.package.outputs.version }} already exists on PyPI."
+          echo "Package ${{ steps.package.outputs.name }}==${{ steps.package.outputs.version }} already exists on PyPI."
           echo "No publication is necessary."
+          echo "This is a successful no-op."
