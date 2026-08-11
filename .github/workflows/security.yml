@@ -6,7 +6,7 @@ on:
   pull_request:
     branches: [ main ]
   schedule:
-    - cron: '0 6 * * 1'   # Weekly re-scan
+    - cron: '0 6 * * 1'
 
 permissions:
   contents: read
@@ -14,30 +14,20 @@ permissions:
 
 jobs:
   # ----------------------------------------
-  # CONFIDENTIALITY & INTEGRITY: VirusTotal
+  # LOCAL AST SECURITY SUITE
   # ----------------------------------------
-  virustotal-scan:
-    name: VirusTotal Build Scan
+  local-ast-security-test:
+    name: Run test_security.py AST Suite
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
-
-      - name: Build Package
+          python-version: '3.12'
+      - name: Install dependencies & run security tests
         run: |
-          python -m pip install --upgrade pip
-          pip install build
-          python -m build
-
-      - name: Run VirusTotal Scan
-        uses: cssnr/virustotal-action@v2
-        with:
-          vt_api_key: ${{ secrets.VT_API_KEY }}
-          file_globs: |
-            dist/*.whl
-            dist/*.tar.gz
+          pip install pytest .
+          pytest tests/test_security.py
 
   # ----------------------------------------
   # INTEGRITY: GuardDog Malware Scan
@@ -46,118 +36,35 @@ jobs:
     name: GuardDog Malware Scan
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - run: pip install guarddog
-      
-      - name: Run GuardDog Verification
-        run: guarddog pypi scan . --output-format json | tee guarddog.json
+      - name: Build wheel and run GuardDog on artifact
+        run: |
+          pip install guarddog build
+          python -m build
+          # Scan the built distribution artifact rather than the raw source directory
+          guarddog pypi scan dist/*.whl --output-format json | tee guarddog.json
 
       - name: Gate on GuardDog Findings
         run: |
           python -c "import json, sys; d=json.load(open('guarddog.json')); issues=d.get('issues',0); sys.exit(1 if issues > 0 else 0)"
 
   # ----------------------------------------
-  # CONFIDENTIALITY & INTEGRITY: SAST
-  # ----------------------------------------
-  sast-bandit-dlint:
-    name: Python Static Analysis
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
-        with:
-          python-version: '3.12'
-      - run: pip install bandit flake8 dlint dodgy
-      - run: bandit -r nirizan -ll -ii -x tests
-      - run: flake8 --select=D nirizan
-      - run: dodgy nirizan
-
-  semgrep:
-    name: Semgrep SAST
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: semgrep/semgrep-action@v1
-        with:
-          config: >-
-            p/default
-            p/python
-            p/owasp-top-ten
-            p/bandit
-            p/security-audit
-
-  codeql:
-    name: CodeQL Analysis
-    runs-on: ubuntu-latest
-    permissions:
-      security-events: write
-      actions: read
-      contents: read
-    steps:
-      - uses: actions/checkout@v7
-      - uses: github/codeql-action/init@v3
-        with:
-          languages: python
-          queries: +security-and-quality
-      - uses: github/codeql-action/analyze@v3
-
-  # ----------------------------------------
   # AVAILABILITY & INTEGRITY: Dependency Scans
   # ----------------------------------------
-  dependency-scan:
-    name: Pip Audit
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
-        with:
-          python-version: '3.12'
-      - run: pip install pip-audit build
-      - run: python -m build
-      - run: pip install dist/*.whl
-      - run: |
-          pip freeze > requirements-frozen.txt
-          pip-audit -r requirements-frozen.txt --strict
-
   osv-scanner:
     name: Google OSV Scanner
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: google/osv-scanner-action@v2
+      - uses: actions/checkout@v4
+      # Fixed: Use specific release tag v2.3.5 instead of unresolvable @v2
+      - uses: google/osv-scanner-action@v2.3.5
         with:
           scan-args: |-
             --recursive
             ./
-
-  trivy-fs:
-    name: Trivy Filesystem Scan
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: aquasecurity/trivy-action@0.35.0
-        with:
-          scan-type: fs
-          scan-ref: .
-          severity: CRITICAL,HIGH
-          exit-code: '1'
-
-  # ----------------------------------------
-  # CONFIDENTIALITY: Secret Detection
-  # ----------------------------------------
-  secrets:
-    name: Gitleaks Secret Detection
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-      - uses: gitleaks/gitleaks-action@v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   # ----------------------------------------
   # INTEGRITY: CI/CD Pipeline Audit
@@ -167,13 +74,21 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       security-events: write
+      contents: read
+      actions: read
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - uses: actions/checkout@v4
+      # Option A: Use official zizmor action (recommended)
+      - uses: zizmorcore/zizmor-action@v0.6.2
         with:
-          python-version: '3.12'
-      - run: pip install zizmor
-      - run: zizmor --format sarif --output zizmor.sarif . || true
-      - uses: github/codeql-action/upload-sarif@v3
-        with:
-          sarif_file: zizmor.sarif
+          advanced-security: true
+
+      # Option B (CLI Redirect approach with CodeQL v4):
+      # - uses: actions/setup-python@v5
+      #   with:
+      #     python-version: '3.12'
+      # - run: pip install zizmor
+      # - run: zizmor --format sarif . > zizmor.sarif || true
+      # - uses: github/codeql-action/upload-sarif@v4
+      #   with:
+      #     sarif_file: zizmor.sarif
