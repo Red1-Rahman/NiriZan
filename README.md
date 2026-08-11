@@ -12,6 +12,7 @@
 [![CI](https://github.com/Red1-Rahman/NiriZan/actions/workflows/ci.yml/badge.svg)](https://github.com/Red1-Rahman/NiriZan/actions/workflows/ci.yml)
 [![Packaging](https://github.com/Red1-Rahman/NiriZan/actions/workflows/packaging.yml/badge.svg)](https://github.com/Red1-Rahman/NiriZan/actions/workflows/packaging.yml)
 [![Cross-platform](https://github.com/Red1-Rahman/NiriZan/actions/workflows/cross-platform.yml/badge.svg)](https://github.com/Red1-Rahman/NiriZan/actions/workflows/cross-platform.yml)
+[![VirusTotal Security Scan](https://github.com/Red1-Rahman/NiriZan/actions/workflows/virustotal.yml/badge.svg)](https://github.com/Red1-Rahman/NiriZan/actions/workflows/virustotal.yml)
 
 </div>
 
