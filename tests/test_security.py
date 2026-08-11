@@ -1,11 +1,11 @@
 # tests/test_security.py
-"""Security regression tests for nirzan."""
+"""Security regression tests for nirizan."""
 import ast
 import pathlib
 import re
 import nirizan
 
-ROOT = pathlib.Path(nirzan.__file__).resolve().parent
+ROOT = pathlib.Path(nirizan.__file__).resolve().parent
 
 # Dangerous function calls forbidden in core SDK logic
 DANGEROUS_CALLS = {
