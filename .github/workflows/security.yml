@@ -79,8 +79,19 @@ jobs:
           python -c "
           import json, sys
           d = json.load(open('guarddog.json'))
-          issues = d.get('issues', 0) if isinstance(d, dict) else len(d)
-          sys.exit(1 if issues > 0 else 0)
+          reports = d if isinstance(d, list) else [d]
+
+          def is_risky(report):
+              if report.get('errors'):
+                  return True
+              if report.get('risks'):
+                  return True
+              risk_label = (report.get('risk_score') or {}).get('label')
+              if risk_label is not None:
+                  return risk_label != 'no_risks_detected'
+              return report.get('issues', 0) > 0
+
+          sys.exit(1 if any(is_risky(report) for report in reports) else 0)
           "
 
   # ----------------------------------------
