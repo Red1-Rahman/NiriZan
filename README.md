@@ -25,6 +25,16 @@ NiriZan is the first open-source framework to provide automated judge drift attr
 
 ---
 
+## Installation
+
+```bash
+pip install nirizan
+```
+
+Package: [pypi.org/project/nirizan](https://pypi.org/project/nirizan/)
+
+---
+
 ## What NiriZan Does
 
 1. **Automated judge-drift attribution.** `AttributionEngine` produces a three-state verdict, `NONE`, `JUDGE_DRIFT`, or `SYSTEM_DRIFT`, distinguishing a quality drop in the system under test from a change in the judge measuring it.
@@ -67,10 +77,18 @@ NiriZan is a fusion of two words from two languages, each contributing a core id
 
 | Niri | Zan |
 |---|---|
-| **Origin:** নিরীক্ষা (*Nirikkha*) — Bangla/Bengali | **Origin:** ميزان (*Mīzān*) — Arabic |
+| **Origin:** নিরীক্ষা (*Nirikkha*) - Bangla/Bengali | **Origin:** ميزان (*Mīzān*) - Arabic |
 | **Meaning:** Inspection · Evaluation · Verification · Audit | **Meaning:** Scale · Balance · Measurement · Criterion |
 
 Together, **Niri + Zan** captures the essence of the project: inspecting AI systems and measuring them against a balanced standard of quality.
+
+---
+
+## Read More
+
+For architecture, contracts, module reference docs, and the evaluation results behind the claims above, see [`docs/`](docs/).
+
+[The Ruler Can Change Too: Navigating Judge Drift in Production AI Evaluation](https://nirizan.hashnode.dev/the-ruler-can-change-too-navigating-judge-drift-in-production-ai-evaluation), the first NiriZan engineering post, covering the judge-drift problem and the fixed-anchor, statistical-attribution approach this project takes to it.
 
 ---
 
