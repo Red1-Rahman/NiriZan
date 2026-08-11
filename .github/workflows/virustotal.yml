@@ -1,0 +1,35 @@
+name: VirusTotal Security Scan
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  virustotal-scan:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Python Environment
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.11'
+
+      - name: Build Package Distributions
+        run: |
+          python -m pip install --upgrade pip
+          pip install build
+          python -m build
+
+      - name: Run VirusTotal Security Scan
+        uses: cssnr/virustotal-action@v2
+        with:
+          vt_api_key: ${{ secrets.VT_API_KEY }}
+          file_globs: |
+            dist/*.whl
+            dist/*.tar.gz
