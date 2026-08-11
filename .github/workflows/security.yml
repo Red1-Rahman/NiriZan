@@ -47,12 +47,10 @@ jobs:
           python -m build
 
       - name: Run VirusTotal Security Scan
-        uses: cssnr/virustotal-action@v2
-        with:
-          vt_api_key: ${{ secrets.VT_API_KEY }}
-          file_globs: |
-            dist/*.whl
-            dist/*.tar.gz
+        env:
+          VT_API_KEY: ${{ secrets.VT_API_KEY }}
+        run: |
+          python .github/scripts/virustotal_scan.py dist/*.whl dist/*.tar.gz
 
   # ----------------------------------------
   # INTEGRITY: GuardDog Malware Scan
