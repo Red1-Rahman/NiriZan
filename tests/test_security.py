@@ -3,7 +3,7 @@
 import ast
 import pathlib
 import re
-import nirzan
+import nirizan
 
 ROOT = pathlib.Path(nirzan.__file__).resolve().parent
 
