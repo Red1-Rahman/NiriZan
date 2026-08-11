@@ -21,6 +21,18 @@
 
 Modern AI systems are probabilistic rather than deterministic. Traditional software testing alone cannot determine whether a retrieval pipeline, language model, or AI agent is performing correctly. NiriZan exists to provide continuous, reproducible evaluation infrastructure that enables teams to measure quality, detect regressions, compare experiments, and build confidence in production AI systems.
 
+NiriZan is the first open-source framework to provide automated judge drift attribution, fixed anchor sets with repeatable, on-demand rescoring, rigorous statistical gating (Mann-Whitney + Holm-Bonferroni), trust-weighted health scoring, and CI/CD-integrated regression gating in a single, architecturally disciplined Python package.
+
+---
+
+## What NiriZan Does
+
+1. **Automated judge-drift attribution.** `AttributionEngine` produces a three-state verdict, `NONE`, `JUDGE_DRIFT`, or `SYSTEM_DRIFT`, distinguishing a quality drop in the system under test from a change in the judge measuring it.
+2. **Fixed evaluation anchors, rescored on demand.** A versioned `AnchorSet` is never edited in place; updating it means creating a new `anchor_set_id`, so historical comparisons stay meaningful.
+3. **Statistically rigorous regression gating.** Mann-Whitney U tests with Holm-Bonferroni correction for multiple comparisons, Cohen's d effect sizes, and bootstrap confidence intervals (5,000 resamples), not a bare threshold on a single score.
+4. **Trust-weighted health scoring.** `compute_system_health_score` discounts the aggregate score when the attribution verdict signals judge unreliability, not just system degradation.
+5. **An 8-layer, unidirectional architecture**, `instrumentation → orchestrator → metrics → trust → storage → regression → gate → reporting`, enforced by `import-linter` in CI, not just documented as a diagram.
+
 ---
 
 ## What is NiriZan?
