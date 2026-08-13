@@ -22,7 +22,7 @@
 
 Modern AI systems are probabilistic rather than deterministic. Traditional software testing alone cannot determine whether a retrieval pipeline, language model, or AI agent is performing correctly. NiriZan exists to provide continuous, reproducible evaluation infrastructure that enables teams to measure quality, detect regressions, compare experiments, and build confidence in production AI systems.
 
-NiriZan is a open-source framework to provide automated judge drift attribution, fixed anchor sets with repeatable, on-demand rescoring, rigorous statistical gating (Mann-Whitney + Holm-Bonferroni), trust-weighted health scoring, and CI/CD-integrated regression gating in a single, architecturally disciplined Python package.
+NiriZan is an open-source framework to provide automated judge drift attribution, fixed anchor sets with repeatable, on-demand rescoring, rigorous statistical gating (Mann-Whitney + Holm-Bonferroni), trust-weighted health scoring, and CI/CD-integrated regression gating in a single, architecturally disciplined Python package.
 
 ---
 
