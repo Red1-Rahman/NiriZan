@@ -12,7 +12,8 @@
 [![CI](https://github.com/Red1-Rahman/NiriZan/actions/workflows/ci.yml/badge.svg)](https://github.com/Red1-Rahman/NiriZan/actions/workflows/ci.yml)
 [![Packaging](https://github.com/Red1-Rahman/NiriZan/actions/workflows/packaging.yml/badge.svg)](https://github.com/Red1-Rahman/NiriZan/actions/workflows/packaging.yml)
 [![Cross-platform](https://github.com/Red1-Rahman/NiriZan/actions/workflows/cross-platform.yml/badge.svg)](https://github.com/Red1-Rahman/NiriZan/actions/workflows/cross-platform.yml)
-[![Security (CIA)](https://github.com/Red1-Rahman/NiriZan/actions/workflows/security.yml/badge.svg)](https://github.com/Red1-Rahman/NiriZan/actions/workflows/security.yml)
+[![Security (CIA)](https://github.com/Red1-Rahman/NiriZan/actions/workflows/security.yml/badge.svg)](https://github.com/Red1-Rahman/NiriZan/actions/workflows/security.yml)   
+[![User Manual](https://img.shields.io/badge/Docs-User%20Manual-blue)](https://github.com/Red1-Rahman/NiriZan/blob/main/docs/user-manual.md)
 
 </div>
 
@@ -86,6 +87,8 @@ Together, **Niri + Zan** captures the essence of the project: inspecting AI syst
 ---
 
 ## Read More
+
+For the complete user guide, see the **[NiriZan User Manual](docs/user-manual.md)**. link
 
 For architecture, contracts, module reference docs, and the evaluation results behind the claims above, see [`docs/`](docs/).
 
