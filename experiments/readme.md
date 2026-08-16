@@ -156,3 +156,7 @@ For revisions of an existing experiment, retain the relationship to the original
 04_regression_detection_ci_gate.ipynb
 04v2_regression_detection_ci_gate.ipynb
 ```
+
+<div align="center">
+Rahman, R. NiriZan (Version 0.1.0) [Computer software]. https://github.com/Red1-Rahman/NiriZan
+</div>
