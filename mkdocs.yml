@@ -1,0 +1,80 @@
+site_name: NiriZan
+site_description: Continuous Evaluation Infrastructure for Production AI
+site_author: Redwan Rahman
+repo_name: Red1-Rahman/NiriZan
+repo_url: https://github.com/Red1-Rahman/NiriZan
+edit_uri: edit/main/docs/
+
+copyright: >
+  © 2026 Redwan Rahman ·
+  <a href="https://www.gnu.org/licenses/gpl-3.0.html">
+  GNU General Public License v3.0 or later
+  </a>
+
+theme:
+  name: material
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+  features:
+    - navigation.instant
+    - navigation.tracking
+    - navigation.tabs
+    - navigation.top
+    - navigation.footer
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - content.action.edit
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.highlight
+  - pymdownx.inlinehilite
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.snippets:
+      base_path: ["."]
+      check_paths: true
+  - tables
+  - toc:
+      permalink: true
+
+plugins:
+  - search
+
+nav:
+  - Home: index.md
+  - User Manual: user-manual.md
+  - Architecture: architecture.md
+  - Literature Review: literature-review.md
+  - Contracts: contracts.md
+  - Governance:
+      - KPI Definitions: governance/KPI-Definitions.md
+      - Data Policy: governance/DATA_POLICY.md
+  - Standards Mapping:
+      - ISO/IEC/IEEE: standards/ISO-IEC-IEEE.md
+      - UN SDG: standards/UN-SDG.md
+      - ACM CS2023: standards/ACM-CS2023.md
+      - EUR-ACE: standards/EUR-ACE.md
+      - Washington Accord: standards/Washington-Accord.md
+  - Research Lab: experiments.md
+  - Community:
+      - Contributing: community/contributing.md
+      - Code of Conduct: community/code-of-conduct.md
+      - Code of Ethics: community/code-of-ethics.md
+      - Security Policy: community/security.md
