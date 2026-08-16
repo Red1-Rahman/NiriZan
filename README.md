@@ -13,7 +13,7 @@
 [![Packaging](https://github.com/Red1-Rahman/NiriZan/actions/workflows/packaging.yml/badge.svg)](https://github.com/Red1-Rahman/NiriZan/actions/workflows/packaging.yml)
 [![Cross-platform](https://github.com/Red1-Rahman/NiriZan/actions/workflows/cross-platform.yml/badge.svg)](https://github.com/Red1-Rahman/NiriZan/actions/workflows/cross-platform.yml)
 [![Security (CIA)](https://github.com/Red1-Rahman/NiriZan/actions/workflows/security.yml/badge.svg)](https://github.com/Red1-Rahman/NiriZan/actions/workflows/security.yml)   
-[![User Manual](https://img.shields.io/badge/Docs-User%20Manual-blue)](https://github.com/Red1-Rahman/NiriZan/blob/main/docs/user-manual.md)
+[![Documentation](https://img.shields.io/badge/Docs-Read%20the%20Docs-blue)](https://nirizan.readthedocs.io/en/latest/)
 
 </div>
 
