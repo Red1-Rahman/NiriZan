@@ -1,0 +1,62 @@
+name: Sync docs mirrors
+
+# Keeps docs/community/*.md and docs/experiments.md in sync with their
+# single source of truth (root governance docs and experiments/readme.md).
+#
+# Scope is intentionally narrow: this workflow only ever reads the 5 files
+# listed below. It must never glob over experiments/ or src/, since those
+# directories contain notebooks and source code, not documentation.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - CONTRIBUTING.md
+      - CODE_OF_CONDUCT.md
+      - CODE_OF_ETHICS.md
+      - SECURITY.md
+      - experiments/readme.md
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  sync-mirrors:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Copy governance docs into docs/community
+        run: |
+          mkdir -p docs/community
+          cp CONTRIBUTING.md      docs/community/contributing.md
+          cp CODE_OF_CONDUCT.md   docs/community/code-of-conduct.md
+          cp CODE_OF_ETHICS.md    docs/community/code-of-ethics.md
+          cp SECURITY.md          docs/community/security.md
+
+      - name: Rebuild docs/experiments.md from experiments/readme.md
+        run: |
+          {
+            echo '!!! note'
+            echo '    This page mirrors [`experiments/readme.md`](https://github.com/${{ github.repository }}/blob/main/experiments/readme.md) in the repo. Notebook links open on GitHub — clone the repo or use Colab/Kaggle to run them.'
+            echo ''
+            cat experiments/readme.md
+          } > docs/experiments.md
+
+      - name: Open PR if mirrors changed
+        uses: peter-evans/create-pull-request@v6
+        with:
+          commit-message: "docs: sync mirrored docs from source files"
+          title: "Sync docs mirrors"
+          body: |
+            Auto-generated: one or more of `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`,
+            `CODE_OF_ETHICS.md`, `SECURITY.md`, or `experiments/readme.md` changed,
+            and the mirrored copies under `docs/` are now out of sync.
+
+            This PR brings `docs/community/*.md` and `docs/experiments.md` back in
+            line with their source files. Please review before merging.
+          branch: docs-mirror-sync
+          delete-branch: true
+          labels: documentation, automated
