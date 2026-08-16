@@ -51,7 +51,7 @@ jobs:
         # If your org locks that setting, add a repo secret named
         # DOCS_SYNC_PAT (a PAT with repo + pull-request scope) and this
         # step will use it automatically instead of the default token.
-        uses: peter-evans/create-pull-request@v6
+        uses: peter-evans/create-pull-request@v8
         with:
           token: ${{ secrets.DOCS_SYNC_PAT || secrets.GITHUB_TOKEN }}
           commit-message: "docs: sync mirrored docs from source files"
