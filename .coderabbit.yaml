@@ -1,0 +1,107 @@
+# CodeRabbit configuration for NiriZan.
+#
+# NiriZan is an open-source continuous evaluation infrastructure for
+# production AI systems. CodeRabbit is an advisory reviewer here, not a
+# merge gate. Repository CI, architectural contracts, and human review
+# remain authoritative.
+
+language: "en-US"
+early_access: false
+enable_free_tier: true
+
+reviews:
+  profile: "assertive"
+
+  # CodeRabbit must not automatically approve or request changes.
+  # Its findings remain advisory until reviewed by a maintainer.
+  request_changes_workflow: false
+
+  # PR documentation
+  high_level_summary: true
+  high_level_summary_in_walkthrough: true
+  high_level_summary_instructions: >
+    Summarize the purpose and scope of the change, the principal files or
+    components affected, important behavioral or architectural consequences,
+    and any notable testing or validation performed. Do not claim that CI or
+    CodeRabbit proves correctness. Keep the summary concise and factual.
+
+  review_status: true
+  review_details: true
+  review_progress: true
+
+  # The canonical review-progress surface is sufficient. Do not add the
+  # legacy commit-status mirror.
+  commit_status: false
+  fail_commit_status: false
+
+  collapse_walkthrough: true
+  changed_files_summary: true
+  sequence_diagrams: true
+  estimate_code_review_effort: true
+  assess_linked_issues: true
+  related_issues: true
+  related_prs: true
+
+  # Repository organization
+  suggested_labels: true
+  auto_apply_labels: false
+
+  labeling_instructions:
+    - label: "slop"
+      instructions: >
+        Suggest this label only when a pull request is primarily low-quality,
+        unnecessary, repetitive, non-substantive, or otherwise resembles
+        low-value contribution noise. Do not use this label merely because
+        code has bugs, needs refactoring, has failing tests, or receives
+        substantial review feedback.
+
+  # Reviewer suggestions are useful as the project grows, but assignment
+  # remains a human decision.
+  suggested_reviewers: true
+  auto_assign_reviewers: false
+  suggested_reviewers_instructions: []
+
+  # Unnecessary for NiriZan's review workflow.
+  in_progress_fortune: false
+  poem: false
+  enable_prompt_for_ai_agents: false
+
+  # Review the complete repository initially. Path-specific exclusions and
+  # guidance should be introduced only after observing actual review noise.
+  path_filters: []
+
+  # Intentionally empty for now. NiriZan should add path-specific rules only
+  # after they have been established and reviewed as repository policy.
+  path_instructions: []
+
+  abort_on_close: true
+  disable_cache: false
+
+  # Public-repository feature. Keep enabled, but make the classification
+  # visible through the existing `slop` label without automatic label
+  # application from the general labeling system.
+  slop_detection:
+    enabled: true
+    label: "slop"
+
+  # Review every non-draft PR automatically.
+  auto_review:
+    enabled: true
+    auto_incremental_review: true
+    drafts: false
+    auto_pause_after_reviewed_commits: 5
+
+chat:
+  auto_reply: true
+
+knowledge_base:
+  # Keep repository-specific learnings local to NiriZan.
+  learnings:
+    scope: "local"
+
+  # Use repository coding-guideline files when present.
+  code_guidelines:
+    enabled: true
+
+  web_search:
+    enabled: true
