@@ -54,7 +54,11 @@ reviews:
   # The dedicated slop detector below is the sole owner of the "slop" label.
   labeling_instructions: []
 
-  suggested_reviewers: true
+  # Disabled: with a small contributor base, CodeRabbit has no real
+  # authorship pattern to draw from and defaults to suggesting a bot
+  # ("copilot") as reviewer, which is just noise since auto-assignment
+  # is off anyway.
+  suggested_reviewers: false
   auto_assign_reviewers: false
   suggested_reviewers_instructions: []
 
@@ -68,6 +72,16 @@ reviews:
   enable_prompt_for_ai_agents: false
 
   path_filters: []
+
+  # docstrings generation disabled: low value for a repo this size, one
+  # fewer checkbox to manage. unit_tests left enabled: it's opt-in via a
+  # checkbox on the PR comment (not autonomous), and useful when a PR adds
+  # logic with no coverage. Anything it generates should still get the same
+  # scrutiny as hand-written tests before merge, per this repo's "advisory
+  # only, human review is authoritative" philosophy above.
+  finishing_touches:
+    docstrings:
+      enabled: false
 
   # Repository-owned targeted review guidance.
   #
@@ -123,7 +137,14 @@ reviews:
         covering statistical, validation, regression, evaluation, or numerical
         helpers, check whether a substantially similar implementation exists
         elsewhere in the statistical implementation layers and flag possible
-        unacknowledged divergence for maintainer review.
+        unacknowledged divergence for maintainer review. For tests that assert
+        against a specific pinned dependency version, commit SHA, or action
+        tag (for example, testing that a GitHub Action pin equals an exact
+        version string), flag hard-coded expected values that will fail on
+        the next routine, otherwise-correct dependency bump; prefer that such
+        tests assert on the underlying property (format, internal consistency
+        between related pins, absence of a known-bad pattern) rather than
+        equality against a value that is expected to change.
 
     # Cross-platform behavior.
     #
@@ -150,6 +171,35 @@ reviews:
         dependencies rather than being reachable only through a development
         or test dependency. Flag possible undeclared runtime dependencies
         for maintainer review.
+
+    # CI/CD workflow design and trigger safety.
+    #
+    # This repository already runs zizmor in CI (zizmor-workflow-audit job),
+    # which deterministically catches hash-pin/version-comment mismatches,
+    # excessive permissions, and template-injection risks in `run:` blocks.
+    # Do not re-flag findings that class of static analysis already owns;
+    # defer to zizmor's output for that. This instruction targets judgment
+    # calls zizmor cannot make: whether a job's permissions match its actual
+    # purpose, whether a new trigger changes the workflow's exposure to
+    # untrusted input, and whether jobs have drifted out of sync with each
+    # other.
+    - path: ".github/workflows/**/*.yml"
+      instructions: >
+        When a workflow job requests elevated permissions (anything beyond
+        the top-level `contents: read`), check that the elevation matches
+        what the job actually does; flag permissions requested but unused,
+        or permissions broader than the job's stated purpose requires. When
+        a workflow's `on:` triggers change, especially additions of
+        `pull_request_target`, `workflow_run`, or any trigger combined with
+        access to secrets, check whether the job also checks out or executes
+        code from the triggering ref; flag if untrusted input could reach a
+        job with secret access. When a value derived from `github.event.*`
+        or `secrets.*` is used inside a `run:` shell block rather than passed
+        through `env:`, flag it as a script-injection risk. When multiple
+        jobs in the same file perform comparable setup (tool versions,
+        language versions, base images), flag inconsistency between them
+        unless the difference appears deliberate. Do not flag hash-pin
+        format or version-comment accuracy; that is zizmor's responsibility.
 
   abort_on_close: true
   disable_cache: false
