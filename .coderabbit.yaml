@@ -1,3 +1,5 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+
 # CodeRabbit configuration for NiriZan.
 #
 # NiriZan is an open-source continuous evaluation infrastructure for
@@ -29,10 +31,10 @@ reviews:
   review_details: true
   review_progress: true
 
-  # The canonical review-progress surface (review_progress, above) is what's
-  # active. commit_status and fail_commit_status only take effect if
-  # review_progress is ever disabled; left false here as a deliberate
-  # default in that case, not because they're doing anything today.
+  # review_progress is the canonical review-status surface.
+  # commit_status is only used when review_progress is disabled, but keeping
+  # both false prevents a future configuration change from unexpectedly
+  # restoring the legacy commit-status mirror.
   commit_status: false
   fail_commit_status: false
 
@@ -48,11 +50,8 @@ reviews:
   suggested_labels: true
   auto_apply_labels: false
 
-  # No general labeling_instructions entry for "slop" here — slop_detection
-  # below is the single source of truth for that label. Two mechanisms
-  # producing independent opinions under the same label name is exactly the
-  # kind of divergence this project is currently working to eliminate
-  # elsewhere in the codebase; not repeating it here.
+  # General label suggestions are intentionally not configured here.
+  # The dedicated slop detector below is the sole owner of the "slop" label.
   labeling_instructions: []
 
   suggested_reviewers: true
@@ -62,21 +61,28 @@ reviews:
   # Unnecessary for NiriZan's review workflow.
   in_progress_fortune: false
   poem: false
+
+  # Do not generate AI-agent prompts in every review comment. CodeRabbit
+  # remains an advisory reviewer, while maintainers decide how findings
+  # should be acted upon.
   enable_prompt_for_ai_agents: false
 
   path_filters: []
 
-  # Narrow, repository-owned guidance aimed specifically at the failure mode
-  # this project has already hit once: independently maintained duplicate
-  # statistical helpers with silently divergent validation behavior. Scoped
-  # to the directories where that risk is real, not the whole tree.
-  # Deliberately does not reference docs/contracts.md, ARCHITECTURE.md, or
-  # CONTRIBUTING.md as authoritative guidance — those currently have known
-  # discrepancies (see the open duplicate-helpers issue and #9), and
-  # import-linter + Ruff TID already enforce the dependency-direction rule
-  # mechanically. This instruction targets duplication only, not
-  # architecture conformance.
+  # Repository-owned targeted review guidance.
+  #
+  # These instructions supplement, rather than replace, deterministic CI.
+  # They deliberately do not ingest ARCHITECTURE.md, docs/contracts.md, or
+  # CONTRIBUTING.md as CodeRabbit "coding guidelines" because those documents
+  # are currently living sources with known discrepancies and ongoing work.
   path_instructions:
+
+    # Statistical duplicate/divergence detection.
+    #
+    # These three directories are intentionally scoped because they contain
+    # the statistical/evaluation implementation where the repository has
+    # already found independently maintained duplicate mathematical helpers.
+    # This is not a general architectural dependency rule.
     - path: "src/nirizan/{metrics,regression,gate}/**/*.py"
       instructions: >
         When a change introduces or modifies a statistical, validation,
@@ -87,11 +93,69 @@ reviews:
         statistical-implementation duplication specifically and is not a
         general architectural dependency rule.
 
+    # Contract documentation consistency.
+    #
+    # This is intentionally a path instruction rather than a CodeRabbit
+    # coding-guideline document. The implementation remains the source that
+    # must be inspected when checking whether the documentation is accurate.
+    - path: "docs/contracts.md"
+      instructions: >
+        When this file is changed, compare every modified contract against
+        the actual implementation it describes. Check Protocol methods,
+        method signatures, Pydantic model fields, validation constraints,
+        return types, optionality, and stated behavioral guarantees. Flag
+        documentation that describes behavior not implemented in the code,
+        implementation behavior that is absent from the contract, or
+        changes that appear to silently alter an existing contract. Do not
+        assume the current documentation is authoritative merely because it
+        is documentation; verify claims against the implementation.
+
+    # Test quality.
+    #
+    # CodeRabbit should assess whether tests actually provide protection,
+    # rather than treating test count as evidence of correctness.
+    - path: "tests/**/*.py"
+      instructions: >
+        Evaluate whether new or modified tests exercise real behavior rather
+        than being tautological, over-mocked to the point of testing nothing,
+        or copy-pasted with only superficial changes. Check whether important
+        assertions would fail if the underlying behavior regressed. For tests
+        covering statistical, validation, regression, evaluation, or numerical
+        helpers, check whether a substantially similar implementation exists
+        elsewhere in the statistical implementation layers and flag possible
+        unacknowledged divergence for maintainer review.
+
+    # Cross-platform behavior.
+    #
+    # cross-platform.yml verifies package importability and version reporting
+    # on Linux, Windows, and macOS, but does not execute the complete test
+    # suite on all three platforms.
+    - path: "src/nirizan/**/*.py"
+      instructions: >
+        When a change may affect platform behavior, flag hardcoded POSIX path
+        separators, assumptions about case-sensitive filesystems, reliance on
+        platform-specific behavior, or other portability risks that successful
+        package import alone would not reveal. Do not flag ordinary portable
+        Python code merely because it is platform-neutral.
+
+    # Runtime dependency declaration.
+    #
+    # packaging.yml validates that the built distribution is well-formed.
+    # Development CI installs the project with the dev extra, so an undeclared
+    # runtime dependency can remain hidden.
+    - path: "src/nirizan/**/*.py"
+      instructions: >
+        If this change imports a new third-party runtime package, verify that
+        the package is declared in pyproject.toml under the runtime
+        dependencies rather than being reachable only through a development
+        or test dependency. Flag possible undeclared runtime dependencies
+        for maintainer review.
+
   abort_on_close: true
   disable_cache: false
 
-  # Public-repository feature. Sole owner of the "slop" label — see the
-  # empty labeling_instructions above.
+  # Public-repository anti-slop detection.
+  # This is intentionally separate from general label suggestions.
   slop_detection:
     enabled: true
     label: "slop"
@@ -111,14 +175,13 @@ knowledge_base:
   learnings:
     scope: "local"
 
-  # Enabled, but no filePatterns configured. Deliberately not pointing this
-  # at docs/contracts.md, ARCHITECTURE.md, or CONTRIBUTING.md while those
-  # documents have known discrepancies (see the open duplicate-helpers
-  # issue and #9) — ingesting them as review criteria now would let
-  # CodeRabbit cite text that's actively being corrected. Revisit once
-  # those are resolved.
+  # Do not currently treat repository documentation as CodeRabbit's
+  # authoritative coding guidelines. ARCHITECTURE.md, docs/contracts.md,
+  # and CONTRIBUTING.md are living documents with known discrepancies and
+  # ongoing architectural/contract work. Targeted path instructions above
+  # provide narrower review guidance where appropriate.
   code_guidelines:
-    enabled: true
+    enabled: false
 
   web_search:
     enabled: true
