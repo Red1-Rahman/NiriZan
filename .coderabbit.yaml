@@ -29,8 +29,10 @@ reviews:
   review_details: true
   review_progress: true
 
-  # The canonical review-progress surface is sufficient. Do not add the
-  # legacy commit-status mirror.
+  # The canonical review-progress surface (review_progress, above) is what's
+  # active. commit_status and fail_commit_status only take effect if
+  # review_progress is ever disabled; left false here as a deliberate
+  # default in that case, not because they're doing anything today.
   commit_status: false
   fail_commit_status: false
 
@@ -46,17 +48,13 @@ reviews:
   suggested_labels: true
   auto_apply_labels: false
 
-  labeling_instructions:
-    - label: "slop"
-      instructions: >
-        Suggest this label only when a pull request is primarily low-quality,
-        unnecessary, repetitive, non-substantive, or otherwise resembles
-        low-value contribution noise. Do not use this label merely because
-        code has bugs, needs refactoring, has failing tests, or receives
-        substantial review feedback.
+  # No general labeling_instructions entry for "slop" here — slop_detection
+  # below is the single source of truth for that label. Two mechanisms
+  # producing independent opinions under the same label name is exactly the
+  # kind of divergence this project is currently working to eliminate
+  # elsewhere in the codebase; not repeating it here.
+  labeling_instructions: []
 
-  # Reviewer suggestions are useful as the project grows, but assignment
-  # remains a human decision.
   suggested_reviewers: true
   auto_assign_reviewers: false
   suggested_reviewers_instructions: []
@@ -66,20 +64,34 @@ reviews:
   poem: false
   enable_prompt_for_ai_agents: false
 
-  # Review the complete repository initially. Path-specific exclusions and
-  # guidance should be introduced only after observing actual review noise.
   path_filters: []
 
-  # Intentionally empty for now. NiriZan should add path-specific rules only
-  # after they have been established and reviewed as repository policy.
-  path_instructions: []
+  # Narrow, repository-owned guidance aimed specifically at the failure mode
+  # this project has already hit once: independently maintained duplicate
+  # statistical helpers with silently divergent validation behavior. Scoped
+  # to the directories where that risk is real, not the whole tree.
+  # Deliberately does not reference docs/contracts.md, ARCHITECTURE.md, or
+  # CONTRIBUTING.md as authoritative guidance — those currently have known
+  # discrepancies (see the open duplicate-helpers issue and #9), and
+  # import-linter + Ruff TID already enforce the dependency-direction rule
+  # mechanically. This instruction targets duplication only, not
+  # architecture conformance.
+  path_instructions:
+    - path: "src/nirizan/{metrics,regression,gate}/**/*.py"
+      instructions: >
+        When a change introduces or modifies a statistical, validation,
+        regression, evaluation, or numerical helper, check these statistical
+        layers for an existing implementation with the same or substantially
+        overlapping purpose. Flag possible duplicate or divergent
+        implementations for maintainer review. This guidance targets
+        statistical-implementation duplication specifically and is not a
+        general architectural dependency rule.
 
   abort_on_close: true
   disable_cache: false
 
-  # Public-repository feature. Keep enabled, but make the classification
-  # visible through the existing `slop` label without automatic label
-  # application from the general labeling system.
+  # Public-repository feature. Sole owner of the "slop" label — see the
+  # empty labeling_instructions above.
   slop_detection:
     enabled: true
     label: "slop"
@@ -99,7 +111,12 @@ knowledge_base:
   learnings:
     scope: "local"
 
-  # Use repository coding-guideline files when present.
+  # Enabled, but no filePatterns configured. Deliberately not pointing this
+  # at docs/contracts.md, ARCHITECTURE.md, or CONTRIBUTING.md while those
+  # documents have known discrepancies (see the open duplicate-helpers
+  # issue and #9) — ingesting them as review criteria now would let
+  # CodeRabbit cite text that's actively being corrected. Revisit once
+  # those are resolved.
   code_guidelines:
     enabled: true
 
