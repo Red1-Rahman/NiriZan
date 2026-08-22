@@ -11,8 +11,9 @@
 
 [![CI](https://github.com/Red1-Rahman/NiriZan/actions/workflows/ci.yml/badge.svg)](https://github.com/Red1-Rahman/NiriZan/actions/workflows/ci.yml)
 [![Packaging](https://github.com/Red1-Rahman/NiriZan/actions/workflows/packaging.yml/badge.svg)](https://github.com/Red1-Rahman/NiriZan/actions/workflows/packaging.yml)
-[![Cross-platform](https://github.com/Red1-Rahman/NiriZan/actions/workflows/cross-platform.yml/badge.svg)](https://github.com/Red1-Rahman/NiriZan/actions/workflows/cross-platform.yml)
-[![Security (CIA)](https://github.com/Red1-Rahman/NiriZan/actions/workflows/security.yml/badge.svg)](https://github.com/Red1-Rahman/NiriZan/actions/workflows/security.yml)   
+[![Cross-platform](https://github.com/Red1-Rahman/NiriZan/actions/workflows/cross-platform.yml/badge.svg)](https://github.com/Red1-Rahman/NiriZan/actions/workflows/cross-platform.yml)   
+[![Security (CIA)](https://github.com/Red1-Rahman/NiriZan/actions/workflows/security.yml/badge.svg)](https://github.com/Red1-Rahman/NiriZan/actions/workflows/security.yml)
+[![Scorecard supply-chain security](https://github.com/Red1-Rahman/NiriZan/actions/workflows/scorecard.yml/badge.svg)](https://github.com/Red1-Rahman/NiriZan/actions/workflows/scorecard.yml)   
 [![Documentation](https://img.shields.io/badge/Docs-Read%20the%20Docs-blue)](https://nirizan.readthedocs.io/en/latest/)
 [![Wikidata](https://img.shields.io/badge/Wikidata-Q141130494-990000)](https://www.wikidata.org/wiki/Q141130494)
 
