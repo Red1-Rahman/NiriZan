@@ -19,8 +19,8 @@ WORKFLOW_PATH = (
     / "security.yml"
 )
 
-EXPECTED_SHA = "ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd"
-EXPECTED_VERSION_COMMENT = "v4.37.7"
+EXPECTED_SHA = "db488ddef3bf6cb639b32c2e9a7c0a7ea8271d28"
+EXPECTED_VERSION_COMMENT = "v4.37.8"
 FULL_SEMVER_RE = re.compile(r"^v\d+\.\d+\.\d+$")
 
 # Matches lines such as:
