@@ -45,7 +45,7 @@ class Span(BaseModel):
     attributes: dict[str, str | int | float | bool] = Field(default_factory=dict)
     input_payload: str | None = None
     output_payload: str | None = None
-````
+```
 
 **Contract guarantees:**
 
@@ -83,7 +83,6 @@ class Trace(BaseModel):
 
 ```python
 from typing import Protocol
-
 
 class TraceExporter(Protocol):
     async def export(self, trace: Trace) -> None:
@@ -428,18 +427,11 @@ class AnchorSet(BaseModel):
 
 * `AnchorSet` is fixed once created. If the anchor set needs updating, that is a new `AnchorSet` with a new `anchor_set_id`, not an in-place edit. An anchor set that quietly changes underneath the Attribution Engine defeats the entire purpose of the layer, since you'd no longer be able to tell whether a score change came from the system, the judge, or the ruler you're measuring both with.
 
-### `BehavioralAnchorMetric`
-
-Implements the same `Metric` protocol from Phase 2. Its `MetricResult.details` carries the embedding-similarity band (`"aligned"`, `"neutral"`, `"deviation"`) as a string value, consistent with the `details` field's declared type. No new contract needed; this is the payoff of having designed `Metric` correctly in Phase 2.
-
 ### `JudgeReliabilityStatus` (`reporting/judge_reliability.py`)
 
-A coarse status for the longitudinal Judge Reliability Panel.
+A coarse status for the Judge Reliability Panel. It summarizes whether the observed judge-drift rate remains within the configured warning threshold.
 
 ```python
-from enum import Enum
-
-
 class JudgeReliabilityStatus(str, Enum):
     STABLE = "stable"
     UNSTABLE = "unstable"
@@ -448,20 +440,16 @@ class JudgeReliabilityStatus(str, Enum):
 **Contract guarantees:**
 
 * `JudgeReliabilityStatus` has exactly two possible values: `stable` and `unstable`.
-* The status is categorical rather than a numeric score. Consumers should use the enum value to represent the coarse panel state rather than attempting to reconstruct it from the underlying rates.
-* `UNSTABLE` is selected by `compute_judge_reliability` when the computed `judge_drift_rate` is strictly greater than the configured `drift_rate_warning` threshold. Equality with the threshold remains `STABLE`.
-* The current default warning threshold is `0.10` (10%). This is an initial operational default, not a calibrated statistical threshold; the implementation explicitly leaves room for later calibration against evaluation/ablation results.
+* `STABLE` means the computed `judge_drift_rate` is less than or equal to the configured `drift_rate_warning` threshold.
+* `UNSTABLE` means the computed `judge_drift_rate` is strictly greater than the configured `drift_rate_warning` threshold.
+* The status is derived from a longitudinal window of `AttributionVerdict` objects; it is not a property of an individual verdict.
+* `JudgeReliabilityStatus` is categorical reporting output. It does not replace or reinterpret the underlying drift rate.
 
 ### `JudgeReliabilityMetrics` (`reporting/judge_reliability.py`)
 
-A longitudinal summary of judge behavior over a window of `AttributionVerdict` objects. It is not a single-verdict model: the aggregation function requires at least one verdict and computes rates, averages, and trends across the supplied window.
+A longitudinal summary of judge behavior over a window of `AttributionVerdict` objects. It is populated from verdict history rather than from a single verdict, because rates, trends, and longitudinal score statistics require a window.
 
 ```python
-from datetime import datetime
-
-from pydantic import BaseModel, ConfigDict, Field
-
-
 class JudgeReliabilityMetrics(BaseModel):
     model_config = ConfigDict(strict=True)
 
@@ -481,37 +469,28 @@ class JudgeReliabilityMetrics(BaseModel):
 
 **Contract guarantees:**
 
-* `model_config = ConfigDict(strict=True)` means the model uses Pydantic strict validation. Fields are not implicitly coerced across incompatible types.
-* `anchor_set_id` identifies the fixed `AnchorSet` against which the summarized verdicts were evaluated.
-* `period_start` and `period_end` describe the temporal window represented by the supplied verdicts. `compute_judge_reliability` derives them from the minimum and maximum `AttributionVerdict.evaluated_at` values in the window.
-* `verdict_count` is required and must be at least `1`. Pydantic enforces this with `Field(ge=1)`. The aggregation function separately rejects an empty input list before constructing the model.
-* `judge_drift_rate`, `system_drift_rate`, and `none_rate` are required normalized rates. Each is constrained by Pydantic to `[0.0, 1.0]`.
-* `judge_drift_rate` is the fraction of supplied verdicts whose `attribution` is `DriftAttribution.JUDGE_DRIFT`.
-* `system_drift_rate` is the fraction of supplied verdicts whose `attribution` is `DriftAttribution.SYSTEM_DRIFT`.
-* `none_rate` is the fraction of supplied verdicts whose attribution is neither judge drift nor system drift, corresponding to `DriftAttribution.NONE` in the current `DriftAttribution` contract.
-* The three rates are computed from the same verdict window. The aggregation function counts judge-drift and system-drift verdicts explicitly and derives the remaining count as the `NONE` count.
-* `mean_judge_score_delta` is the arithmetic mean of `judge_score_delta` across every verdict in the window, including verdicts whose attribution is `NONE` or `SYSTEM_DRIFT`. The complete series is retained because `AttributionVerdict` always provides `judge_score_delta`.
-* `judge_score_delta_std` is the sample standard deviation of the judge score deltas. For a one-verdict window, the implementation returns `0.0` because a sample standard deviation cannot be computed from fewer than two observations.
-* `mean_calibration_mae` is optional and defaults to `None`. When calibration errors are supplied and at least one supplied calibration record contains a `"mae"` value, the implementation computes the arithmetic mean of those MAE values. If no usable MAE values are present, the field remains `None`.
-* `status` is a `JudgeReliabilityStatus`, never an arbitrary string. The aggregation function marks the panel `UNSTABLE` when `judge_drift_rate` is strictly greater than the configured warning threshold; otherwise it marks it `STABLE`.
-* `flagged_verdicts` defaults to a new empty list for each model instance via `default_factory=list`. It contains the supplied verdicts whose attribution is not `DriftAttribution.NONE`, i.e. the judge-drift and system-drift verdicts identified in the summarized window.
-* The reliability summary is explicitly longitudinal. `compute_judge_reliability` rejects an empty verdict list with `ValueError`, because a single summary with no observations cannot provide a meaningful rate or trend.
-* All verdicts passed to `compute_judge_reliability` must share the same `anchor_set_id`. If more than one anchor-set ID is present, the function raises `ValueError` rather than blending observations measured against different anchor sets.
-* This same-anchor-set requirement preserves the meaning of the reliability statistics: one summary represents one fixed measurement ruler. Updating an anchor set creates a new `anchor_set_id` rather than silently mixing old and new measurements.
-* The `AttributionVerdict` objects in `flagged_verdicts` retain their complete attribution records rather than reducing them to IDs or counts, allowing downstream reporting to inspect the original attribution, score deltas, evaluation time, and explanation.
-* `JudgeReliabilityMetrics` itself does not enforce cross-field mathematical relationships through Pydantic validators. Its rate bounds, minimum verdict count, and field types are model-level guarantees; the relationships between those fields and the underlying verdict window are guarantees of `compute_judge_reliability`.
-* The current default judge-drift warning threshold is `0.10`. This threshold is intentionally documented as an initial default rather than a statistically calibrated guarantee.
+* `model_config = ConfigDict(strict=True)` means Pydantic performs strict validation rather than silently coercing incompatible input types.
+* `verdict_count` must be at least `1`. An empty verdict window cannot produce a valid reliability summary.
+* `judge_drift_rate`, `system_drift_rate`, and `none_rate` are bounded to `[0.0, 1.0]`. They represent fractions of the supplied verdict window, not percentages from `0` to `100`.
+* `anchor_set_id` identifies the fixed `AnchorSet` against which the summarized verdicts were evaluated. A reliability window must not mix verdicts from different anchor sets.
+* `period_start` is the earliest `evaluated_at` timestamp in the supplied verdict window, and `period_end` is the latest.
+* `judge_drift_rate` is the fraction of verdicts whose `attribution` is `DriftAttribution.JUDGE_DRIFT`.
+* `system_drift_rate` is the fraction of verdicts whose `attribution` is `DriftAttribution.SYSTEM_DRIFT`.
+* `none_rate` is the fraction of supplied verdicts whose `attribution` is `DriftAttribution.NONE`.
+* `mean_judge_score_delta` is the arithmetic mean of `judge_score_delta` across every supplied verdict, including verdicts whose attribution is `NONE` or `SYSTEM_DRIFT`.
+* `judge_score_delta_std` is the sample standard deviation of the complete `judge_score_delta` series. For a one-verdict window, it is `0.0` because there is no sample variation to estimate.
+* `mean_calibration_mae` is optional because calibration data is not required to construct the reliability summary. When calibration errors are supplied and contain `mae` values, the field contains their arithmetic mean; otherwise it remains `None`.
+* `flagged_verdicts` defaults to an empty list. When computed from a verdict window, it contains every verdict whose attribution is not `DriftAttribution.NONE`, preserving both judge-drift and system-drift verdicts for downstream reporting.
+* `status` is `UNSTABLE` when the computed judge-drift rate is strictly greater than the configured warning threshold; otherwise it is `STABLE`. The current default warning threshold is `0.10`.
+* `compute_judge_reliability` rejects an empty verdict list with `ValueError`.
+* `compute_judge_reliability` rejects a verdict window containing multiple `anchor_set_id` values with `ValueError`. An anchor-set update creates a new `anchor_set_id`; verdicts from different rulers must therefore be summarized separately.
+* The reliability summary is derived from the complete supplied verdict window. In particular, the score-delta statistics are not restricted to flagged verdicts.
 
 ### `DashboardSnapshot` (`reporting/dashboard.py`)
 
-The assembled reporting contract for one `system_type` at one point in time. This model contains reporting data only; it does not render a dashboard or perform presentation logic.
+The reporting contract for one `system_type` at one point in time. This model contains reporting data only; it does not render a dashboard. A CLI, notebook, or future web UI is responsible for presenting it to a human.
 
 ```python
-from datetime import datetime
-
-from pydantic import BaseModel, ConfigDict, Field
-
-
 class DashboardSnapshot(BaseModel):
     model_config = ConfigDict(strict=True)
 
@@ -526,25 +505,25 @@ class DashboardSnapshot(BaseModel):
 
 **Contract guarantees:**
 
-* `model_config = ConfigDict(strict=True)` means the snapshot uses Pydantic strict validation.
-* `generated_at` records when the snapshot was assembled. `assemble_dashboard_snapshot` populates it with the current UTC time.
-* `system_type` identifies the system represented by the snapshot. The value is supplied by the caller and is not inferred from the reporting inputs.
-* `health_score` is required and constrained to `[0.0, 100.0]` by `Field(ge=0.0, le=100.0)`. The score is produced by `compute_system_health_score` from the supplied `quality_score`, `confidence`, and attribution state.
-* `latest_attribution` is optional and defaults to `None`. When attribution verdicts are supplied, `assemble_dashboard_snapshot` selects the verdict with the greatest `evaluated_at` timestamp.
-* `judge_reliability` is optional and defaults to `None`. When attribution history is available, the assembly function attempts to compute `JudgeReliabilityMetrics` from that history. If aggregation fails validation, such as when verdicts contain multiple anchor-set IDs, the function logs the failure and leaves this reporting component unset rather than failing the complete snapshot.
-* `regression_verdicts` defaults to a new empty list through `default_factory=list`. The assembly function also normalizes an omitted or `None` input to an empty list.
-* `gate_verdict` is optional and defaults to `None`. A snapshot can therefore represent a reporting state in which no gate result is available.
-* `DashboardSnapshot` represents four distinct reporting signals without recomputing their underlying meanings: system health through `health_score`, attribution through `latest_attribution`, longitudinal judge reliability through `judge_reliability`, regression information through `regression_verdicts`, and CI/deployment gating through `gate_verdict`.
-* `assemble_dashboard_snapshot` does not derive `quality_score` or `confidence`. Those values are explicitly supplied by the caller because choosing which quality and confidence measurements represent "the" system quality is a call-site decision.
-* If `attribution_verdicts` is omitted or empty, `latest_attribution` remains `None`, `judge_reliability` remains `None`, and the attribution input to the health-score calculation is `DriftAttribution.NONE`. The health score therefore does not incur an attribution penalty when there is no attribution history to evaluate.
-* If attribution history is present, the latest verdict's `attribution` is used as the attribution input to `compute_system_health_score`.
-* `judge_reliability` is calculated from the supplied attribution history rather than from the latest verdict alone. This preserves the longitudinal nature of `JudgeReliabilityMetrics`.
-* The dashboard assembly is intentionally resilient to judge-reliability aggregation failure. A mixed-anchor-set or otherwise invalid verdict window does not invalidate the health score, regression results, or gate result; the judge-reliability panel is skipped instead.
-* `regression_verdicts` contains the caller-provided `RegressionVerdict` objects and is not recomputed by the dashboard assembly layer.
-* `gate_verdict` contains the caller-provided `GateVerdict` and is not recomputed by the dashboard assembly layer.
-* `DashboardSnapshot` is data only. It does not render a dashboard, produce UI output, persist reporting data, or otherwise take ownership of presentation concerns. CLI, notebook, or future web UI layers consume the snapshot.
-* The model's health-score bound is enforced directly by Pydantic. The semantic calculation of the score is delegated to `compute_system_health_score`; the dashboard layer does not duplicate that calculation.
-* Optional reporting components use `None` to represent unavailable information, while `regression_verdicts` uses an empty list to represent no regression verdicts. This distinction is intentional and part of the contract.
+* `model_config = ConfigDict(strict=True)` means the snapshot validates its declared types without implicit coercion.
+* `generated_at` records when the snapshot was assembled. The assembly function populates it with the current UTC time.
+* `system_type` identifies the system represented by the snapshot.
+* `health_score` is bounded to `[0.0, 100.0]`. It is the output of `compute_system_health_score`; `DashboardSnapshot` stores the resulting score rather than recomputing it.
+* `latest_attribution` is optional and defaults to `None`. When attribution history is supplied, it contains the `AttributionVerdict` with the latest `evaluated_at` timestamp.
+* `judge_reliability` is optional and defaults to `None`. It is populated from supplied attribution history when that history passes the reliability aggregation contract. It is not fabricated when no attribution history is available.
+* `regression_verdicts` defaults to an empty list and represents the regression information available for the snapshot. The list is supplied by the caller and is not recomputed by dashboard assembly.
+* `gate_verdict` is optional and defaults to `None`. When present, it carries the Phase 4 CI/deployment gate result rather than duplicating or reducing it to a boolean.
+* `DashboardSnapshot` represents five distinct reporting signals without recomputing their underlying meanings: system health through `health_score`, attribution through `latest_attribution`, longitudinal judge reliability through `judge_reliability`, regression information through `regression_verdicts`, and CI/deployment gating through `gate_verdict`.
+* `assemble_dashboard_snapshot` takes `quality_score` and `confidence` as direct inputs to `compute_system_health_score`. The reporting layer does not decide which upstream quality metric should represent the system.
+* If `attribution_verdicts` is omitted or empty, `latest_attribution` remains `None`, `judge_reliability` remains `None`, and the health-score attribution input falls back to `DriftAttribution.NONE`.
+* If attribution history is supplied, the latest verdict determines the attribution component used by the health-score computation.
+* Judge reliability is computed from the supplied attribution history. If reliability aggregation fails validation, such as when the verdicts contain mixed anchor sets, the dashboard assembly logs the failure and continues with the health score rather than failing the entire snapshot.
+* `regression_verdicts` and `gate_verdict` are optional reporting inputs. Omitting them produces an empty regression list and a `None` gate verdict respectively.
+* The model is data only. It does not render, persist, or otherwise own presentation behavior.
+
+### `BehavioralAnchorMetric`
+
+Implements the same `Metric` protocol from Phase 2. Its `MetricResult.details` carries the embedding-similarity band (`"aligned"`, `"neutral"`, `"deviation"`) as a string value, consistent with the `details` field's declared type. No new contract needed; this is the payoff of having designed `Metric` correctly in Phase 2.
 
 ---
 
