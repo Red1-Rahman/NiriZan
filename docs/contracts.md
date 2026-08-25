@@ -45,12 +45,13 @@ class Span(BaseModel):
     attributes: dict[str, str | int | float | bool] = Field(default_factory=dict)
     input_payload: str | None = None
     output_payload: str | None = None
-```
+````
 
 **Contract guarantees:**
-- `span_id` is unique per span, `trace_id` groups all spans from a single application invocation.
-- `Span` is frozen (immutable) once constructed. Nothing downstream mutates a span; corrections happen by emitting a new span, not editing history.
-- `attributes` values are restricted to primitive types on purpose. If a metric needs to attach a structured object to a span, that belongs in a separate linked record, not jammed into `attributes` as a serialized blob.
+
+* `span_id` is unique per span, `trace_id` groups all spans from a single application invocation.
+* `Span` is frozen (immutable) once constructed. Nothing downstream mutates a span; corrections happen by emitting a new span, not editing history.
+* `attributes` values are restricted to primitive types on purpose. If a metric needs to attach a structured object to a span, that belongs in a separate linked record, not jammed into `attributes` as a serialized blob.
 
 ### `Trace` (`instrumentation/spans.py`)
 
@@ -73,9 +74,10 @@ class Trace(BaseModel):
 ```
 
 **Contract guarantees:**
-- Every `Span` in `spans` must share the same `trace_id` as the `Trace` itself. Enforce this with a `model_validator`, do not rely on callers to get it right.
-- `Trace` is the only object the Instrumentation Layer hands to the Orchestrator. Nothing calls `Span` in isolation across that boundary.
-- `code_commit`, `data_snapshot_id`, and `session_id` are additive Phase 3 fields, all optional with a `None` default, per this document's Versioning Rule. `None` means the value genuinely wasn't available at ingest (e.g. traces captured outside a git checkout, or outside a `Tracer.session(...)` block); callers must not treat `None` as a placeholder to be filled in later, only as "not applicable to this trace."
+
+* Every `Span` in `spans` must share the same `trace_id` as the `Trace` itself. Enforce this with a `model_validator`, do not rely on callers to get it right.
+* `Trace` is the only object the Instrumentation Layer hands to the Orchestrator. Nothing calls `Span` in isolation across that boundary.
+* `code_commit`, `data_snapshot_id`, and `session_id` are additive Phase 3 fields, all optional with a `None` default, per this document's Versioning Rule. `None` means the value genuinely wasn't available at ingest (e.g. traces captured outside a git checkout, or outside a `Tracer.session(...)` block); callers must not treat `None` as a placeholder to be filled in later, only as "not applicable to this trace."
 
 ### `TraceExporter` protocol (`instrumentation/exporters.py`)
 
@@ -97,7 +99,8 @@ class TraceExporter(Protocol):
 ```
 
 **Contract guarantees:**
-- This is the seam between Instrumentation and Orchestrator. Anything on the application side depends only on this `Protocol`, never on a concrete Trace Collector implementation. That is what keeps instrumentation swappable per framework without touching the orchestrator.
+
+* This is the seam between Instrumentation and Orchestrator. Anything on the application side depends only on this `Protocol`, never on a concrete Trace Collector implementation. That is what keeps instrumentation swappable per framework without touching the orchestrator.
 
 ### `TraceRepository` interface (`storage/trace_repository.py`)
 
@@ -111,8 +114,9 @@ class TraceRepository(Protocol):
 ```
 
 **Contract guarantees:**
-- `get` returns `None` for a missing trace, it does not raise. Callers that need "trace must exist" semantics wrap this themselves; the repository stays a dumb, honest store.
-- No method here accepts or returns anything from `metrics/`, `regression/`, or `reporting/`. This is Phase 1's boundary and it stays that narrow.
+
+* `get` returns `None` for a missing trace, it does not raise. Callers that need "trace must exist" semantics wrap this themselves; the repository stays a dumb, honest store.
+* No method here accepts or returns anything from `metrics/`, `regression/`, or `reporting/`. This is Phase 1's boundary and it stays that narrow.
 
 ---
 
@@ -152,9 +156,10 @@ class Metric(Protocol):
 ```
 
 **Contract guarantees:**
-- `score` is always normalized to `[0.0, 1.0]`. A metric that produces a different native range (a raw log-likelihood, a distance, a percentage) converts before returning `MetricResult`. This is what lets the System Health Score in Phase 5 aggregate scores from wildly different metric implementations without special-casing each one.
-- `confidence` is optional in Phase 2 (the RAG Triad may not produce one) and becomes load-bearing in Phase 4 once Statistical Gating exists. The field is defined now so Phase 4 doesn't need a breaking migration to add it.
-- A `Metric` never talks to `regression/`, `gate/`, or `reporting/` directly. It returns `MetricResult` objects and nothing else; everything downstream is the Metric Dispatcher's job.
+
+* `score` is always normalized to `[0.0, 1.0]`. A metric that produces a different native range (a raw log-likelihood, a distance, a percentage) converts before returning `MetricResult`. This is what lets the System Health Score in Phase 5 aggregate scores from wildly different metric implementations without special-casing each one.
+* `confidence` is optional in Phase 2 (the RAG Triad may not produce one) and becomes load-bearing in Phase 4 once Statistical Gating exists. The field is defined now so Phase 4 doesn't need a breaking migration to add it.
+* A `Metric` never talks to `regression/`, `gate/`, or `reporting/` directly. It returns `MetricResult` objects and nothing else; everything downstream is the Metric Dispatcher's job.
 
 ### `MetricDispatcher` contract (`orchestrator/dispatcher.py`)
 
@@ -174,7 +179,8 @@ class MetricDispatcher(Protocol):
 ```
 
 **Contract guarantees:**
-- `register` is called explicitly at application startup (in the CLI entry point or a setup module), never via import-time side effects in `metrics/*.py`. This is the specific mechanism that keeps `metrics/` from depending on `orchestrator/` and `orchestrator/` from needing to import every metric module by name. See the Import Direction rule below.
+
+* `register` is called explicitly at application startup (in the CLI entry point or a setup module), never via import-time side effects in `metrics/*.py`. This is the specific mechanism that keeps `metrics/` from depending on `orchestrator/` and `orchestrator/` from needing to import every metric module by name. See the Import Direction rule below.
 
 ### `RunRepository` interface (`storage/run_repository.py`)
 
@@ -187,9 +193,10 @@ class RunRepository(Protocol):
 ```
 
 **Contract guarantees:**
-- `get_run` returns `None` for a missing run, it does not raise. Same "dumb, honest store" guarantee as `TraceRepository.get` in Phase 1.
-- `RunRepository` is deliberately narrower than Phase 3's `ExperimentStore`: no `diff`, no baseline comparison, no versioning-aware queries. Those arrive in Phase 3 as an extension, not a redefinition, of what a `Run` can do once persisted. `ExperimentStore` in Phase 3 is expected to satisfy `RunRepository`'s shape as a subset of its own interface, so nothing built against `RunRepository` in Phase 2 needs to change when Phase 3 lands.
-- Lives in `storage/`, same as `TraceRepository`; `RunRepository` does not replace or extend `TraceRepository`, they are separate interfaces persisting separate things (`Trace` vs. `Run`).
+
+* `get_run` returns `None` for a missing run, it does not raise. Same "dumb, honest store" guarantee as `TraceRepository.get` in Phase 1.
+* `RunRepository` is deliberately narrower than Phase 3's `ExperimentStore`: no `diff`, no baseline comparison, no versioning-aware queries. Those arrive in Phase 3 as an extension, not a redefinition, of what a `Run` can do once persisted. `ExperimentStore` in Phase 3 is expected to satisfy `RunRepository`'s shape as a subset of its own interface, so nothing built against `RunRepository` in Phase 2 needs to change when Phase 3 lands.
+* Lives in `storage/`, same as `TraceRepository`; `RunRepository` does not replace or extend `TraceRepository`, they are separate interfaces persisting separate things (`Trace` vs. `Run`).
 
 ---
 
@@ -210,7 +217,8 @@ class Run(BaseModel):
 ```
 
 **Contract guarantees:**
-- `code_commit` and `data_snapshot_id` are both required, not optional. A `Run` with no versioning information is not a valid `Run`; this is the field pairing that makes two runs comparable at all. Do not make these optional later to "make testing easier." Use a fixed test fixture value instead.
+
+* `code_commit` and `data_snapshot_id` are both required, not optional. A `Run` with no versioning information is not a valid `Run`; this is the field pairing that makes two runs comparable at all. Do not make these optional later to "make testing easier." Use a fixed test fixture value instead.
 
 ### `Baseline` (`storage/models.py`)
 
@@ -226,23 +234,25 @@ class Baseline(BaseModel):
 ```
 
 **Contract guarantees:**
-- A `Baseline` references `Run` objects by ID, it does not embed them. This keeps the Experiment Store as the single owner of `Run` data; `Baseline` is a named pointer, not a copy.
+
+* A `Baseline` references `Run` objects by ID, it does not embed them. This keeps the Experiment Store as the single owner of `Run` data; `Baseline` is a named pointer, not a copy.
 
 ### `BaselineRepository` interface (`storage/baselines.py`)
 
 Validated in `experiments/03_experiment_tracking_baselines.ipynb` before being made official.
- 
-````python
+
+```python
 class BaselineRepository(Protocol):
     async def save_baseline(self, baseline: Baseline) -> None: ...
     async def get_baseline(self, baseline_id: UUID) -> Baseline | None: ...
     async def list_baselines(self, system_type: str) -> list[Baseline]: ...
-````
- 
+```
+
 **Contract guarantees:**
-- `get_baseline` returns `None` for a missing baseline, it does not raise. Same "dumb, honest store" guarantee as `TraceRepository.get`, `RunRepository.get_run`, and `SessionRepository.get_session`.
-- `list_baselines` is filtered by `system_type`, satisfying the roadmap's "baseline management and *querying*" deliverable; it is the one method here with query semantics beyond single-record lookup.
-- `BaselineRepository` does not implement selection logic (i.e. it does not decide which runs *should* become a baseline). It only persists and retrieves `Baseline` objects a caller has already constructed. Any future automatic baseline-selection heuristic belongs in a different component, not here.
+
+* `get_baseline` returns `None` for a missing baseline, it does not raise. Same "dumb, honest store" guarantee as `TraceRepository.get`, `RunRepository.get_run`, and `SessionRepository.get_session`.
+* `list_baselines` is filtered by `system_type`, satisfying the roadmap's "baseline management and *querying*" deliverable; it is the one method here with query semantics beyond single-record lookup.
+* `BaselineRepository` does not implement selection logic (i.e. it does not decide which runs *should* become a baseline). It only persists and retrieves `Baseline` objects a caller has already constructed. Any future automatic baseline-selection heuristic belongs in a different component, not here.
 
 ### `ExperimentStore` interface (`storage/experiment_store.py`)
 
@@ -262,7 +272,8 @@ class RunDiff(BaseModel):
 ```
 
 **Contract guarantees:**
-- `diff` computes a difference, full stop. It does not judge whether that difference is a regression. That judgment is `regression/comparator.py`'s job in Phase 4, and Phase 4's `Comparator` takes a `RunDiff` as input rather than recomputing it. This boundary is deliberate: the ledger records, the accountant judges, and they are different files for a reason.
+
+* `diff` computes a difference, full stop. It does not judge whether that difference is a regression. That judgment is `regression/comparator.py`'s job in Phase 4, and Phase 4's `Comparator` takes a `RunDiff` as input rather than recomputing it. This boundary is deliberate: the ledger records, the accountant judges, and they are different files for a reason.
 
 ### `Session` (`instrumentation/sessions.py`)
 
@@ -280,9 +291,10 @@ class Session(BaseModel):
 ```
 
 **Contract guarantees:**
-- Unlike `Span`, `Session` is **not frozen**. A session is open and accumulates `trace_ids` as turns happen; `ended_at` is `None` while the session is ongoing, set once the session is explicitly closed.
-- `Session` does not embed `Trace` objects, only their IDs, for the same reason `Baseline` doesn't embed `Run` objects: it keeps the Trace Repository as the single owner of `Trace` data.
-- A `Trace`'s optional `session_id` field (see the Phase 1 `Trace` contract) is how a `Trace` is linked back to the `Session` that produced it; `Session.trace_ids` and `Trace.session_id` are expected to agree, but nothing in this contract enforces that bidirectionally at construction time. Callers that need that guarantee enforce it themselves.
+
+* Unlike `Span`, `Session` is **not frozen**. A session is open and accumulates `trace_ids` as turns happen; `ended_at` is `None` while the session is ongoing, set once the session is explicitly closed.
+* `Session` does not embed `Trace` objects, only their IDs, for the same reason `Baseline` doesn't embed `Run` objects: it keeps the Trace Repository as the single owner of `Trace` data.
+* A `Trace`'s optional `session_id` field (see the Phase 1 `Trace` contract) is how a `Trace` is linked back to the `Session` that produced it; `Session.trace_ids` and `Trace.session_id` are expected to agree, but nothing in this contract enforces that bidirectionally at construction time. Callers that need that guarantee enforce it themselves.
 
 ### `SessionRepository` interface (`storage/session_repository.py`)
 
@@ -293,8 +305,9 @@ class SessionRepository(Protocol):
 ```
 
 **Contract guarantees:**
-- `get_session` returns `None` for a missing session, it does not raise. Same "dumb, honest store" guarantee as `TraceRepository.get` (Phase 1) and `RunRepository.get_run` (Phase 2).
-- Same relationship to any future, fuller session-management interface as `RunRepository` has to `ExperimentStore`: deliberately minimal now, expected to be satisfied as a subset by anything richer added later, not redefined by it.
+
+* `get_session` returns `None` for a missing session, it does not raise. Same "dumb, honest store" guarantee as `TraceRepository.get` (Phase 1) and `RunRepository.get_run` (Phase 2).
+* Same relationship to any future, fuller session-management interface as `RunRepository` has to `ExperimentStore`: deliberately minimal now, expected to be satisfied as a subset by anything richer added later, not redefined by it.
 
 ---
 
@@ -321,8 +334,9 @@ class RegressionVerdict(BaseModel):
 ```
 
 **Contract guarantees:**
-- `severity` is always one of the three enum values; there is no raw boolean pass/fail anywhere in this contract. A `RegressionVerdict` that collapses to true/false before it reaches the Gate has thrown away information the Gate needs.
-- `explanation` is required and must be non-empty. A regression verdict with no human-readable reason is not acceptable output; if the comparator can't explain itself, it hasn't finished computing the verdict.
+
+* `severity` is always one of the three enum values; there is no raw boolean pass/fail anywhere in this contract. A `RegressionVerdict` that collapses to true/false before it reaches the Gate has thrown away information the Gate needs.
+* `explanation` is required and must be non-empty. A regression verdict with no human-readable reason is not acceptable output; if the comparator can't explain itself, it hasn't finished computing the verdict.
 
 ### `GateVerdict` (`gate/verdict.py`)
 
@@ -337,7 +351,8 @@ class GateVerdict(BaseModel):
 ```
 
 **Contract guarantees:**
-- `confidence_interval` is required, not optional, even though `passed` alone would satisfy a naive CI integration. A gate that only emits `passed: bool` is a rubber stamp, not a gate. If a CI step only wants the boolean, it reads `.passed`, but the interval is always computed and always present in the contract.
+
+* `confidence_interval` is required, not optional, even though `passed` alone would satisfy a naive CI integration. A gate that only emits `passed: bool` is a rubber stamp, not a gate. If a CI step only wants the boolean, it reads `.passed`, but the interval is always computed and always present in the contract.
 
 ### `Metric` interface extension for judges
 
@@ -385,8 +400,9 @@ class AttributionVerdict(BaseModel):
 ```
 
 **Contract guarantees:**
-- `attribution` is exactly one of the three enum values, never a probability or a blend. The Attribution Engine is allowed to be uncertain internally, but it must commit to a verdict at this boundary. Anything downstream (Regression Detection, Reporting) treats this as a categorical fact, not a score to threshold again.
-- `system_score_delta` and `judge_score_delta` are both included even when `attribution` is `NONE`, so that Reporting's Judge Reliability Panel (Phase 5) can plot both time series regardless of whether a verdict crossed a threshold that day. Do not omit these fields "to save space" when there's no drift; the longitudinal panel needs the full series, not just the interesting points.
+
+* `attribution` is exactly one of the three enum values, never a probability or a blend. The Attribution Engine is allowed to be uncertain internally, but it must commit to a verdict at this boundary. Anything downstream (Regression Detection, Reporting) treats this as a categorical fact, not a score to threshold again.
+* `system_score_delta` and `judge_score_delta` are both included even when `attribution` is `NONE`, so that Reporting's Judge Reliability Panel (Phase 5) can plot both time series regardless of whether a verdict crossed a threshold that day. Do not omit these fields "to save space" when there's no drift; the longitudinal panel needs the full series, not just the interesting points.
 
 ### `AnchorSet` (`trust/anchor_set.py`)
 
@@ -409,11 +425,126 @@ class AnchorSet(BaseModel):
 ```
 
 **Contract guarantees:**
-- `AnchorSet` is fixed once created. If the anchor set needs updating, that is a new `AnchorSet` with a new `anchor_set_id`, not an in-place edit. An anchor set that quietly changes underneath the Attribution Engine defeats the entire purpose of the layer, since you'd no longer be able to tell whether a score change came from the system, the judge, or the ruler you're measuring both with.
+
+* `AnchorSet` is fixed once created. If the anchor set needs updating, that is a new `AnchorSet` with a new `anchor_set_id`, not an in-place edit. An anchor set that quietly changes underneath the Attribution Engine defeats the entire purpose of the layer, since you'd no longer be able to tell whether a score change came from the system, the judge, or the ruler you're measuring both with.
 
 ### `BehavioralAnchorMetric`
 
 Implements the same `Metric` protocol from Phase 2. Its `MetricResult.details` carries the embedding-similarity band (`"aligned"`, `"neutral"`, `"deviation"`) as a string value, consistent with the `details` field's declared type. No new contract needed; this is the payoff of having designed `Metric` correctly in Phase 2.
+
+### `JudgeReliabilityStatus` (`reporting/judge_reliability.py`)
+
+A coarse status for the longitudinal Judge Reliability Panel.
+
+```python
+from enum import Enum
+
+
+class JudgeReliabilityStatus(str, Enum):
+    STABLE = "stable"
+    UNSTABLE = "unstable"
+```
+
+**Contract guarantees:**
+
+* `JudgeReliabilityStatus` has exactly two possible values: `stable` and `unstable`.
+* The status is categorical rather than a numeric score. Consumers should use the enum value to represent the coarse panel state rather than attempting to reconstruct it from the underlying rates.
+* `UNSTABLE` is selected by `compute_judge_reliability` when the computed `judge_drift_rate` is strictly greater than the configured `drift_rate_warning` threshold. Equality with the threshold remains `STABLE`.
+* The current default warning threshold is `0.10` (10%). This is an initial operational default, not a calibrated statistical threshold; the implementation explicitly leaves room for later calibration against evaluation/ablation results.
+
+### `JudgeReliabilityMetrics` (`reporting/judge_reliability.py`)
+
+A longitudinal summary of judge behavior over a window of `AttributionVerdict` objects. It is not a single-verdict model: the aggregation function requires at least one verdict and computes rates, averages, and trends across the supplied window.
+
+```python
+from datetime import datetime
+
+from pydantic import BaseModel, ConfigDict, Field
+
+
+class JudgeReliabilityMetrics(BaseModel):
+    model_config = ConfigDict(strict=True)
+
+    anchor_set_id: str
+    period_start: datetime
+    period_end: datetime
+    verdict_count: int = Field(ge=1)
+    judge_drift_rate: float = Field(ge=0.0, le=1.0)
+    system_drift_rate: float = Field(ge=0.0, le=1.0)
+    none_rate: float = Field(ge=0.0, le=1.0)
+    mean_judge_score_delta: float
+    judge_score_delta_std: float
+    mean_calibration_mae: float | None = None
+    status: JudgeReliabilityStatus
+    flagged_verdicts: list[AttributionVerdict] = Field(default_factory=list)
+```
+
+**Contract guarantees:**
+
+* `model_config = ConfigDict(strict=True)` means the model uses Pydantic strict validation. Fields are not implicitly coerced across incompatible types.
+* `anchor_set_id` identifies the fixed `AnchorSet` against which the summarized verdicts were evaluated.
+* `period_start` and `period_end` describe the temporal window represented by the supplied verdicts. `compute_judge_reliability` derives them from the minimum and maximum `AttributionVerdict.evaluated_at` values in the window.
+* `verdict_count` is required and must be at least `1`. Pydantic enforces this with `Field(ge=1)`. The aggregation function separately rejects an empty input list before constructing the model.
+* `judge_drift_rate`, `system_drift_rate`, and `none_rate` are required normalized rates. Each is constrained by Pydantic to `[0.0, 1.0]`.
+* `judge_drift_rate` is the fraction of supplied verdicts whose `attribution` is `DriftAttribution.JUDGE_DRIFT`.
+* `system_drift_rate` is the fraction of supplied verdicts whose `attribution` is `DriftAttribution.SYSTEM_DRIFT`.
+* `none_rate` is the fraction of supplied verdicts whose attribution is neither judge drift nor system drift, corresponding to `DriftAttribution.NONE` in the current `DriftAttribution` contract.
+* The three rates are computed from the same verdict window. The aggregation function counts judge-drift and system-drift verdicts explicitly and derives the remaining count as the `NONE` count.
+* `mean_judge_score_delta` is the arithmetic mean of `judge_score_delta` across every verdict in the window, including verdicts whose attribution is `NONE` or `SYSTEM_DRIFT`. The complete series is retained because `AttributionVerdict` always provides `judge_score_delta`.
+* `judge_score_delta_std` is the sample standard deviation of the judge score deltas. For a one-verdict window, the implementation returns `0.0` because a sample standard deviation cannot be computed from fewer than two observations.
+* `mean_calibration_mae` is optional and defaults to `None`. When calibration errors are supplied and at least one supplied calibration record contains a `"mae"` value, the implementation computes the arithmetic mean of those MAE values. If no usable MAE values are present, the field remains `None`.
+* `status` is a `JudgeReliabilityStatus`, never an arbitrary string. The aggregation function marks the panel `UNSTABLE` when `judge_drift_rate` is strictly greater than the configured warning threshold; otherwise it marks it `STABLE`.
+* `flagged_verdicts` defaults to a new empty list for each model instance via `default_factory=list`. It contains the supplied verdicts whose attribution is not `DriftAttribution.NONE`, i.e. the judge-drift and system-drift verdicts identified in the summarized window.
+* The reliability summary is explicitly longitudinal. `compute_judge_reliability` rejects an empty verdict list with `ValueError`, because a single summary with no observations cannot provide a meaningful rate or trend.
+* All verdicts passed to `compute_judge_reliability` must share the same `anchor_set_id`. If more than one anchor-set ID is present, the function raises `ValueError` rather than blending observations measured against different anchor sets.
+* This same-anchor-set requirement preserves the meaning of the reliability statistics: one summary represents one fixed measurement ruler. Updating an anchor set creates a new `anchor_set_id` rather than silently mixing old and new measurements.
+* The `AttributionVerdict` objects in `flagged_verdicts` retain their complete attribution records rather than reducing them to IDs or counts, allowing downstream reporting to inspect the original attribution, score deltas, evaluation time, and explanation.
+* `JudgeReliabilityMetrics` itself does not enforce cross-field mathematical relationships through Pydantic validators. Its rate bounds, minimum verdict count, and field types are model-level guarantees; the relationships between those fields and the underlying verdict window are guarantees of `compute_judge_reliability`.
+* The current default judge-drift warning threshold is `0.10`. This threshold is intentionally documented as an initial default rather than a statistically calibrated guarantee.
+
+### `DashboardSnapshot` (`reporting/dashboard.py`)
+
+The assembled reporting contract for one `system_type` at one point in time. This model contains reporting data only; it does not render a dashboard or perform presentation logic.
+
+```python
+from datetime import datetime
+
+from pydantic import BaseModel, ConfigDict, Field
+
+
+class DashboardSnapshot(BaseModel):
+    model_config = ConfigDict(strict=True)
+
+    generated_at: datetime
+    system_type: str
+    health_score: float = Field(ge=0.0, le=100.0)
+    latest_attribution: AttributionVerdict | None = None
+    judge_reliability: JudgeReliabilityMetrics | None = None
+    regression_verdicts: list[RegressionVerdict] = Field(default_factory=list)
+    gate_verdict: GateVerdict | None = None
+```
+
+**Contract guarantees:**
+
+* `model_config = ConfigDict(strict=True)` means the snapshot uses Pydantic strict validation.
+* `generated_at` records when the snapshot was assembled. `assemble_dashboard_snapshot` populates it with the current UTC time.
+* `system_type` identifies the system represented by the snapshot. The value is supplied by the caller and is not inferred from the reporting inputs.
+* `health_score` is required and constrained to `[0.0, 100.0]` by `Field(ge=0.0, le=100.0)`. The score is produced by `compute_system_health_score` from the supplied `quality_score`, `confidence`, and attribution state.
+* `latest_attribution` is optional and defaults to `None`. When attribution verdicts are supplied, `assemble_dashboard_snapshot` selects the verdict with the greatest `evaluated_at` timestamp.
+* `judge_reliability` is optional and defaults to `None`. When attribution history is available, the assembly function attempts to compute `JudgeReliabilityMetrics` from that history. If aggregation fails validation, such as when verdicts contain multiple anchor-set IDs, the function logs the failure and leaves this reporting component unset rather than failing the complete snapshot.
+* `regression_verdicts` defaults to a new empty list through `default_factory=list`. The assembly function also normalizes an omitted or `None` input to an empty list.
+* `gate_verdict` is optional and defaults to `None`. A snapshot can therefore represent a reporting state in which no gate result is available.
+* `DashboardSnapshot` represents four distinct reporting signals without recomputing their underlying meanings: system health through `health_score`, attribution through `latest_attribution`, longitudinal judge reliability through `judge_reliability`, regression information through `regression_verdicts`, and CI/deployment gating through `gate_verdict`.
+* `assemble_dashboard_snapshot` does not derive `quality_score` or `confidence`. Those values are explicitly supplied by the caller because choosing which quality and confidence measurements represent "the" system quality is a call-site decision.
+* If `attribution_verdicts` is omitted or empty, `latest_attribution` remains `None`, `judge_reliability` remains `None`, and the attribution input to the health-score calculation is `DriftAttribution.NONE`. The health score therefore does not incur an attribution penalty when there is no attribution history to evaluate.
+* If attribution history is present, the latest verdict's `attribution` is used as the attribution input to `compute_system_health_score`.
+* `judge_reliability` is calculated from the supplied attribution history rather than from the latest verdict alone. This preserves the longitudinal nature of `JudgeReliabilityMetrics`.
+* The dashboard assembly is intentionally resilient to judge-reliability aggregation failure. A mixed-anchor-set or otherwise invalid verdict window does not invalidate the health score, regression results, or gate result; the judge-reliability panel is skipped instead.
+* `regression_verdicts` contains the caller-provided `RegressionVerdict` objects and is not recomputed by the dashboard assembly layer.
+* `gate_verdict` contains the caller-provided `GateVerdict` and is not recomputed by the dashboard assembly layer.
+* `DashboardSnapshot` is data only. It does not render a dashboard, produce UI output, persist reporting data, or otherwise take ownership of presentation concerns. CLI, notebook, or future web UI layers consume the snapshot.
+* The model's health-score bound is enforced directly by Pydantic. The semantic calculation of the score is delegated to `compute_system_health_score`; the dashboard layer does not duplicate that calculation.
+* Optional reporting components use `None` to represent unavailable information, while `regression_verdicts` uses an empty list to represent no regression verdicts. This distinction is intentional and part of the contract.
 
 ---
 
@@ -421,7 +552,7 @@ Implements the same `Metric` protocol from Phase 2. Its `MetricResult.details` c
 
 To keep the "no circular dependency" requirement enforceable by tooling and not just by good intentions, imports flow in one direction only:
 
-```
+```text
 instrumentation  →  orchestrator  →  metrics  →  trust
                                             ↘         ↘
                                              storage → regression → gate → reporting
