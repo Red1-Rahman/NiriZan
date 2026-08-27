@@ -47,9 +47,10 @@ class TestCalculateBootstrapCI:
     def test_valid_ci(self) -> None:
         candidate = np.array([0.4, 0.5, 0.6, 0.5, 0.4])
         baseline = np.array([0.7, 0.8, 0.9, 0.8, 0.7])
-        ci_low, ci_high = calculate_bootstrap_ci(
-            candidate, baseline, n_bootstrap=1000, confidence=0.95, seed=42
+        delta_hat, ci_low, ci_high = calculate_bootstrap_ci(
+            candidate, baseline, n_bootstrap=1000, confidence_level=0.95, seed=42
         )
+        assert isinstance(delta_hat, float)
         assert isinstance(ci_low, float)
         assert isinstance(ci_high, float)
         assert ci_low < ci_high
@@ -57,8 +58,8 @@ class TestCalculateBootstrapCI:
     def test_invalid_confidence_raises(self) -> None:
         candidate = np.array([0.5, 0.6])
         baseline = np.array([0.5, 0.6])
-        with pytest.raises(ValueError, match="confidence"):
-            calculate_bootstrap_ci(candidate, baseline, confidence=1.5)
+        with pytest.raises(ValueError, match="confidence_level"):
+            calculate_bootstrap_ci(candidate, baseline, confidence_level=1.5)
 
 
 class TestComputeHolmBonferroni:
@@ -99,5 +100,5 @@ class TestComputeCalibrationMetrics:
         assert metrics["mae"] >= 0.0
 
     def test_shape_mismatch_raises(self) -> None:
-        with pytest.raises(ValueError, match="shape"):
+        with pytest.raises(ValueError, match="same shape"):
             compute_calibration_metrics(np.array([0.1]), np.array([0.1, 0.2]))
