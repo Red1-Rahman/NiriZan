@@ -21,8 +21,8 @@ def validate_scores(scores: np.ndarray | Sequence[float]) -> np.ndarray:
         ValueError: If array is empty, contains NaNs/Infs, or falls outside [0, 1].
     """
     arr = np.asarray(scores, dtype=float)
-    if arr.ndim > 1:
-        arr = arr.ravel()
+    if arr.ndim != 1:
+        raise ValueError("Scores must be one-dimensional.")
     if arr.size == 0:
         raise ValueError("Scores must contain at least one observation.")
     if not np.isfinite(arr).all():
