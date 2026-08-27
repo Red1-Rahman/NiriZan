@@ -94,6 +94,8 @@ def mann_whitney_regression(
     """
     cand = validate_scores(candidate_scores)
     base = validate_scores(baseline_scores)
+    if len(cand) < 5 or len(base) < 5:
+        raise ValueError("At least five observations are required in each group.")
 
     res = mannwhitneyu(cand, base, alternative=alternative)
     return float(res.statistic), float(res.pvalue)
