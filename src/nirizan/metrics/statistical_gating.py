@@ -63,11 +63,15 @@ def bootstrap_delta_ci(
     candidate = validate_scores(np.asarray(candidate, dtype=float))
     baseline = validate_scores(np.asarray(baseline, dtype=float))
 
-    ci_low, ci_high = calculate_bootstrap_ci(
+    if not 0.0 < confidence < 1.0:
+        logger.error("Bootstrap CI failed: confidence must be between 0 and 1, got %.4f", confidence)
+        raise ValueError("confidence must be between 0 and 1.")
+
+    _, ci_low, ci_high = calculate_bootstrap_ci(
         candidate,
         baseline,
         n_bootstrap=n_bootstrap,
-        confidence=confidence,
+        confidence_level=confidence,
         seed=seed,
     )
 
@@ -87,6 +91,10 @@ def holm_bonferroni(
     alpha: float = 0.05,
 ) -> dict[str, bool]:
     """Apply Holm-Bonferroni correction to p-value mapping."""
+    if not 0.0 < alpha < 1.0:
+        logger.error("Invalid alpha for Holm-Bonferroni: alpha=%.4f (must be between 0 and 1).", alpha)
+        raise ValueError("alpha must be between 0 and 1.")
+
     if not p_values:
         logger.debug("Holm-Bonferroni invoked with empty p_values mapping.")
         return {}
