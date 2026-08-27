@@ -1,9 +1,12 @@
 # tests/gate/test_verdict.py
+from __future__ import annotations
+
 import logging
 from uuid import uuid4
 
 import numpy as np
 import pytest
+
 from nirizan.gate.verdict import (
     bootstrap_delta_ci,
     evaluate_gate,
