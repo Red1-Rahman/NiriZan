@@ -11,12 +11,6 @@ from nirizan.trust.attribution import AttributionVerdict, DriftAttribution
 
 logger = get_logger(__name__)
 
-# (bn) ablation study erpor eta k tweak kora hobe.
-# Judge drift rate above this fraction of evaluated verdicts marks the panel
-# UNSTABLE. This is a starting default, not a calibrated threshold; there is
-# no gold-set or ablation data yet to justify a different number. Revisit
-# once the planned evaluation ablation notebook produces real judge-drift
-# base rates to calibrate against.
 DEFAULT_JUDGE_DRIFT_RATE_WARNING = 0.10
 
 
@@ -28,11 +22,7 @@ class JudgeReliabilityStatus(str, Enum):
 
 
 class JudgeReliabilityMetrics(BaseModel):
-    """Longitudinal summary of judge behavior over a window of AttributionVerdicts.
-
-    Populated from AttributionVerdict history, never computed from a single
-    verdict; a single verdict has no rate or trend to report.
-    """
+    """Longitudinal summary of judge behavior over a window of AttributionVerdicts."""
 
     model_config = ConfigDict(strict=True)
 
@@ -42,6 +32,8 @@ class JudgeReliabilityMetrics(BaseModel):
     verdict_count: int = Field(ge=1)
     judge_drift_rate: float = Field(ge=0.0, le=1.0)
     system_drift_rate: float = Field(ge=0.0, le=1.0)
+    joint_drift_rate: float = Field(ge=0.0, le=1.0, default=0.0)
+    inconclusive_rate: float = Field(ge=0.0, le=1.0, default=0.0)
     none_rate: float = Field(ge=0.0, le=1.0)
     mean_judge_score_delta: float
     judge_score_delta_std: float
@@ -64,12 +56,7 @@ def _std(values: list[float], mean_value: float) -> float:
 def judge_score_delta_series(
     verdicts: list[AttributionVerdict],
 ) -> list[tuple[datetime, float]]:
-    """Time series of judge_score_delta across every verdict, drift or not.
-
-    AttributionVerdict always populates judge_score_delta regardless of
-    attribution, specifically so this series can be plotted in full (see
-    trust/attribution.py's contract guarantee). Sorted oldest to newest.
-    """
+    """Time series of judge_score_delta across every verdict, drift or not."""
     return sorted(
         ((v.evaluated_at, v.judge_score_delta) for v in verdicts),
         key=lambda point: point[0],
@@ -92,13 +79,7 @@ def compute_judge_reliability(
     calibration_errors: list[dict[str, float]] | None = None,
     drift_rate_warning: float = DEFAULT_JUDGE_DRIFT_RATE_WARNING,
 ) -> JudgeReliabilityMetrics:
-    """Aggregate a window of AttributionVerdicts into a reliability summary.
-
-    All verdicts must share the same anchor_set_id; mixing anchor sets in one
-    summary would blend two different rulers and defeats the point of the
-    anchor set being fixed (see contracts.md: an AnchorSet update creates a
-    new anchor_set_id rather than editing in place).
-    """
+    """Aggregate a window of AttributionVerdicts into a reliability summary."""
     if not verdicts:
         logger.error("compute_judge_reliability called with an empty verdict list.")
         raise ValueError("At least one AttributionVerdict is required.")
@@ -116,12 +97,20 @@ def compute_judge_reliability(
 
     total = len(verdicts)
     judge_drift_count = sum(
-        1 for v in verdicts if v.attribution == DriftAttribution.JUDGE_DRIFT
+        1 for v in verdicts if v.attribution in (DriftAttribution.JUDGE_DRIFT, DriftAttribution.JOINT_DRIFT)
     )
     system_drift_count = sum(
-        1 for v in verdicts if v.attribution == DriftAttribution.SYSTEM_DRIFT
+        1 for v in verdicts if v.attribution in (DriftAttribution.SYSTEM_DRIFT, DriftAttribution.JOINT_DRIFT)
     )
-    none_count = total - judge_drift_count - system_drift_count
+    joint_drift_count = sum(
+        1 for v in verdicts if v.attribution == DriftAttribution.JOINT_DRIFT
+    )
+    inconclusive_count = sum(
+        1 for v in verdicts if v.attribution == DriftAttribution.INCONCLUSIVE
+    )
+    none_count = sum(
+        1 for v in verdicts if v.attribution == DriftAttribution.NONE
+    )
 
     judge_deltas = [v.judge_score_delta for v in verdicts]
     mean_judge_delta = _mean(judge_deltas)
@@ -146,6 +135,8 @@ def compute_judge_reliability(
         verdict_count=total,
         judge_drift_rate=judge_drift_rate,
         system_drift_rate=system_drift_count / total,
+        joint_drift_rate=joint_drift_count / total,
+        inconclusive_rate=inconclusive_count / total,
         none_rate=none_count / total,
         mean_judge_score_delta=mean_judge_delta,
         judge_score_delta_std=_std(judge_deltas, mean_judge_delta),
