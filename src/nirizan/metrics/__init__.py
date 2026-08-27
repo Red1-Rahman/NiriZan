@@ -53,3 +53,35 @@ BibTeX
   version = {0.1.0}
 }
 """
+
+from nirizan.metrics.statistical_gating import (
+    approximate_sample_size,
+    bootstrap_delta_ci,
+    calibrate_gold_set,
+    holm_bonferroni,
+    mann_whitney_regression,
+    validate_scores,
+)
+from nirizan.metrics.stats import (
+    calculate_bootstrap_ci,
+    calculate_sample_size,
+    compute_calibration_metrics,
+    compute_holm_bonferroni,
+    compute_mann_whitney_u,
+)
+
+__all__ = [
+    # Gating & evaluation routines
+    "approximate_sample_size",
+    "bootstrap_delta_ci",
+    "calibrate_gold_set",
+    "holm_bonferroni",
+    "mann_whitney_regression",
+    "validate_scores",
+    # Low-level statistical primitives
+    "calculate_bootstrap_ci",
+    "calculate_sample_size",
+    "compute_calibration_metrics",
+    "compute_holm_bonferroni",
+    "compute_mann_whitney_u",
+]
