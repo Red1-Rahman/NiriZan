@@ -50,9 +50,9 @@ class TestCalculateBootstrapCI:
         delta_hat, ci_low, ci_high = calculate_bootstrap_ci(
             candidate, baseline, n_bootstrap=1000, confidence_level=0.95, seed=42
         )
-        assert isinstance(delta_hat, float)
-        assert isinstance(ci_low, float)
-        assert isinstance(ci_high, float)
+        assert delta_hat == pytest.approx(-0.3)
+        assert ci_low == pytest.approx(-0.4, abs=0.05)
+        assert ci_high == pytest.approx(-0.2, abs=0.05)
         assert ci_low < ci_high
 
     def test_invalid_confidence_raises(self) -> None:
@@ -82,7 +82,7 @@ class TestCalculateSampleSize:
     def test_sample_size(self) -> None:
         n = calculate_sample_size(baseline_std=0.1, target_delta=0.05, alpha=0.05, power=0.80)
         assert isinstance(n, int)
-        assert n > 0
+        assert n == 63
 
     def test_invalid_parameters_raise(self) -> None:
         with pytest.raises(ValueError, match="baseline_std"):
@@ -94,10 +94,9 @@ class TestComputeCalibrationMetrics:
         preds = np.array([0.2, 0.4, 0.6])
         labels = np.array([0.2, 0.5, 0.5])
         metrics = compute_calibration_metrics(preds, labels)
-        assert "mae" in metrics
-        assert "mse" in metrics
-        assert "rmse" in metrics
-        assert metrics["mae"] >= 0.0
+        assert metrics["mae"] == pytest.approx(1 / 15)
+        assert metrics["mse"] == pytest.approx(1 / 150)
+        assert metrics["rmse"] == pytest.approx((1 / 150) ** 0.5)
 
     def test_shape_mismatch_raises(self) -> None:
         with pytest.raises(ValueError, match="same shape"):
