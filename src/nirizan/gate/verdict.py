@@ -7,6 +7,7 @@ import numpy as np
 from pydantic import BaseModel, ConfigDict, Field
 
 from nirizan._logging import get_logger
+from nirizan.metrics.stats import calculate_bootstrap_ci
 from nirizan.regression.comparator import (
     RegressionSeverity,
     RegressionVerdict,
@@ -41,51 +42,40 @@ def bootstrap_delta_ci(
     confidence: float = 0.95,
     seed: int = 42,
 ) -> tuple[float, float]:
-    if candidate.size == 0 or baseline.size == 0:
-        raise ValueError(
-            "Both distributions must contain observations."
+    """Compute bootstrap confidence interval for delta mean score."""
+    candidate_arr = np.asarray(candidate, dtype=float)
+    baseline_arr = np.asarray(baseline, dtype=float)
+
+    if candidate_arr.size == 0 or baseline_arr.size == 0:
+        logger.error(
+            "Bootstrap CI failed: both distributions must contain observations (candidate size=%d, baseline size=%d).",
+            candidate_arr.size,
+            baseline_arr.size,
         )
+        raise ValueError("Both distributions must contain observations.")
 
     if n_bootstrap < 1:
+        logger.error("Bootstrap CI failed: n_bootstrap must be positive, got %d", n_bootstrap)
         raise ValueError("n_bootstrap must be positive.")
 
     if not 0.0 < confidence < 1.0:
-        raise ValueError(
-            "confidence must be between 0 and 1."
-        )
+        logger.error("Bootstrap CI failed: confidence must be between 0 and 1, got %.4f", confidence)
+        raise ValueError("confidence must be between 0 and 1.")
 
     logger.debug(
         "Computing bootstrap delta CI: n_bootstrap=%d, confidence=%.2f, candidate_n=%d, baseline_n=%d",
         n_bootstrap,
         confidence,
-        candidate.size,
-        baseline.size,
+        candidate_arr.size,
+        baseline_arr.size,
     )
 
-    rng = np.random.default_rng(seed)
-
-    candidate_samples = rng.choice(
-        candidate,
-        size=(n_bootstrap, candidate.size),
-        replace=True,
-    )
-
-    baseline_samples = rng.choice(
-        baseline,
-        size=(n_bootstrap, baseline.size),
-        replace=True,
-    )
-
-    deltas = (
-        candidate_samples.mean(axis=1)
-        - baseline_samples.mean(axis=1)
-    )
-
-    alpha = 1.0 - confidence
-
-    ci = (
-        float(np.quantile(deltas, alpha / 2.0)),
-        float(np.quantile(deltas, 1.0 - alpha / 2.0)),
+    ci = calculate_bootstrap_ci(
+        candidate_arr,
+        baseline_arr,
+        n_bootstrap=n_bootstrap,
+        confidence=confidence,
+        seed=seed,
     )
     logger.debug("Bootstrap CI computed: [%.6f, %.6f]", ci[0], ci[1])
     return ci
@@ -94,6 +84,7 @@ def bootstrap_delta_ci(
 def select_decision_metric(
     verdicts: list[RegressionVerdict],
 ) -> RegressionVerdict:
+    """Select the primary decision metric based on highest severity and negative effect size."""
     if not verdicts:
         raise ValueError("At least one verdict is required.")
 
@@ -125,6 +116,7 @@ def evaluate_gate(
         tuple[np.ndarray, np.ndarray],
     ],
 ) -> GateVerdict:
+    """Evaluate overall gate verdict across regression metrics."""
     if not verdicts:
         raise ValueError(
             "Gate requires at least one regression verdict."
