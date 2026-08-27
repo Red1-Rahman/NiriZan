@@ -14,17 +14,7 @@ logger = get_logger(__name__)
 
 
 def validate_scores(scores: np.ndarray | Sequence[float]) -> np.ndarray:
-    """Validate metric score arrays for finite values and bounded range [0, 1].
-
-    Args:
-        scores: Input score sequence or array.
-
-    Returns:
-        Validated 1D float NumPy array.
-
-    Raises:
-        ValueError: If array is empty, contains NaNs/Infs, or falls outside [0, 1].
-    """
+    """Validate metric score arrays for finite values and bounded range [0, 1]."""
     arr = np.asarray(scores, dtype=float)
     if arr.ndim != 1:
         raise ValueError("Scores must be one-dimensional.")
@@ -41,25 +31,12 @@ def validate_scores(scores: np.ndarray | Sequence[float]) -> np.ndarray:
 def bootstrap_delta_ci(
     candidate_scores: np.ndarray | Sequence[float],
     baseline_scores: np.ndarray | Sequence[float],
+    *,
     confidence_level: float = 0.95,
     n_bootstrap: int = 10000,
     seed: int | None = None,
 ) -> tuple[float, float, float]:
-    """Compute bootstrap confidence interval for the mean delta (candidate - baseline).
-
-    Args:
-        candidate_scores: Candidate model score array or sequence.
-        baseline_scores: Baseline model score array or sequence.
-        confidence_level: Confidence level for the interval (default 0.95).
-        n_bootstrap: Number of bootstrap resampling iterations (default 10000).
-        seed: Optional random seed for reproducible sampling.
-
-    Returns:
-        Tuple containing (point_estimate_delta, ci_lower, ci_upper).
-
-    Raises:
-        ValueError: If n_bootstrap <= 0 or confidence_level is not in (0, 1).
-    """
+    """Compute bootstrap confidence interval for the mean delta (candidate - baseline)."""
     if n_bootstrap <= 0:
         raise ValueError("n_bootstrap must be positive.")
     if not (0.0 < confidence_level < 1.0):
@@ -86,18 +63,10 @@ def bootstrap_delta_ci(
 def mann_whitney_regression(
     candidate_scores: np.ndarray | Sequence[float],
     baseline_scores: np.ndarray | Sequence[float],
+    *,
     alternative: Literal["less", "greater", "two-sided"] = "less",
 ) -> tuple[float, float]:
-    """Perform Mann-Whitney U test to evaluate score regression between candidate and baseline.
-
-    Args:
-        candidate_scores: Candidate model score array or sequence.
-        baseline_scores: Baseline model score array or sequence.
-        alternative: Alternative hypothesis string ('less', 'greater', or 'two-sided').
-
-    Returns:
-        Tuple of (u_statistic, p_value).
-    """
+    """Perform Mann-Whitney U test to evaluate score regression between candidate and baseline."""
     cand = validate_scores(candidate_scores)
     base = validate_scores(baseline_scores)
     if len(cand) < 5 or len(base) < 5:
@@ -109,20 +78,10 @@ def mann_whitney_regression(
 
 def holm_bonferroni(
     p_values: Mapping[str, float],
+    *,
     alpha: float = 0.05,
 ) -> dict[str, bool]:
-    """Apply Holm-Bonferroni step-down correction for multiple hypothesis testing.
-
-    Args:
-        p_values: Mapping from metric/hypothesis identifier to raw p-value.
-        alpha: Overall family-wise error rate threshold (default 0.05).
-
-    Returns:
-        Dictionary mapping identifier to boolean indicating if null hypothesis is rejected.
-
-    Raises:
-        ValueError: If alpha is not in (0, 1).
-    """
+    """Apply Holm-Bonferroni step-down correction for multiple hypothesis testing."""
     if not (0.0 < alpha < 1.0):
         raise ValueError("alpha must be strictly between 0 and 1.")
 
@@ -150,12 +109,13 @@ def holm_bonferroni(
 
 
 def calculate_sample_size(
+    *,
     baseline_std: float,
     target_delta: float,
     alpha: float = 0.05,
     power: float = 0.80,
 ) -> int:
-    """Calculate approximate required sample size per group for target delta."""
+    """Calculate approximate required sample size per group for target delta using two-sided alpha."""
     if baseline_std <= 0:
         raise ValueError("baseline_std must be positive.")
     if target_delta <= 0:
@@ -187,7 +147,7 @@ def compute_calibration_metrics(
     return {"mae": mae, "mse": mse, "rmse": rmse}
 
 
-# Aliases for backward compatibility across gate, regression, and legacy callers
+# Aliases for backward compatibility
 calculate_bootstrap_ci = bootstrap_delta_ci
 compute_holm_bonferroni = holm_bonferroni
 compute_mann_whitney_u = mann_whitney_regression
