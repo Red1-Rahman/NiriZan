@@ -1,4 +1,6 @@
 # tests/regression/test_thresholds.py
+from __future__ import annotations
+
 import logging
 
 import numpy as np
@@ -60,14 +62,14 @@ def test_invalid_scores_are_rejected(caplog: pytest.LogCaptureFixture) -> None:
     with pytest.raises(ValueError, match="Scores must be one-dimensional"):
         validate_scores(np.array([[0.5], [0.5]]))
 
-    with pytest.raises(ValueError, match="Scores must contain at least one observation"):
+    with pytest.raises(ValueError, match="Score distribution is empty"):
         validate_scores(np.array([]))
 
-    with pytest.raises(ValueError, match="Scores must contain only finite values"):
+    with pytest.raises(ValueError, match="non-finite values"):
         validate_scores(np.array([0.5, np.nan, 0.8]))
 
-    with pytest.raises(ValueError, match="NiriZan metric scores must be in \\[0, 1\\]"):
+    with pytest.raises(ValueError, match="normalized to \\[0, 1\\]"):
         validate_scores(np.array([-0.1, 0.5]))
 
-    with pytest.raises(ValueError, match="NiriZan metric scores must be in \\[0, 1\\]"):
+    with pytest.raises(ValueError, match="normalized to \\[0, 1\\]"):
         validate_scores(np.array([0.5, 1.2]))
