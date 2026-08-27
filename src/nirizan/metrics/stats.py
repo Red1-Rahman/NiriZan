@@ -5,7 +5,11 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 import numpy as np
-from scipy.stats import mannwhitneyu
+from scipy.stats import mannwhitneyu, norm
+
+from nirizan._logging import get_logger
+
+logger = get_logger(__name__)
 
 
 def validate_scores(scores: np.ndarray | Sequence[float]) -> np.ndarray:
@@ -24,11 +28,12 @@ def validate_scores(scores: np.ndarray | Sequence[float]) -> np.ndarray:
     if arr.ndim != 1:
         raise ValueError("Scores must be one-dimensional.")
     if arr.size == 0:
-        raise ValueError("Scores must contain at least one observation.")
+        raise ValueError("Score distribution is empty.")
     if not np.isfinite(arr).all():
         raise ValueError("Scores contain non-finite values (NaN/Inf).")
     if np.any(arr < 0.0) or np.any(arr > 1.0):
-        raise ValueError("NiriZan metric scores must be in [0, 1].")
+        raise ValueError("NiriZan metric scores must be normalized to [0, 1].")
+    logger.debug("Successfully validated %d score observations", arr.size)
     return arr
 
 
@@ -143,6 +148,44 @@ def holm_bonferroni(
     return rejected
 
 
+def calculate_sample_size(
+    baseline_std: float,
+    target_delta: float,
+    alpha: float = 0.05,
+    power: float = 0.80,
+) -> int:
+    """Calculate approximate required sample size per group for target delta."""
+    if baseline_std <= 0:
+        raise ValueError("baseline_std must be positive.")
+    if target_delta <= 0:
+        raise ValueError("target_delta must be positive.")
+    if not (0.0 < alpha < 1.0):
+        raise ValueError("alpha must be between 0 and 1.")
+    if not (0.0 < power < 1.0):
+        raise ValueError("power must be between 0 and 1.")
+
+    z_alpha = norm.ppf(1.0 - alpha / 2.0)
+    z_beta = norm.ppf(power)
+    n = 2.0 * ((z_alpha + z_beta) * baseline_std / target_delta) ** 2
+    return int(np.ceil(n))
+
+
+def compute_calibration_metrics(
+    predictions: np.ndarray | Sequence[float],
+    gold_labels: np.ndarray | Sequence[float],
+) -> dict[str, float]:
+    """Calculate calibration error metrics (MAE, MSE, RMSE) against gold labels."""
+    preds = np.asarray(predictions, dtype=float)
+    labels = np.asarray(gold_labels, dtype=float)
+    if preds.shape != labels.shape:
+        raise ValueError("predictions and gold_labels must have the same shape.")
+
+    mae = float(np.mean(np.abs(preds - labels)))
+    mse = float(np.mean((preds - labels) ** 2))
+    rmse = float(np.sqrt(mse))
+    return {"mae": mae, "mse": mse, "rmse": rmse}
+
+
 # Aliases for backward compatibility across gate, regression, and legacy callers
 calculate_bootstrap_ci = bootstrap_delta_ci
 compute_holm_bonferroni = holm_bonferroni
@@ -151,6 +194,8 @@ compute_mann_whitney_u = mann_whitney_regression
 __all__ = [
     "bootstrap_delta_ci",
     "calculate_bootstrap_ci",
+    "calculate_sample_size",
+    "compute_calibration_metrics",
     "compute_holm_bonferroni",
     "compute_mann_whitney_u",
     "holm_bonferroni",
