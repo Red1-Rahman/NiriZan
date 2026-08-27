@@ -32,13 +32,6 @@ GitHub Actions workflows (`ci.yml`, `nirizan_gate.yml`, `packaging.yml`,
 `cross-platform.yml`, `test-pypi.yml`) run against it on every push. The
 most valuable contributions right now depend on where you want to work:
 
-- **Closing known gaps in what's already built.** `docs/contracts.md`
-  doesn't yet document `JudgeReliabilityMetrics` or `DashboardSnapshot`
-  (implemented ahead of their contract, a documentation debt worth
-  fixing). `gate/verdict.py` and `metrics/statistical_gating.py` each
-  independently define an identical `bootstrap_delta_ci`, worth
-  consolidating. These are good first contributions: scoped, well-defined,
-  and don't require designing anything new.
 - **Phase 6: evaluation and benchmarking.** `experiments/` has a working
   ablation and meta-evaluation notebook; extending its coverage (more
   configurations, real rather than synthetic gold-set data, external
