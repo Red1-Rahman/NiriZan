@@ -70,13 +70,14 @@ def bootstrap_delta_ci(
         baseline_arr.size,
     )
 
-    ci = calculate_bootstrap_ci(
+    _, ci_low, ci_high = calculate_bootstrap_ci(
         candidate_arr,
         baseline_arr,
         n_bootstrap=n_bootstrap,
-        confidence=confidence,
+        confidence_level=confidence,
         seed=seed,
     )
+    ci = (ci_low, ci_high)
     logger.debug("Bootstrap CI computed: [%.6f, %.6f]", ci[0], ci[1])
     return ci
 
