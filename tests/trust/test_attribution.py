@@ -1,4 +1,7 @@
 # tests/trust/test_attribution.py
+from __future__ import annotations
+
+import numpy as np
 import pytest
 from nirizan.trust.attribution import (
     AttributionEngine,
@@ -7,12 +10,11 @@ from nirizan.trust.attribution import (
 
 
 @pytest.fixture
-def engine():
+def engine() -> AttributionEngine:
     return AttributionEngine(significance_threshold=0.05)
 
 
-def test_attribution_no_drift(engine):
-    # Anchor scores remain stable; candidate matches baseline
+def test_attribution_no_drift(engine: AttributionEngine) -> None:
     ref_scores = [0.90, 0.90, 0.90, 0.90]
     rescored = [0.90, 0.90, 0.90, 0.90]
     baseline = [0.90, 0.90, 0.90, 0.90]
@@ -33,8 +35,7 @@ def test_attribution_no_drift(engine):
     assert len(verdict.explanation) > 0
 
 
-def test_attribution_system_drift(engine):
-    # Rescored anchor matches ref (judge stable); candidate drops significantly
+def test_attribution_system_drift(engine: AttributionEngine) -> None:
     ref_scores = [0.90, 0.90, 0.90]
     rescored = [0.90, 0.90, 0.91]
     baseline = [0.90, 0.90, 0.91]
@@ -54,8 +55,7 @@ def test_attribution_system_drift(engine):
     assert "System drift detected" in verdict.explanation
 
 
-def test_attribution_judge_drift(engine):
-    # Rescored anchor drops (judge re-calibration shift); production scores unchanged
+def test_attribution_judge_drift(engine: AttributionEngine) -> None:
     ref_scores = [0.90, 0.90, 0.90]
     rescored = [0.70, 0.70, 0.70]
     baseline = [0.90, 0.90, 0.90]
@@ -73,3 +73,54 @@ def test_attribution_judge_drift(engine):
     assert verdict.judge_score_delta < -0.10
     assert abs(verdict.system_score_delta) < 0.05
     assert "Judge drift detected" in verdict.explanation
+
+
+def test_attribution_joint_drift(engine: AttributionEngine) -> None:
+    ref_scores = [0.90, 0.90, 0.90]
+    rescored = [0.70, 0.70, 0.70]
+    baseline = [0.90, 0.90, 0.91]
+    candidate = [0.68, 0.68, 0.68]
+
+    verdict = engine.analyze(
+        anchor_set_id="anchor-v1",
+        anchor_ref_scores=ref_scores,
+        anchor_rescored_scores=rescored,
+        prod_baseline_scores=baseline,
+        prod_candidate_scores=candidate,
+    )
+
+    assert verdict.attribution == DriftAttribution.JOINT_DRIFT
+    assert verdict.judge_score_delta < -0.10
+    assert verdict.system_score_delta < -0.10
+    assert "Joint drift detected" in verdict.explanation
+
+
+def test_attribution_inconclusive_empty(engine: AttributionEngine) -> None:
+    scores = [0.90, 0.90, 0.90]
+
+    verdict = engine.analyze(
+        anchor_set_id="anchor-v1",
+        anchor_ref_scores=[],
+        anchor_rescored_scores=scores,
+        prod_baseline_scores=scores,
+        prod_candidate_scores=scores,
+    )
+
+    assert verdict.attribution == DriftAttribution.INCONCLUSIVE
+    assert "Inconclusive attribution" in verdict.explanation
+
+
+def test_attribution_inconclusive_nan(engine: AttributionEngine) -> None:
+    ref_scores = [0.90, np.nan, 0.90]
+    scores = [0.90, 0.90, 0.90]
+
+    verdict = engine.analyze(
+        anchor_set_id="anchor-v1",
+        anchor_ref_scores=ref_scores,
+        anchor_rescored_scores=scores,
+        prod_baseline_scores=scores,
+        prod_candidate_scores=scores,
+    )
+
+    assert verdict.attribution == DriftAttribution.INCONCLUSIVE
+    assert "non-finite values" in verdict.explanation
