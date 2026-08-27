@@ -66,7 +66,7 @@ class TestComputeHolmBonferroni:
         p_vals = {"m1": 0.01, "m2": 0.04, "m3": 0.15}
         result = compute_holm_bonferroni(p_vals, alpha=0.05)
         assert result["m1"] is True
-        assert result["m2"] is True
+        assert result["m2"] is False
         assert result["m3"] is False
 
     def test_empty_input(self) -> None:
