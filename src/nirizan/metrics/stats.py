@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from typing import Literal
 import numpy as np
 from scipy.stats import mannwhitneyu, norm
 
@@ -85,7 +86,7 @@ def bootstrap_delta_ci(
 def mann_whitney_regression(
     candidate_scores: np.ndarray | Sequence[float],
     baseline_scores: np.ndarray | Sequence[float],
-    alternative: str = "less",
+    alternative: Literal["less", "greater", "two-sided"] = "less",
 ) -> tuple[float, float]:
     """Perform Mann-Whitney U test to evaluate score regression between candidate and baseline.
 
