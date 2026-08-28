@@ -29,7 +29,6 @@ from nirizan.regression.comparator import (
     RegressionSeverity,
 )
 from nirizan.reporting.dashboard import assemble_dashboard_snapshot
-from nirizan.reporting.health_score import compute_system_health_score
 from nirizan.reporting.judge_reliability import (
     JudgeReliabilityStatus,
     compute_judge_reliability,
