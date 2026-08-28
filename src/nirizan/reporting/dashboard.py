@@ -67,9 +67,7 @@ def assemble_dashboard_snapshot(
     attribution_for_health = DriftAttribution.NONE
 
     if attribution_verdicts:
-        latest_attribution = max(
-            attribution_verdicts, key=lambda v: v.evaluated_at
-        )
+        latest_attribution = max(attribution_verdicts, key=lambda v: v.evaluated_at)
         attribution_for_health = latest_attribution.attribution
         try:
             judge_reliability = compute_judge_reliability(

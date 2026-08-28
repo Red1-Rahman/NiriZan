@@ -17,7 +17,10 @@ def _resolve_code_commit() -> Optional[str]:
         return env_value
     try:
         result = subprocess.run(
-            ["git", "rev-parse", "HEAD"], capture_output=True, text=True, check=True,
+            ["git", "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            check=True,
         )
         return result.stdout.strip()
     except (subprocess.CalledProcessError, FileNotFoundError):
@@ -69,10 +72,12 @@ class TraceCollector:
 
     async def enqueue_trace(self, trace: Trace) -> None:
         """Tag the trace with commit hash + data snapshot at ingest, then push into the processing buffer."""
-        tagged_trace = trace.model_copy(update={
-            "code_commit": self._code_commit,
-            "data_snapshot_id": self._data_snapshot_id,
-        })
+        tagged_trace = trace.model_copy(
+            update={
+                "code_commit": self._code_commit,
+                "data_snapshot_id": self._data_snapshot_id,
+            }
+        )
         await self.queue.put(tagged_trace)
 
     async def _process_queue(self) -> None:

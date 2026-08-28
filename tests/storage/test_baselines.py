@@ -44,13 +44,17 @@ async def test_save_and_get_baseline(baseline_repo: SQLiteBaselineRepository) ->
 
 
 @pytest.mark.asyncio
-async def test_get_nonexistent_baseline_returns_none(baseline_repo: SQLiteBaselineRepository) -> None:
+async def test_get_nonexistent_baseline_returns_none(
+    baseline_repo: SQLiteBaselineRepository,
+) -> None:
     result = await baseline_repo.get_baseline(uuid4())
     assert result is None
 
 
 @pytest.mark.asyncio
-async def test_list_baselines_filtering_and_ordering(baseline_repo: SQLiteBaselineRepository) -> None:
+async def test_list_baselines_filtering_and_ordering(
+    baseline_repo: SQLiteBaselineRepository,
+) -> None:
     now = datetime.now(timezone.utc)
 
     b1 = Baseline(

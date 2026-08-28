@@ -19,7 +19,10 @@ def test_lightweight_judge_safe(caplog: pytest.LogCaptureFixture) -> None:
     assert res.score == 1.0
     assert res.metric_name == "lightweight_quality_score"
     assert res.trace_id == trace_id
-    assert f"Evaluating LightweightJudge metric_name='lightweight_quality_score' for trace_id={trace_id}" in caplog.text
+    assert (
+        f"Evaluating LightweightJudge metric_name='lightweight_quality_score' for trace_id={trace_id}"
+        in caplog.text
+    )
     assert "evaluated score=1.0000" in caplog.text
 
 
@@ -34,7 +37,10 @@ def test_lightweight_judge_toxic(caplog: pytest.LogCaptureFixture) -> None:
 
     assert res.score < 1.0
     assert res.trace_id == trace_id
-    assert f"Evaluating LightweightJudge metric_name='lightweight_quality_score' for trace_id={trace_id}" in caplog.text
+    assert (
+        f"Evaluating LightweightJudge metric_name='lightweight_quality_score' for trace_id={trace_id}"
+        in caplog.text
+    )
 
 
 def test_lightweight_judge_empty_text(caplog: pytest.LogCaptureFixture) -> None:
@@ -45,4 +51,7 @@ def test_lightweight_judge_empty_text(caplog: pytest.LogCaptureFixture) -> None:
 
     assert res.score == 0.0
     assert res.trace_id == trace_id
-    assert "Empty or whitespace-only text provided for metric_name='lightweight_quality_score'" in caplog.text
+    assert (
+        "Empty or whitespace-only text provided for metric_name='lightweight_quality_score'"
+        in caplog.text
+    )

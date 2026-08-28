@@ -65,9 +65,7 @@ class AttributionEngine:
         system_delta = prod_candidate_mean - prod_baseline_mean
 
         has_judge_shift = abs(judge_delta) >= self.significance_threshold
-        has_system_shift = (
-            abs(system_delta) >= self.significance_threshold and system_delta < 0
-        )
+        has_system_shift = abs(system_delta) >= self.significance_threshold and system_delta < 0
 
         if has_judge_shift and has_system_shift:
             verdict = DriftAttribution.JOINT_DRIFT

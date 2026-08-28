@@ -41,9 +41,7 @@ class Tracer:
         self._spans: list[Span] = []
 
     @asynccontextmanager
-    async def session(
-        self, session_id: UUID | None = None
-    ) -> AsyncGenerator[UUID, None]:
+    async def session(self, session_id: UUID | None = None) -> AsyncGenerator[UUID, None]:
         """Scope subsequent traces to a session; every Trace assembled inside this block picks up session_id automatically."""
         sid = session_id or uuid4()
         token = _CURRENT_SESSION_ID.set(sid)

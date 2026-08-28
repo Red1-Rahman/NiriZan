@@ -13,7 +13,9 @@ from nirizan.regression.thresholds import (
 )
 
 
-def test_mann_whitney_detects_lower_candidate_distribution(caplog: pytest.LogCaptureFixture) -> None:
+def test_mann_whitney_detects_lower_candidate_distribution(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     rng = np.random.default_rng(42)
     candidate = rng.normal(loc=0.3, scale=0.05, size=50).clip(0.0, 1.0)
     baseline = rng.normal(loc=0.8, scale=0.05, size=50).clip(0.0, 1.0)

@@ -22,8 +22,7 @@ class TraceSource(Protocol):
         self,
         application_name: str,
         limit: int = 100,
-    ) -> list[Trace]:
-        ...
+    ) -> list[Trace]: ...
 
 
 class RunSink(Protocol):
@@ -33,8 +32,7 @@ class RunSink(Protocol):
     interface, following the same pattern as TraceCollector's TraceSink.
     """
 
-    async def save_run(self, run: Run) -> None:
-        ...
+    async def save_run(self, run: Run) -> None: ...
 
 
 class RunScheduler:

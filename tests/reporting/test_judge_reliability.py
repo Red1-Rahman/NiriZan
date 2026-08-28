@@ -82,10 +82,14 @@ def test_compute_judge_reliability_unstable_status():
     now = datetime.now(timezone.utc)
     # 2 out of 5 verdicts have JUDGE_DRIFT (40% > 10% warning threshold)
     verdicts = [
-        _make_verdict(attribution=DriftAttribution.JUDGE_DRIFT, evaluated_at=now - timedelta(minutes=i))
+        _make_verdict(
+            attribution=DriftAttribution.JUDGE_DRIFT, evaluated_at=now - timedelta(minutes=i)
+        )
         for i in range(2)
     ] + [
-        _make_verdict(attribution=DriftAttribution.NONE, evaluated_at=now - timedelta(minutes=i + 2))
+        _make_verdict(
+            attribution=DriftAttribution.NONE, evaluated_at=now - timedelta(minutes=i + 2)
+        )
         for i in range(3)
     ]
 
@@ -102,7 +106,9 @@ def test_compute_judge_reliability_custom_warning_threshold():
     verdicts = [
         _make_verdict(attribution=DriftAttribution.JUDGE_DRIFT, evaluated_at=now),
     ] + [
-        _make_verdict(attribution=DriftAttribution.NONE, evaluated_at=now - timedelta(minutes=i + 1))
+        _make_verdict(
+            attribution=DriftAttribution.NONE, evaluated_at=now - timedelta(minutes=i + 1)
+        )
         for i in range(3)
     ]
 

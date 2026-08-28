@@ -222,6 +222,7 @@ from nirizan.instrumentation.spans import SpanKind
 
 tracer = Tracer(application_name="my-rag-app")
 
+
 async def answer_question(question: str) -> str:
     async with tracer.start_span("retrieve_context", kind=SpanKind.RETRIEVAL) as span:
         context = await retrieve(question)
@@ -253,10 +254,12 @@ from nirizan.instrumentation.sdk import init_tracer, retrieval, generation
 
 init_tracer(application_name="my-rag-app")
 
+
 @retrieval()
 async def retrieve(question: str) -> str:
     ...
     return context
+
 
 @generation()
 async def generate(question: str, context: str) -> str:
@@ -281,9 +284,9 @@ If you're not using the global tracer, pass your `Tracer` explicitly:
 from nirizan.instrumentation.sdk import trace_span
 from nirizan.instrumentation.spans import SpanKind
 
+
 @trace_span(kind=SpanKind.TOOL_USE, tracer=my_tracer)
-async def call_search_api(query: str) -> str:
-    ...
+async def call_search_api(query: str) -> str: ...
 ```
 
 ### Sessions
@@ -339,12 +342,11 @@ Both exporters are `async`, since exporting is expected to be I/O in general eve
 from nirizan.instrumentation.exporters import BaseExporter
 from nirizan.instrumentation.spans import Trace
 
-class MyExporter(BaseExporter):
-    async def export(self, trace: Trace) -> None:
-        ...  # send trace somewhere
 
-    async def shutdown(self) -> None:
-        ...  # optional: release connections or background workers
+class MyExporter(BaseExporter):
+    async def export(self, trace: Trace) -> None: ...  # send trace somewhere
+
+    async def shutdown(self) -> None: ...  # optional: release connections or background workers
 ```
 
 `export` is required and must be `async`. `shutdown` is optional to override; the base implementation is a no-op. NiriZan does not guarantee delivery, retries, or background execution on your behalf; a custom exporter is responsible for its own error handling, retry policy, and any batching it wants to do.
@@ -374,9 +376,11 @@ Not every scoring class in `nirizan.metrics` implements the `Metric` protocol. `
 ```python
 from nirizan.metrics.rag_triad import RAGTriadMetric
 
+
 def my_scorer(text_a: str, text_b: str) -> float:
     ...  # e.g. embedding cosine similarity, clipped to [0.0, 1.0]
     return score
+
 
 rag_triad = RAGTriadMetric(scorer=my_scorer)
 results = await rag_triad.evaluate(trace)
@@ -409,9 +413,9 @@ import numpy as np
 from nirizan.metrics.behavioral_anchor import BehavioralAnchorMetric
 
 anchor = BehavioralAnchorMetric(
-    target_embedding=np.array([...]),   # your reference embedding
+    target_embedding=np.array([...]),  # your reference embedding
     threshold=0.85,
-    embedding_fn=my_embedding_fn,       # text: str -> np.ndarray
+    embedding_fn=my_embedding_fn,  # text: str -> np.ndarray
 )
 results = await anchor.evaluate(trace)
 ```
@@ -459,16 +463,18 @@ Prompted-LLM scoring: you supply a prompt template and a completion function; `L
 ```python
 from nirizan.metrics.llm_judge import LLMJudge
 
+
 def call_my_llm(prompt: str) -> str:
     # call your LLM provider here; must return a JSON string like
     # {"score": 0.9, "reasoning": "..."}
     ...
 
+
 judge = LLMJudge(
     metric_name="helpfulness",
     prompt_template=(
-        'Rate the helpfulness of this answer from 0 to 1.\n'
-        'Question: {input}\nContext: {context}\nAnswer: {output}\n'
+        "Rate the helpfulness of this answer from 0 to 1.\n"
+        "Question: {input}\nContext: {context}\nAnswer: {output}\n"
         'Respond as JSON: {{"score": <float>, "reasoning": "<why>"}}'
     ),
     completion_fn=call_my_llm,
@@ -525,6 +531,7 @@ from datetime import datetime, timezone
 
 from nirizan.instrumentation.spans import SpanKind, Trace
 from nirizan.metrics.base import MetricResult
+
 
 class ResponseLengthMetric:
     name = "response_length"
@@ -803,6 +810,7 @@ with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as f:
 
 ```python
 import sys
+
 sys.exit(gate_exit_code(gate_verdict))
 ```
 
@@ -903,10 +911,10 @@ snapshot = assemble_dashboard_snapshot(
     system_type="rag",
     quality_score=0.87,
     confidence=0.95,
-    attribution_verdicts=attribution_verdicts,   # list[AttributionVerdict] | None
-    regression_verdicts=regression_verdicts,     # list[RegressionVerdict] | None
-    gate_verdict=gate_verdict,                   # GateVerdict | None
-    calibration_errors=calibration_errors,       # list[dict[str, float]] | None
+    attribution_verdicts=attribution_verdicts,  # list[AttributionVerdict] | None
+    regression_verdicts=regression_verdicts,  # list[RegressionVerdict] | None
+    gate_verdict=gate_verdict,  # GateVerdict | None
+    calibration_errors=calibration_errors,  # list[dict[str, float]] | None
 )
 ```
 
@@ -976,10 +984,15 @@ engine = AttributionEngine(significance_threshold=0.05)
 
 verdict = engine.analyze(
     anchor_set_id="rag-anchors-v1",
-    anchor_ref_scores=[0.91, 0.88, 0.93, 0.90],       # judge's historical scores on the anchor set
-    anchor_rescored_scores=[0.89, 0.87, 0.92, 0.91],  # judge's scores on the same anchor set, rescored now
-    prod_baseline_scores=[0.85, 0.82, 0.88, 0.84],    # production scores from the baseline run
-    prod_candidate_scores=[0.71, 0.68, 0.74, 0.70],   # production scores from the candidate run
+    anchor_ref_scores=[0.91, 0.88, 0.93, 0.90],  # judge's historical scores on the anchor set
+    anchor_rescored_scores=[
+        0.89,
+        0.87,
+        0.92,
+        0.91,
+    ],  # judge's scores on the same anchor set, rescored now
+    prod_baseline_scores=[0.85, 0.82, 0.88, 0.84],  # production scores from the baseline run
+    prod_candidate_scores=[0.71, 0.68, 0.74, 0.70],  # production scores from the candidate run
 )
 
 print(verdict.attribution, verdict.explanation)
@@ -1029,7 +1042,7 @@ from nirizan.storage.models import Run
 run = Run(
     run_id=uuid4(),
     trace_id=uuid4(),
-    code_commit="a1b2c3d",       # at least 7 characters, e.g. a short git SHA
+    code_commit="a1b2c3d",  # at least 7 characters, e.g. a short git SHA
     data_snapshot_id="v1",
     metric_results=[],
     created_at=datetime.now(timezone.utc),
@@ -1066,7 +1079,7 @@ from nirizan.storage.trace_repository import SQLiteTraceRepository
 repo = SQLiteTraceRepository(db_path="nirizan_traces.db")
 
 await repo.save(trace)
-fetched = await repo.get(trace.trace_id)   # Trace | None
+fetched = await repo.get(trace.trace_id)  # Trace | None
 recent = await repo.list_by_application("my-rag-app", limit=50, offset=0)
 deleted_count = await repo.purge_older_than("2026-01-01T00:00:00+00:00")
 
@@ -1118,7 +1131,7 @@ from nirizan.storage.baselines import SQLiteBaselineRepository
 repo = SQLiteBaselineRepository(db_path="nirizan_baselines.db")
 
 await repo.save_baseline(baseline)
-fetched = await repo.get_baseline(baseline.baseline_id)          # Baseline | None
+fetched = await repo.get_baseline(baseline.baseline_id)  # Baseline | None
 all_rag_baselines = await repo.list_baselines(system_type="rag")  # newest first
 repo.close()
 ```
@@ -1149,8 +1162,8 @@ from nirizan.storage.experiment_store import ExperimentStore, SQLiteExperimentSt
 store = SQLiteExperimentStore(db_path="nirizan_experiments.db")
 
 await store.record_run(run)
-fetched = await store.get_run(run.run_id)          # Run | None
-diff = await store.diff(run_a_id, run_b_id)         # RunDiff
+fetched = await store.get_run(run.run_id)  # Run | None
+diff = await store.diff(run_a_id, run_b_id)  # RunDiff
 ```
 
 **`RunDiff`** is a small, purely computational model: `run_a`, `run_b` (the two run ids compared), and `metric_deltas`, a `dict[str, float]` mapping each metric name **present in both runs** to `score_b - score_a`. Per the class's own docstring, `RunDiff` "computes only, never judges whether it's a regression" — there's no severity, no significance test, no connection to `nirizan.regression` here at all. If a metric name appears in only one of the two runs, it's silently excluded from `metric_deltas` rather than raising or including a partial entry; `RunDiff` only reports on the intersection of the two runs' metric names.
@@ -1721,8 +1734,7 @@ Abstract base class every trace exporter implements.
 Subclass `BaseExporter` and implement:
 
 ```python
-async def export(self, trace: Trace) -> None:
-    ...
+async def export(self, trace: Trace) -> None: ...
 ```
 
 `export` is abstract and required; NiriZan will not instantiate a subclass that doesn't define it. NiriZan does not add retries, delivery guarantees, or batching around your implementation; if you need those, implement them inside `export`.
@@ -1730,8 +1742,7 @@ async def export(self, trace: Trace) -> None:
 Optionally override:
 
 ```python
-async def shutdown(self) -> None:
-    ...
+async def shutdown(self) -> None: ...
 ```
 
 `shutdown` defaults to a no-op. Override it to release connections or background workers your exporter opened. NiriZan does not currently call `shutdown` automatically; it exists as a hook for the caller to invoke when the exporter needs to release resources.
@@ -4035,7 +4046,9 @@ Abstract storage interface (an `ABC`, not a `Protocol`) for persisting, querying
 ```python
 async def save(self, trace: Trace) -> None: ...
 async def get(self, trace_id: UUID) -> Optional[Trace]: ...
-async def list_by_application(self, application_name: str, limit: int = 100, offset: int = 0) -> list[Trace]: ...
+async def list_by_application(
+    self, application_name: str, limit: int = 100, offset: int = 0
+) -> list[Trace]: ...
 async def purge_older_than(self, created_before_iso: str) -> int: ...
 ```
 

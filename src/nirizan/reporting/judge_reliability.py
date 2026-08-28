@@ -91,35 +91,30 @@ def compute_judge_reliability(
             anchor_set_ids,
         )
         raise ValueError(
-            "All verdicts must share one anchor_set_id; "
-            f"got {sorted(anchor_set_ids)}."
+            f"All verdicts must share one anchor_set_id; got {sorted(anchor_set_ids)}."
         )
 
     total = len(verdicts)
     judge_drift_count = sum(
-        1 for v in verdicts if v.attribution in (DriftAttribution.JUDGE_DRIFT, DriftAttribution.JOINT_DRIFT)
+        1
+        for v in verdicts
+        if v.attribution in (DriftAttribution.JUDGE_DRIFT, DriftAttribution.JOINT_DRIFT)
     )
     system_drift_count = sum(
-        1 for v in verdicts if v.attribution in (DriftAttribution.SYSTEM_DRIFT, DriftAttribution.JOINT_DRIFT)
+        1
+        for v in verdicts
+        if v.attribution in (DriftAttribution.SYSTEM_DRIFT, DriftAttribution.JOINT_DRIFT)
     )
-    joint_drift_count = sum(
-        1 for v in verdicts if v.attribution == DriftAttribution.JOINT_DRIFT
-    )
-    inconclusive_count = sum(
-        1 for v in verdicts if v.attribution == DriftAttribution.INCONCLUSIVE
-    )
-    none_count = sum(
-        1 for v in verdicts if v.attribution == DriftAttribution.NONE
-    )
+    joint_drift_count = sum(1 for v in verdicts if v.attribution == DriftAttribution.JOINT_DRIFT)
+    inconclusive_count = sum(1 for v in verdicts if v.attribution == DriftAttribution.INCONCLUSIVE)
+    none_count = sum(1 for v in verdicts if v.attribution == DriftAttribution.NONE)
 
     # INCONCLUSIVE verdicts carry a judge_score_delta of 0.0 as a placeholder
     # for "not measured," not a real observation of zero drift. Including
     # them here would silently bias mean_judge_score_delta toward zero and
     # understate judge_score_delta_std. Exclude them from the delta series;
     # they are still counted in inconclusive_rate and flagged_verdicts.
-    measured_verdicts = [
-        v for v in verdicts if v.attribution != DriftAttribution.INCONCLUSIVE
-    ]
+    measured_verdicts = [v for v in verdicts if v.attribution != DriftAttribution.INCONCLUSIVE]
     if not measured_verdicts:
         logger.error(
             "compute_judge_reliability received only INCONCLUSIVE verdicts for "
@@ -161,9 +156,7 @@ def compute_judge_reliability(
         judge_score_delta_std=_std(judge_deltas, mean_judge_delta),
         mean_calibration_mae=mean_calibration_mae,
         status=status,
-        flagged_verdicts=[
-            v for v in verdicts if v.attribution != DriftAttribution.NONE
-        ],
+        flagged_verdicts=[v for v in verdicts if v.attribution != DriftAttribution.NONE],
     )
 
     if status == JudgeReliabilityStatus.UNSTABLE:
@@ -176,8 +169,7 @@ def compute_judge_reliability(
         )
     else:
         logger.info(
-            "Judge reliability STABLE for anchor_set_id=%s: "
-            "judge_drift_rate=%.3f over %d verdicts",
+            "Judge reliability STABLE for anchor_set_id=%s: judge_drift_rate=%.3f over %d verdicts",
             metrics.anchor_set_id,
             judge_drift_rate,
             total,

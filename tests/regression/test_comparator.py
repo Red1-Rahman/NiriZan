@@ -150,9 +150,7 @@ def test_invalid_comparator_params() -> None:
     with pytest.raises(ValueError, match="alpha must be between 0 and 1."):
         BaselineComparator(alpha=1.5)
 
-    with pytest.raises(
-        ValueError, match="warning_effect must be negative."
-    ):
+    with pytest.raises(ValueError, match="warning_effect must be negative."):
         classify_severity(
             significant=True,
             effect_size=-0.5,

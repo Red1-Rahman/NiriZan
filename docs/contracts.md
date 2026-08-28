@@ -65,9 +65,9 @@ class Trace(BaseModel):
     application_name: str = Field(min_length=1)
     spans: list[Span] = Field(default_factory=list)
     created_at: datetime
-    code_commit: str | None = None       # Phase 3: stamped by collector.py at ingest
+    code_commit: str | None = None  # Phase 3: stamped by collector.py at ingest
     data_snapshot_id: str | None = None  # Phase 3: stamped by collector.py at ingest
-    session_id: UUID | None = None       # Phase 3: set when captured inside Tracer.session(...)
+    session_id: UUID | None = None  # Phase 3: set when captured inside Tracer.session(...)
 
     def spans_of_kind(self, kind: SpanKind) -> list[Span]:
         return [s for s in self.spans if s.kind == kind]
@@ -83,6 +83,7 @@ class Trace(BaseModel):
 
 ```python
 from typing import Protocol
+
 
 class TraceExporter(Protocol):
     async def export(self, trace: Trace) -> None:
@@ -107,9 +108,7 @@ class TraceExporter(Protocol):
 class TraceRepository(Protocol):
     async def save(self, trace: Trace) -> None: ...
     async def get(self, trace_id: UUID) -> Trace | None: ...
-    async def list_by_application(
-        self, application_name: str, limit: int = 100
-    ) -> list[Trace]: ...
+    async def list_by_application(self, application_name: str, limit: int = 100) -> list[Trace]: ...
 ```
 
 **Contract guarantees:**
@@ -173,8 +172,7 @@ class MetricDispatcher(Protocol):
         """
         ...
 
-    async def dispatch(self, trace: Trace, system_type: str) -> list[MetricResult]:
-        ...
+    async def dispatch(self, trace: Trace, system_type: str) -> list[MetricResult]: ...
 ```
 
 **Contract guarantees:**
@@ -385,8 +383,12 @@ class DriftAttribution(str, Enum):
     NONE = "none"
     SYSTEM_DRIFT = "system_drift"
     JUDGE_DRIFT = "judge_drift"
-    JOINT_DRIFT = "joint_drift"     # Phase 5 (post-launch): both judge and system shifted significantly
-    INCONCLUSIVE = "inconclusive"   # Phase 5 (post-launch): an input score distribution was empty or non-finite
+    JOINT_DRIFT = (
+        "joint_drift"  # Phase 5 (post-launch): both judge and system shifted significantly
+    )
+    INCONCLUSIVE = (
+        "inconclusive"  # Phase 5 (post-launch): an input score distribution was empty or non-finite
+    )
 
 
 class AttributionVerdict(BaseModel):
@@ -464,8 +466,8 @@ class JudgeReliabilityMetrics(BaseModel):
     verdict_count: int = Field(ge=1)
     judge_drift_rate: float = Field(ge=0.0, le=1.0)
     system_drift_rate: float = Field(ge=0.0, le=1.0)
-    joint_drift_rate: float = Field(ge=0.0, le=1.0, default=0.0)      # Phase 5 (post-launch)
-    inconclusive_rate: float = Field(ge=0.0, le=1.0, default=0.0)     # Phase 5 (post-launch)
+    joint_drift_rate: float = Field(ge=0.0, le=1.0, default=0.0)  # Phase 5 (post-launch)
+    inconclusive_rate: float = Field(ge=0.0, le=1.0, default=0.0)  # Phase 5 (post-launch)
     none_rate: float = Field(ge=0.0, le=1.0)
     mean_judge_score_delta: float
     judge_score_delta_std: float

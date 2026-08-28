@@ -482,8 +482,7 @@ async def test_end_to_end_phase4_statistical_gating_and_ci_summary(
         )
 
         pass_scores_by_metric = {
-            m: (candidate_pass_scores[m], baseline_scores[m])
-            for m in candidate_pass_scores
+            m: (candidate_pass_scores[m], baseline_scores[m]) for m in candidate_pass_scores
         }
         pass_gate_verdict = evaluate_gate(
             verdicts=pass_verdicts,
@@ -502,8 +501,7 @@ async def test_end_to_end_phase4_statistical_gating_and_ci_summary(
         )
 
         block_scores_by_metric = {
-            m: (candidate_block_scores[m], baseline_scores[m])
-            for m in candidate_block_scores
+            m: (candidate_block_scores[m], baseline_scores[m]) for m in candidate_block_scores
         }
         block_gate_verdict = evaluate_gate(
             verdicts=block_verdicts,
@@ -511,9 +509,7 @@ async def test_end_to_end_phase4_statistical_gating_and_ci_summary(
         )
 
         assert block_gate_verdict.passed is False
-        assert any(
-            v.severity == RegressionSeverity.BLOCKING for v in block_verdicts
-        )
+        assert any(v.severity == RegressionSeverity.BLOCKING for v in block_verdicts)
         assert gate_exit_code(block_gate_verdict) == 1
 
         # ------------------------------------------------------------------
@@ -572,18 +568,14 @@ async def test_end_to_end_trust_attribution_and_dashboard_reporting(
     v_none = engine.analyze(
         anchor_id, ref_scores, rescored_stable, baseline_scores, candidate_stable
     )
-    v_sys = engine.analyze(
-        anchor_id, ref_scores, rescored_stable, baseline_scores, candidate_drift
-    )
+    v_sys = engine.analyze(anchor_id, ref_scores, rescored_stable, baseline_scores, candidate_drift)
     v_judge = engine.analyze(
         anchor_id, ref_scores, rescored_drift, baseline_scores, candidate_stable
     )
     v_joint = engine.analyze(
         anchor_id, ref_scores, rescored_drift, baseline_scores, candidate_drift
     )
-    v_inc = engine.analyze(
-        anchor_id, [], rescored_stable, baseline_scores, candidate_stable
-    )
+    v_inc = engine.analyze(anchor_id, [], rescored_stable, baseline_scores, candidate_stable)
 
     assert v_none.attribution == DriftAttribution.NONE
     assert v_sys.attribution == DriftAttribution.SYSTEM_DRIFT

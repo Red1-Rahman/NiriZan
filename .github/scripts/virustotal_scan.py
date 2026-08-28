@@ -19,6 +19,7 @@ HEADERS = {
     "Accept": "application/json",
 }
 
+
 def get_file_sha256(file_path: str) -> str:
     hasher = hashlib.sha256()
     with open(file_path, "rb") as f:
@@ -26,7 +27,10 @@ def get_file_sha256(file_path: str) -> str:
             hasher.update(chunk)
     return hasher.hexdigest()
 
-def make_vt_request(url: str, method: str = "GET", data: bytes = None, content_type: str = None) -> tuple[int, dict]:
+
+def make_vt_request(
+    url: str, method: str = "GET", data: bytes = None, content_type: str = None
+) -> tuple[int, dict]:
     headers = HEADERS.copy()
     if content_type:
         headers["Content-Type"] = content_type
@@ -44,6 +48,7 @@ def make_vt_request(url: str, method: str = "GET", data: bytes = None, content_t
             parsed = {"raw": err_body}
         return e.code, parsed
 
+
 def poll_analysis(analysis_id: str, timeout: int = 300) -> dict:
     url = f"https://www.virustotal.com/api/v3/analyses/{analysis_id}"
     start = time.time()
@@ -57,20 +62,20 @@ def poll_analysis(analysis_id: str, timeout: int = 300) -> dict:
     print(f"⚠️ Polling timed out for analysis {analysis_id}")
     return {}
 
+
 def scan_file(file_path: str):
     file_hash = get_file_sha256(file_path)
     print(f"\n🔍 Processing: {file_path} (SHA-256: {file_hash[:12]}...)")
 
     # Step 1: Check if report already exists via Hash
     status, body = make_vt_request(f"https://www.virustotal.com/api/v3/files/{file_hash}")
-    
+
     if status == 200:
         stats = body.get("data", {}).get("attributes", {}).get("last_analysis_stats", {})
         print(f"✅ Existing VirusTotal report found. Stats: {stats}")
         # Optional: Trigger re-analysis if desired
         status, re_body = make_vt_request(
-            f"https://www.virustotal.com/api/v3/files/{file_hash}/analyse",
-            method="POST"
+            f"https://www.virustotal.com/api/v3/files/{file_hash}/analyse", method="POST"
         )
         if status == 200:
             analysis_id = re_body.get("data", {}).get("id")
@@ -87,16 +92,20 @@ def scan_file(file_path: str):
 
     boundary = f"----WebKitFormBoundary{hashlib.md5(str(time.time()).encode()).hexdigest()}"
     body_data = (
-        f"--{boundary}\r\n"
-        f'Content-Disposition: form-data; name="file"; filename="{os.path.basename(file_path)}"\r\n'
-        f"Content-Type: application/octet-stream\r\n\r\n"
-    ).encode("utf-8") + file_bytes + f"\r\n--{boundary}--\r\n".encode("utf-8")
+        (
+            f"--{boundary}\r\n"
+            f'Content-Disposition: form-data; name="file"; filename="{os.path.basename(file_path)}"\r\n'
+            f"Content-Type: application/octet-stream\r\n\r\n"
+        ).encode("utf-8")
+        + file_bytes
+        + f"\r\n--{boundary}--\r\n".encode("utf-8")
+    )
 
     status, resp = make_vt_request(
         "https://www.virustotal.com/api/v3/files",
         method="POST",
         data=body_data,
-        content_type=f"multipart/form-data; boundary={boundary}"
+        content_type=f"multipart/form-data; boundary={boundary}",
     )
 
     if status == 200:
@@ -114,6 +123,7 @@ def scan_file(file_path: str):
         print(f"❌ Failed to process file. Status: {status}, Response: {resp}")
         sys.exit(1)
 
+
 def main():
     if len(sys.argv) < 2:
         print("Usage: python virustotal_scan.py <file_glob1> [<file_glob2> ...]")
@@ -129,6 +139,7 @@ def main():
 
     for file_path in files_to_scan:
         scan_file(file_path)
+
 
 if __name__ == "__main__":
     main()

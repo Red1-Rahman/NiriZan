@@ -1,5 +1,6 @@
 # tests/test_security.py
 """Security regression tests for nirizan."""
+
 import ast
 import pathlib
 import re
@@ -9,9 +10,16 @@ ROOT = pathlib.Path(nirizan.__file__).resolve().parent
 
 # Dangerous function calls forbidden in core SDK logic
 DANGEROUS_CALLS = {
-    "eval", "exec", "compile", "__import__",
-    "os.system", "pickle.loads", "marshal.loads",
-    "shelve.open", "ctypes.CDLL", "pty.spawn",
+    "eval",
+    "exec",
+    "compile",
+    "__import__",
+    "os.system",
+    "pickle.loads",
+    "marshal.loads",
+    "shelve.open",
+    "ctypes.CDLL",
+    "pty.spawn",
 }
 
 # Explicit allowlist for legitimate internal calls (file_name, call_name)
@@ -19,14 +27,10 @@ ALLOWED_CALLS = {
     ("collector.py", "subprocess.run"),  # Safe usage for Git commit SHA resolution
 }
 
-OBFUSCATION_CALLS = {
-    "base64.b64decode", "zlib.decompress", "lzma.decompress"
-}
+OBFUSCATION_CALLS = {"base64.b64decode", "zlib.decompress", "lzma.decompress"}
 
 # Top-level network modules banned in core SDK
-BANNED_NETWORK_MODULES = {
-    "socket", "urllib", "urllib3", "requests", "httpx", "aiohttp"
-}
+BANNED_NETWORK_MODULES = {"socket", "urllib", "urllib3", "requests", "httpx", "aiohttp"}
 
 
 def _iter_python_files():
