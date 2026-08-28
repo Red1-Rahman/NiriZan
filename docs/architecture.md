@@ -132,7 +132,7 @@ This is intentionally modular so new metrics can be added without changing the o
 **Purpose:** Answer the question "did the system get worse, or did the judge change?"
 
 - **Anchor Set:** a small, fixed, human-labeled set of queries and expected responses, re-scored at a steady rate alongside production traffic.
-- **Attribution Engine:** compares current judge behavior on the anchor set against historical judge behavior. Produces a five-state verdict: no drift, system drift, judge drift, joint drift (both shifted significantly), or inconclusive (an input distribution was empty or contained non-finite values).
+- **Attribution Engine:** compares current judge behavior on the anchor set against historical judge behavior. Produces a five-state verdict: no drift, system drift, judge drift, joint drift (both system and judge shifted significantly), or inconclusive (an input distribution was empty or contained non-finite values).
 - **Design decision:** this layer exists specifically because judge models (especially third-party API-based judges) can change silently, and conflating judge drift with system regression would make every other part of the pipeline untrustworthy.
 
 ### 3.5 Trace Repository & Experiment Store
