@@ -163,5 +163,5 @@ For revisions of an existing experiment, retain the relationship to the original
 ```
 
 <div align="center">
-Rahman, R. NiriZan (Version 0.1.0) [Computer software]. https://github.com/Red1-Rahman/NiriZan
+Rahman, R. NiriZan (Version 0.2.0) [Computer software]. https://github.com/Red1-Rahman/NiriZan
 </div>
