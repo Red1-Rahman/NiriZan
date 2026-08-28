@@ -107,6 +107,8 @@ def test_attribution_inconclusive_empty(engine: AttributionEngine) -> None:
     )
 
     assert verdict.attribution == DriftAttribution.INCONCLUSIVE
+    assert verdict.system_score_delta == 0.0
+    assert verdict.judge_score_delta == 0.0
     assert "Inconclusive attribution" in verdict.explanation
 
 
@@ -123,4 +125,6 @@ def test_attribution_inconclusive_nan(engine: AttributionEngine) -> None:
     )
 
     assert verdict.attribution == DriftAttribution.INCONCLUSIVE
+    assert verdict.system_score_delta == 0.0
+    assert verdict.judge_score_delta == 0.0
     assert "non-finite values" in verdict.explanation
