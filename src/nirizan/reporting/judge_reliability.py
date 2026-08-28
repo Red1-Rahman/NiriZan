@@ -112,7 +112,26 @@ def compute_judge_reliability(
         1 for v in verdicts if v.attribution == DriftAttribution.NONE
     )
 
-    judge_deltas = [v.judge_score_delta for v in verdicts]
+    # INCONCLUSIVE verdicts carry a judge_score_delta of 0.0 as a placeholder
+    # for "not measured," not a real observation of zero drift. Including
+    # them here would silently bias mean_judge_score_delta toward zero and
+    # understate judge_score_delta_std. Exclude them from the delta series;
+    # they are still counted in inconclusive_rate and flagged_verdicts.
+    measured_verdicts = [
+        v for v in verdicts if v.attribution != DriftAttribution.INCONCLUSIVE
+    ]
+    if not measured_verdicts:
+        logger.error(
+            "compute_judge_reliability received only INCONCLUSIVE verdicts for "
+            "anchor_set_id=%s; cannot compute delta statistics.",
+            verdicts[0].anchor_set_id,
+        )
+        raise ValueError(
+            "At least one non-INCONCLUSIVE verdict is required to compute "
+            "judge_score_delta statistics."
+        )
+
+    judge_deltas = [v.judge_score_delta for v in measured_verdicts]
     mean_judge_delta = _mean(judge_deltas)
 
     judge_drift_rate = judge_drift_count / total
