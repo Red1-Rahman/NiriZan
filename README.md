@@ -41,7 +41,7 @@ Package: [pypi.org/project/nirizan](https://pypi.org/project/nirizan/)
 
 ## What NiriZan Does
 
-1. **Automated judge-drift attribution.** `AttributionEngine` produces a three-state verdict, `NONE`, `JUDGE_DRIFT`, or `SYSTEM_DRIFT`, distinguishing a quality drop in the system under test from a change in the judge measuring it.
+1. **Automated judge-drift attribution.** `AttributionEngine` produces a five-state verdict — `NONE`, `SYSTEM_DRIFT`, `JUDGE_DRIFT`, `JOINT_DRIFT`, or `INCONCLUSIVE` — distinguishing a quality drop in the system under test from a change in the judge measuring it, and separately flagging when both shifted at once or when there wasn't enough data to tell.
 2. **Fixed evaluation anchors, rescored on demand.** A versioned `AnchorSet` is never edited in place; updating it means creating a new `anchor_set_id`, so historical comparisons stay meaningful.
 3. **Statistically rigorous regression gating.** Mann-Whitney U tests with Holm-Bonferroni correction for multiple comparisons, Cohen's d effect sizes, and bootstrap confidence intervals (5,000 resamples), not a bare threshold on a single score.
 4. **Trust-weighted health scoring.** `compute_system_health_score` discounts the aggregate score when the attribution verdict signals judge unreliability, not just system degradation.
@@ -93,6 +93,8 @@ Together, **Niri + Zan** captures the essence of the project: inspecting AI syst
 For the complete user guide, see the **[NiriZan User Manual](docs/user-manual.md)**. link
 
 For architecture, contracts, module reference docs, and the evaluation results behind the claims above, see [`docs/`](docs/).
+
+See **[CHANGELOG.md](CHANGELOG.md)** for release history and notable changes between versions.
 
 [The Ruler Can Change Too: Navigating Judge Drift in Production AI Evaluation](https://nirizan.hashnode.dev/the-ruler-can-change-too-navigating-judge-drift-in-production-ai-evaluation), the first NiriZan engineering post, covering the judge-drift problem and the fixed-anchor, statistical-attribution approach this project takes to it.
 
