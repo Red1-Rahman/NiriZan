@@ -65,9 +65,9 @@ class Trace(BaseModel):
     application_name: str = Field(min_length=1)
     spans: list[Span] = Field(default_factory=list)
     created_at: datetime
-    code_commit: str | None = None       # Phase 3: stamped by collector.py at ingest
+    code_commit: str | None = None  # Phase 3: stamped by collector.py at ingest
     data_snapshot_id: str | None = None  # Phase 3: stamped by collector.py at ingest
-    session_id: UUID | None = None       # Phase 3: set when captured inside Tracer.session(...)
+    session_id: UUID | None = None  # Phase 3: set when captured inside Tracer.session(...)
 
     def spans_of_kind(self, kind: SpanKind) -> list[Span]:
         return [s for s in self.spans if s.kind == kind]
@@ -83,6 +83,7 @@ class Trace(BaseModel):
 
 ```python
 from typing import Protocol
+
 
 class TraceExporter(Protocol):
     async def export(self, trace: Trace) -> None:
@@ -107,9 +108,7 @@ class TraceExporter(Protocol):
 class TraceRepository(Protocol):
     async def save(self, trace: Trace) -> None: ...
     async def get(self, trace_id: UUID) -> Trace | None: ...
-    async def list_by_application(
-        self, application_name: str, limit: int = 100
-    ) -> list[Trace]: ...
+    async def list_by_application(self, application_name: str, limit: int = 100) -> list[Trace]: ...
 ```
 
 **Contract guarantees:**
@@ -173,8 +172,7 @@ class MetricDispatcher(Protocol):
         """
         ...
 
-    async def dispatch(self, trace: Trace, system_type: str) -> list[MetricResult]:
-        ...
+    async def dispatch(self, trace: Trace, system_type: str) -> list[MetricResult]: ...
 ```
 
 **Contract guarantees:**
@@ -385,6 +383,12 @@ class DriftAttribution(str, Enum):
     NONE = "none"
     SYSTEM_DRIFT = "system_drift"
     JUDGE_DRIFT = "judge_drift"
+    JOINT_DRIFT = (
+        "joint_drift"  # Phase 5 (post-launch): both judge and system shifted significantly
+    )
+    INCONCLUSIVE = (
+        "inconclusive"  # Phase 5 (post-launch): an input score distribution was empty or non-finite
+    )
 
 
 class AttributionVerdict(BaseModel):
@@ -400,7 +404,10 @@ class AttributionVerdict(BaseModel):
 
 **Contract guarantees:**
 
-* `attribution` is exactly one of the three enum values, never a probability or a blend. The Attribution Engine is allowed to be uncertain internally, but it must commit to a verdict at this boundary. Anything downstream (Regression Detection, Reporting) treats this as a categorical fact, not a score to threshold again.
+* `attribution` is exactly one of the five enum values, never a probability or a blend. The Attribution Engine is allowed to be uncertain internally, but it must commit to a verdict at this boundary. Anything downstream (Regression Detection, Reporting) treats this as a categorical fact, not a score to threshold again.
+* `JOINT_DRIFT` means both the judge-side shift (`judge_score_delta`) and the system-side shift (`system_score_delta`) independently crossed their respective significance conditions in the same evaluation window (see the direction-constraint bullet below for what "crossed" means on the system side). It is a distinct state, not a tiebreak between `SYSTEM_DRIFT` and `JUDGE_DRIFT`: downstream consumers that only branch on those two will silently drop joint-drift verdicts, which is precisely the ambiguous case Reporting most needs surfaced.
+* `SYSTEM_DRIFT` and `JOINT_DRIFT` require the system-side shift to be a **drop**: `AttributionEngine.analyze` only sets the system-shift condition when `abs(system_score_delta) >= significance_threshold` **and** `system_score_delta < 0`. A production candidate whose score improved by more than the threshold does not trigger `SYSTEM_DRIFT` or `JOINT_DRIFT` — it is reported as `NONE` (or `JUDGE_DRIFT`, if the judge side also shifted). This is intentional and asymmetric with the judge side: `JUDGE_DRIFT` fires on `abs(judge_score_delta) >= significance_threshold` regardless of sign, because a judge that silently drifts *either* looser or stricter is a reliability problem worth flagging, whereas a system that improved beyond the anchor set isn't the failure mode this layer exists to catch. Callers must not assume `SYSTEM_DRIFT`/`JOINT_DRIFT` cover "any large system-side change" — only unexplained drops.
+* `INCONCLUSIVE` means the Attribution Engine could not evaluate the anchor or production score distributions at all — one of the four input score lists was empty or contained a non-finite value. `system_score_delta` and `judge_score_delta` are both `0.0` on an `INCONCLUSIVE` verdict; callers must not read `0.0` on these fields as "no drift" without first checking `attribution`.
 * `system_score_delta` and `judge_score_delta` are both included even when `attribution` is `NONE`, so that Reporting's Judge Reliability Panel (Phase 5) can plot both time series regardless of whether a verdict crossed a threshold that day. Do not omit these fields "to save space" when there's no drift; the longitudinal panel needs the full series, not just the interesting points.
 
 ### `AnchorSet` (`trust/anchor_set.py`)
@@ -459,6 +466,8 @@ class JudgeReliabilityMetrics(BaseModel):
     verdict_count: int = Field(ge=1)
     judge_drift_rate: float = Field(ge=0.0, le=1.0)
     system_drift_rate: float = Field(ge=0.0, le=1.0)
+    joint_drift_rate: float = Field(ge=0.0, le=1.0, default=0.0)  # Phase 5 (post-launch)
+    inconclusive_rate: float = Field(ge=0.0, le=1.0, default=0.0)  # Phase 5 (post-launch)
     none_rate: float = Field(ge=0.0, le=1.0)
     mean_judge_score_delta: float
     judge_score_delta_std: float
@@ -471,20 +480,24 @@ class JudgeReliabilityMetrics(BaseModel):
 
 * `model_config = ConfigDict(strict=True)` means Pydantic performs strict validation rather than silently coercing incompatible input types.
 * `verdict_count` must be at least `1`. An empty verdict window cannot produce a valid reliability summary.
-* `judge_drift_rate`, `system_drift_rate`, and `none_rate` are bounded to `[0.0, 1.0]`. They represent fractions of the supplied verdict window, not percentages from `0` to `100`.
+* `judge_drift_rate`, `system_drift_rate`, `joint_drift_rate`, `inconclusive_rate`, and `none_rate` are bounded to `[0.0, 1.0]`. They represent fractions of the supplied verdict window, not percentages from `0` to `100`.
 * `anchor_set_id` identifies the fixed `AnchorSet` against which the summarized verdicts were evaluated. A reliability window must not mix verdicts from different anchor sets.
 * `period_start` is the earliest `evaluated_at` timestamp in the supplied verdict window, and `period_end` is the latest.
-* `judge_drift_rate` is the fraction of verdicts whose `attribution` is `DriftAttribution.JUDGE_DRIFT`.
-* `system_drift_rate` is the fraction of verdicts whose `attribution` is `DriftAttribution.SYSTEM_DRIFT`.
+* `judge_drift_rate` is the fraction of verdicts whose `attribution` is `DriftAttribution.JUDGE_DRIFT` **or** `DriftAttribution.JOINT_DRIFT`. See the Phase 5 (post-launch) **Breaking Change** entry below: this is a change in meaning from the original definition of this field.
+* `system_drift_rate` is the fraction of verdicts whose `attribution` is `DriftAttribution.SYSTEM_DRIFT` **or** `DriftAttribution.JOINT_DRIFT`. Same breaking-change note as `judge_drift_rate` applies.
+* `joint_drift_rate` is the fraction of verdicts whose `attribution` is `DriftAttribution.JOINT_DRIFT`. It is already counted inside both `judge_drift_rate` and `system_drift_rate` above; it is exposed separately so a reader can recover the pure single-cause rates by subtraction (`judge_drift_rate - joint_drift_rate`, `system_drift_rate - joint_drift_rate`) without re-deriving them from `flagged_verdicts`.
+* `inconclusive_rate` is the fraction of verdicts whose `attribution` is `DriftAttribution.INCONCLUSIVE`. These verdicts are excluded from `judge_drift_rate`, `system_drift_rate`, and `none_rate`.
 * `none_rate` is the fraction of supplied verdicts whose `attribution` is `DriftAttribution.NONE`.
-* `mean_judge_score_delta` is the arithmetic mean of `judge_score_delta` across every supplied verdict, including verdicts whose attribution is `NONE` or `SYSTEM_DRIFT`.
-* `judge_score_delta_std` is the sample standard deviation of the complete `judge_score_delta` series. For a one-verdict window, it is `0.0` because there is no sample variation to estimate.
+* `judge_drift_rate + system_drift_rate + none_rate + inconclusive_rate - joint_drift_rate` sums to `1.0` over the supplied window (the subtraction removes `JOINT_DRIFT`'s double-count in the first two terms).
+* `mean_judge_score_delta` is the arithmetic mean of `judge_score_delta` across every supplied verdict **except** those whose attribution is `DriftAttribution.INCONCLUSIVE`. `AttributionEngine.analyze` reports `judge_score_delta = 0.0` on an `INCONCLUSIVE` verdict as a placeholder meaning "not measured," not as an observation of zero drift; including it would bias this mean toward zero. `NONE`, `SYSTEM_DRIFT`, `JUDGE_DRIFT`, and `JOINT_DRIFT` verdicts are all included, since each of those carries a real measured delta regardless of which threshold it crossed.
+* `judge_score_delta_std` is the sample standard deviation of that same non-`INCONCLUSIVE` `judge_score_delta` series. For a window with exactly one non-`INCONCLUSIVE` verdict, it is `0.0` because there is no sample variation to estimate.
+* `compute_judge_reliability` rejects a verdict window in which every verdict is `DriftAttribution.INCONCLUSIVE` with `ValueError`, since there is no measured delta to summarize. A window with at least one non-`INCONCLUSIVE` verdict alongside any number of `INCONCLUSIVE` ones is valid; the `INCONCLUSIVE` ones are still reflected in `inconclusive_rate`, `verdict_count`, and `flagged_verdicts`, just not in the delta statistics.
 * `mean_calibration_mae` is optional because calibration data is not required to construct the reliability summary. When calibration errors are supplied and contain `mae` values, the field contains their arithmetic mean; otherwise it remains `None`.
 * `flagged_verdicts` defaults to an empty list. When computed from a verdict window, it contains every verdict whose attribution is not `DriftAttribution.NONE`, preserving both judge-drift and system-drift verdicts for downstream reporting.
 * `status` is `UNSTABLE` when the computed judge-drift rate is strictly greater than the configured warning threshold; otherwise it is `STABLE`. The current default warning threshold is `0.10`.
 * `compute_judge_reliability` rejects an empty verdict list with `ValueError`.
 * `compute_judge_reliability` rejects a verdict window containing multiple `anchor_set_id` values with `ValueError`. An anchor-set update creates a new `anchor_set_id`; verdicts from different rulers must therefore be summarized separately.
-* The reliability summary is derived from the complete supplied verdict window. In particular, the score-delta statistics are not restricted to flagged verdicts.
+* The reliability summary's non-delta fields (`verdict_count`, `*_rate` fields, `flagged_verdicts`) are derived from the complete supplied verdict window. The delta statistics (`mean_judge_score_delta`, `judge_score_delta_std`) are derived from the non-`INCONCLUSIVE` subset only, per the bullets above; they are not restricted to `flagged_verdicts` (i.e. `NONE`-attribution verdicts are still included in the delta statistics, just not in `flagged_verdicts`).
 
 ### `DashboardSnapshot` (`reporting/dashboard.py`)
 
@@ -520,6 +533,21 @@ class DashboardSnapshot(BaseModel):
 * Judge reliability is computed from the supplied attribution history. If reliability aggregation fails validation, such as when the verdicts contain mixed anchor sets, the dashboard assembly logs the failure and continues with the health score rather than failing the entire snapshot.
 * `regression_verdicts` and `gate_verdict` are optional reporting inputs. Omitting them produces an empty regression list and a `None` gate verdict respectively.
 * The model is data only. It does not render, persist, or otherwise own presentation behavior.
+
+## Phase 5 (post-launch) — Breaking Change: `DriftAttribution` expansion and `judge_drift_rate` / `system_drift_rate` redefinition
+
+This section documents a breaking change to two Phase 5 contracts, per the Versioning Rule at the bottom of this document.
+
+**What changed:**
+
+1. `DriftAttribution` (`trust/attribution.py`) gained two new members: `JOINT_DRIFT` (both judge and system shifted significantly in the same window) and `INCONCLUSIVE` (an input score distribution was empty or non-finite). The enum went from three states to five. This part alone is additive to the enum's *domain*, but it is not additive to the *meaning* of the two rate fields below, because `compute_judge_reliability` folds `JOINT_DRIFT` into both of them.
+2. `JudgeReliabilityMetrics.judge_drift_rate` (`reporting/judge_reliability.py`) no longer means "fraction of verdicts where `attribution == JUDGE_DRIFT`." It now means "fraction of verdicts where `attribution` is `JUDGE_DRIFT` or `JOINT_DRIFT`." `system_drift_rate` changed the same way with `SYSTEM_DRIFT` / `JOINT_DRIFT`. Two new fields, `joint_drift_rate` and `inconclusive_rate`, were added to let a reader recover the original single-cause rates.
+
+**Why this is breaking, not additive:** the Versioning Rule treats "changing a field's meaning" as a breaking change even when the field's type and bounds are untouched. `judge_drift_rate` still validates as `float, ge=0.0, le=1.0`, but the same historical verdict window now produces a different value than it did before `JOINT_DRIFT` existed, because joint-drift verdicts are no longer silently absent from the rate — they're double-counted into both `judge_drift_rate` and `system_drift_rate`.
+
+**Migration path for persisted data:** any `JudgeReliabilityMetrics` snapshot persisted before this change was computed under the old definition (pure `JUDGE_DRIFT` / `SYSTEM_DRIFT` fractions, with no `JOINT_DRIFT` or `INCONCLUSIVE` state to produce them) and remains valid under that old definition — it does not need to be rewritten, because `AttributionVerdict.attribution` in that historical data can only have been `NONE`, `SYSTEM_DRIFT`, or `JUDGE_DRIFT`. Do not recompute old snapshots against the new logic to "backfill" `joint_drift_rate`/`inconclusive_rate`; leave those two fields at their `0.0` default for pre-migration snapshots, which is correct since no verdict in that data can be `JOINT_DRIFT` or `INCONCLUSIVE`. Any code that compares a `judge_drift_rate` computed before this change against one computed after it, e.g. across the boundary in a longitudinal dashboard, is comparing two different metrics and must be updated to either recompute the old window under the new logic or clearly label the discontinuity.
+
+**Version bump:** requires a version bump in `pyproject.toml` per the Versioning Rule; not yet applied as of this section being written.
 
 ### `BehavioralAnchorMetric`
 

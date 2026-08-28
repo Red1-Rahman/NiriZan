@@ -50,16 +50,12 @@ def cohens_d(
     candidate_std = candidate.std(ddof=1)
     baseline_std = baseline.std(ddof=1)
 
-    pooled_std = math.sqrt(
-        (candidate_std**2 + baseline_std**2) / 2.0
-    )
+    pooled_std = math.sqrt((candidate_std**2 + baseline_std**2) / 2.0)
 
     if pooled_std == 0.0:
         return 0.0
 
-    return float(
-        (candidate.mean() - baseline.mean()) / pooled_std
-    )
+    return float((candidate.mean() - baseline.mean()) / pooled_std)
 
 
 def mean_delta(
@@ -80,9 +76,7 @@ def classify_severity(
         raise ValueError("warning_effect must be negative.")
 
     if blocking_effect >= warning_effect:
-        raise ValueError(
-            "blocking_effect must be more negative than warning_effect."
-        )
+        raise ValueError("blocking_effect must be more negative than warning_effect.")
 
     if not significant:
         return RegressionSeverity.NONE
@@ -179,9 +173,7 @@ class BaselineComparator:
             baseline_id=baseline_id,
             run_id=run_id,
             explanation=(
-                f"candidate-baseline delta={delta:.4f}; "
-                f"p={p_value:.4e}; "
-                f"Cohen's d={effect:.3f}"
+                f"candidate-baseline delta={delta:.4f}; p={p_value:.4e}; Cohen's d={effect:.3f}"
             ),
         )
 
@@ -194,9 +186,7 @@ class BaselineComparator:
         run_id: UUID,
     ) -> list[RegressionVerdict]:
         """Compare all metrics and apply family-wise correction."""
-        metric_names = sorted(
-            set(candidate_scores) | set(baseline_scores)
-        )
+        metric_names = sorted(set(candidate_scores) | set(baseline_scores))
 
         logger.info(
             "Comparing %d metric(s) between candidate run_id=%s and baseline_id=%s",
@@ -209,14 +199,10 @@ class BaselineComparator:
 
         for metric_name in metric_names:
             if metric_name not in candidate_scores:
-                raise ValueError(
-                    f"Candidate is missing metric: {metric_name}"
-                )
+                raise ValueError(f"Candidate is missing metric: {metric_name}")
 
             if metric_name not in baseline_scores:
-                raise ValueError(
-                    f"Baseline is missing metric: {metric_name}"
-                )
+                raise ValueError(f"Baseline is missing metric: {metric_name}")
 
             verdicts.append(
                 self.compare_metric(
@@ -242,9 +228,8 @@ class BaselineComparator:
         final: list[RegressionVerdict] = []
 
         for verdict in verdicts:
-            if (
-                verdict.severity != RegressionSeverity.NONE
-                and not corrected.get(verdict.metric_name, False)
+            if verdict.severity != RegressionSeverity.NONE and not corrected.get(
+                verdict.metric_name, False
             ):
                 logger.info(
                     "Reclassified metric '%s' severity from %s to NONE after Holm-Bonferroni correction",

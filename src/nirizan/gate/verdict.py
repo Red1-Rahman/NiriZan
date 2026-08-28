@@ -21,9 +21,7 @@ class GateVerdict(BaseModel):
 
     passed: bool
     confidence_interval: tuple[float, float]
-    regression_verdicts: list[RegressionVerdict] = Field(
-        default_factory=list
-    )
+    regression_verdicts: list[RegressionVerdict] = Field(default_factory=list)
     run_id: UUID
 
 
@@ -59,7 +57,9 @@ def bootstrap_delta_ci(
         raise ValueError("n_bootstrap must be positive.")
 
     if not 0.0 < confidence < 1.0:
-        logger.error("Bootstrap CI failed: confidence must be between 0 and 1, got %.4f", confidence)
+        logger.error(
+            "Bootstrap CI failed: confidence must be between 0 and 1, got %.4f", confidence
+        )
         raise ValueError("confidence must be between 0 and 1.")
 
     logger.debug(
@@ -93,11 +93,7 @@ def select_decision_metric(
         verdicts,
         key=lambda verdict: (
             -SEVERITY_WEIGHT[verdict.severity],
-            (
-                verdict.effect_size
-                if verdict.effect_size is not None
-                else 0.0
-            ),
+            (verdict.effect_size if verdict.effect_size is not None else 0.0),
         ),
     )
     logger.debug(
@@ -119,17 +115,13 @@ def evaluate_gate(
 ) -> GateVerdict:
     """Evaluate overall gate verdict across regression metrics."""
     if not verdicts:
-        raise ValueError(
-            "Gate requires at least one regression verdict."
-        )
+        raise ValueError("Gate requires at least one regression verdict.")
 
     logger.info("Evaluating gate across %d regression verdict(s)", len(verdicts))
 
     decision_metric = select_decision_metric(verdicts)
 
-    candidate_scores, baseline_scores = scores_by_metric[
-        decision_metric.metric_name
-    ]
+    candidate_scores, baseline_scores = scores_by_metric[decision_metric.metric_name]
 
     confidence_interval = bootstrap_delta_ci(
         candidate_scores,
@@ -137,9 +129,7 @@ def evaluate_gate(
     )
 
     blocking_verdicts = [
-        verdict
-        for verdict in verdicts
-        if verdict.severity == RegressionSeverity.BLOCKING
+        verdict for verdict in verdicts if verdict.severity == RegressionSeverity.BLOCKING
     ]
     passed = len(blocking_verdicts) == 0
 

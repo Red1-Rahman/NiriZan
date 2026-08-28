@@ -38,7 +38,7 @@ GPL-3.0-or-later
 
 Citation
 --------
-Rahman, R. NiriZan (Version 0.1.0) [Computer software].
+Rahman, R. NiriZan (Version 0.2.0) [Computer software].
 https://github.com/Red1-Rahman/NiriZan
 
 BibTeX
@@ -48,7 +48,7 @@ BibTeX
   license = {GPL-3.0-or-later},
   title = {{NiriZan}},
   url = {https://github.com/Red1-Rahman/NiriZan},
-  version = {0.1.0}
+  version = {0.2.0}
 }
 """
 
@@ -59,7 +59,7 @@ from nirizan._logging import (
     set_log_level,
 )
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 __all__ = [
     "__version__",

@@ -18,9 +18,7 @@ P = ParamSpec("P")
 R = TypeVar("R")
 
 
-def init_tracer(
-    application_name: str, exporter: Optional[BaseExporter] = None
-) -> Tracer:
+def init_tracer(application_name: str, exporter: Optional[BaseExporter] = None) -> Tracer:
     """Initialize and register the global tracer instance."""
     global _GLOBAL_TRACER
     tracer = Tracer(application_name=application_name, exporter=exporter)
@@ -57,9 +55,8 @@ def trace_span(
     tracer: Optional[Tracer] = None,
 ) -> Callable[[Callable[P, Coroutine[Any, Any, R]]], Callable[P, Coroutine[Any, Any, R]]]:
     """Decorator to instrument an async function with full signature preservation."""
-    def decorator(
-        func: Callable[P, Coroutine[Any, Any, R]]
-    ) -> Callable[P, Coroutine[Any, Any, R]]:
+
+    def decorator(func: Callable[P, Coroutine[Any, Any, R]]) -> Callable[P, Coroutine[Any, Any, R]]:
         span_name = name or func.__name__
 
         @functools.wraps(func)

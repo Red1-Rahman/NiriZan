@@ -28,11 +28,17 @@ from nirizan.regression.comparator import (
     BaselineComparator,
     RegressionSeverity,
 )
+from nirizan.reporting.dashboard import assemble_dashboard_snapshot
+from nirizan.reporting.judge_reliability import (
+    JudgeReliabilityStatus,
+    compute_judge_reliability,
+)
 from nirizan.storage.baselines import SQLiteBaselineRepository
 from nirizan.storage.experiment_store import SQLiteExperimentStore
 from nirizan.storage.models import Baseline, Run
 from nirizan.storage.run_repository import InMemoryRunRepository
 from nirizan.storage.trace_repository import SQLiteTraceRepository
+from nirizan.trust.attribution import AttributionEngine, DriftAttribution
 
 
 # ---------------------------------------------------------------------------
@@ -440,7 +446,6 @@ async def test_end_to_end_phase4_statistical_gating_and_ci_summary(
     # ------------------------------------------------------------------
     # 3. Statistical Gating & Baseline Comparison (Phase 4)
     # ------------------------------------------------------------------
-    # Create distributions representing a passing candidate vs degraded candidate
     rng = np.random.default_rng(42)
 
     baseline_scores = {
@@ -449,14 +454,12 @@ async def test_end_to_end_phase4_statistical_gating_and_ci_summary(
         "answer_relevance": rng.normal(loc=0.92, scale=0.02, size=30).clip(0.0, 1.0),
     }
 
-    # Candidate A: Equal/Better -> Should PASS gate
     candidate_pass_scores = {
         "context_relevance": rng.normal(loc=0.91, scale=0.02, size=30).clip(0.0, 1.0),
         "groundedness": rng.normal(loc=0.89, scale=0.02, size=30).clip(0.0, 1.0),
         "answer_relevance": rng.normal(loc=0.93, scale=0.02, size=30).clip(0.0, 1.0),
     }
 
-    # Candidate B: Severely Degraded -> Should BLOCK gate
     candidate_block_scores = {
         "context_relevance": rng.normal(loc=0.30, scale=0.05, size=30).clip(0.0, 1.0),
         "groundedness": rng.normal(loc=0.35, scale=0.05, size=30).clip(0.0, 1.0),
@@ -479,8 +482,7 @@ async def test_end_to_end_phase4_statistical_gating_and_ci_summary(
         )
 
         pass_scores_by_metric = {
-            m: (candidate_pass_scores[m], baseline_scores[m])
-            for m in candidate_pass_scores
+            m: (candidate_pass_scores[m], baseline_scores[m]) for m in candidate_pass_scores
         }
         pass_gate_verdict = evaluate_gate(
             verdicts=pass_verdicts,
@@ -499,8 +501,7 @@ async def test_end_to_end_phase4_statistical_gating_and_ci_summary(
         )
 
         block_scores_by_metric = {
-            m: (candidate_block_scores[m], baseline_scores[m])
-            for m in candidate_block_scores
+            m: (candidate_block_scores[m], baseline_scores[m]) for m in candidate_block_scores
         }
         block_gate_verdict = evaluate_gate(
             verdicts=block_verdicts,
@@ -508,9 +509,7 @@ async def test_end_to_end_phase4_statistical_gating_and_ci_summary(
         )
 
         assert block_gate_verdict.passed is False
-        assert any(
-            v.severity == RegressionSeverity.BLOCKING for v in block_verdicts
-        )
+        assert any(v.severity == RegressionSeverity.BLOCKING for v in block_verdicts)
         assert gate_exit_code(block_gate_verdict) == 1
 
         # ------------------------------------------------------------------
@@ -535,3 +534,91 @@ async def test_end_to_end_phase4_statistical_gating_and_ci_summary(
 
     experiment_store.close()
     baseline_repo.close()
+
+
+# ---------------------------------------------------------------------------
+# Integration test: Phase 5 — Trust, Attribution & Dashboard Reporting
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_end_to_end_trust_attribution_and_dashboard_reporting(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """
+    Full Phase 5 E2E Pipeline:
+    1. Run AttributionEngine across standard, joint drift, and inconclusive score scenarios.
+    2. Aggregate multi-outcome verdict windows with compute_judge_reliability().
+    3. Verify judge reliability status flags UNSTABLE when judge drift + joint drift rate exceeds threshold.
+    4. Assemble full DashboardSnapshots and assert system health score penalties for JOINT_DRIFT and INCONCLUSIVE.
+    5. Verify log stream output for dashboard assembly.
+    """
+    engine = AttributionEngine(significance_threshold=0.05)
+    anchor_id = "anchor-set-v1.0"
+
+    ref_scores = [0.90, 0.90, 0.90, 0.90]
+    rescored_stable = [0.90, 0.90, 0.90, 0.90]
+    rescored_drift = [0.70, 0.70, 0.70, 0.70]
+
+    baseline_scores = [0.90, 0.90, 0.90, 0.90]
+    candidate_stable = [0.90, 0.90, 0.90, 0.90]
+    candidate_drift = [0.65, 0.65, 0.65, 0.65]
+
+    # 1. Evaluate attribution across 5 outcomes
+    v_none = engine.analyze(
+        anchor_id, ref_scores, rescored_stable, baseline_scores, candidate_stable
+    )
+    v_sys = engine.analyze(anchor_id, ref_scores, rescored_stable, baseline_scores, candidate_drift)
+    v_judge = engine.analyze(
+        anchor_id, ref_scores, rescored_drift, baseline_scores, candidate_stable
+    )
+    v_joint = engine.analyze(
+        anchor_id, ref_scores, rescored_drift, baseline_scores, candidate_drift
+    )
+    v_inc = engine.analyze(anchor_id, [], rescored_stable, baseline_scores, candidate_stable)
+
+    assert v_none.attribution == DriftAttribution.NONE
+    assert v_sys.attribution == DriftAttribution.SYSTEM_DRIFT
+    assert v_judge.attribution == DriftAttribution.JUDGE_DRIFT
+    assert v_joint.attribution == DriftAttribution.JOINT_DRIFT
+    assert v_inc.attribution == DriftAttribution.INCONCLUSIVE
+
+    verdicts = [v_none, v_sys, v_judge, v_joint, v_inc]
+
+    # 2. Aggregated Judge Reliability Metrics
+    metrics = compute_judge_reliability(verdicts, drift_rate_warning=0.10)
+    assert metrics.verdict_count == 5
+    assert metrics.judge_drift_rate == pytest.approx(2 / 5)
+    assert metrics.system_drift_rate == pytest.approx(2 / 5)
+    assert metrics.joint_drift_rate == pytest.approx(1 / 5)
+    assert metrics.inconclusive_rate == pytest.approx(1 / 5)
+    assert metrics.none_rate == pytest.approx(1 / 5)
+    assert metrics.status == JudgeReliabilityStatus.UNSTABLE
+
+    # 3. Dashboard Snapshot Assembly with JOINT_DRIFT & INCONCLUSIVE
+    with caplog.at_level(logging.INFO):
+        snapshot_joint = assemble_dashboard_snapshot(
+            system_type="rag_pipeline",
+            quality_score=0.90,
+            confidence=0.95,
+            attribution_verdicts=[v_joint],
+        )
+
+        expected_joint_health = round(0.90 * 0.95 * 100.0 * 0.70, 1)
+        assert snapshot_joint.health_score == expected_joint_health
+        assert snapshot_joint.latest_attribution is not None
+        assert snapshot_joint.latest_attribution.attribution == DriftAttribution.JOINT_DRIFT
+
+        snapshot_inc = assemble_dashboard_snapshot(
+            system_type="rag_pipeline",
+            quality_score=0.90,
+            confidence=0.95,
+            attribution_verdicts=[v_inc],
+        )
+
+        expected_inc_health = round(0.90 * 0.95 * 100.0 * 0.85, 1)
+        assert snapshot_inc.health_score == expected_inc_health
+        assert snapshot_inc.latest_attribution is not None
+        assert snapshot_inc.latest_attribution.attribution == DriftAttribution.INCONCLUSIVE
+
+    assert "Assembled dashboard snapshot for system_type=rag_pipeline" in caplog.text

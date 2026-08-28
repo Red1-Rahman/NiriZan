@@ -17,16 +17,10 @@ def format_gate_summary(verdict: GateVerdict) -> str:
     ]
 
     for regression in verdict.regression_verdicts:
-        p_value = (
-            f"{regression.p_value:.4e}"
-            if regression.p_value is not None
-            else "n/a"
-        )
+        p_value = f"{regression.p_value:.4e}" if regression.p_value is not None else "n/a"
 
         effect_size = (
-            f"{regression.effect_size:.3f}"
-            if regression.effect_size is not None
-            else "n/a"
+            f"{regression.effect_size:.3f}" if regression.effect_size is not None else "n/a"
         )
 
         lines.append(
@@ -37,9 +31,7 @@ def format_gate_summary(verdict: GateVerdict) -> str:
         )
 
     lines.append("")
-    lines.append(
-        f"**Gate:** {'PASS' if verdict.passed else 'BLOCK'}"
-    )
+    lines.append(f"**Gate:** {'PASS' if verdict.passed else 'BLOCK'}")
     lines.append(
         "**95% bootstrap CI:** "
         f"`{verdict.confidence_interval[0]:.6f}, "

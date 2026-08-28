@@ -16,6 +16,8 @@ def compute_system_health_score(
         DriftAttribution.NONE: 1.00,
         DriftAttribution.JUDGE_DRIFT: 0.90,
         DriftAttribution.SYSTEM_DRIFT: 0.80,
+        DriftAttribution.JOINT_DRIFT: 0.70,
+        DriftAttribution.INCONCLUSIVE: 0.85,
     }
 
     multiplier = penalty_multipliers.get(attribution, 0.70)

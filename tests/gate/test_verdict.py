@@ -157,15 +157,11 @@ def test_gate_contains_bootstrap_confidence_interval(
 
 
 def test_bootstrap_delta_ci_validation() -> None:
-    with pytest.raises(
-        ValueError, match="Both distributions must contain observations."
-    ):
+    with pytest.raises(ValueError, match="Both distributions must contain observations."):
         bootstrap_delta_ci(np.array([]), np.array([1.0]))
 
     with pytest.raises(ValueError, match="n_bootstrap must be positive."):
         bootstrap_delta_ci(np.array([1.0]), np.array([1.0]), n_bootstrap=0)
 
-    with pytest.raises(
-        ValueError, match="confidence must be between 0 and 1."
-    ):
+    with pytest.raises(ValueError, match="confidence must be between 0 and 1."):
         bootstrap_delta_ci(np.array([1.0]), np.array([1.0]), confidence=1.5)

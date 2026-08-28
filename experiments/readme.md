@@ -86,7 +86,7 @@ Never hardcode API keys, tokens, or credentials inside notebooks. Use platform-n
   ```python
   from google.colab import userdata
 
-  api_key = userdata.get('OPENAI_API_KEY')
+  api_key = userdata.get("OPENAI_API_KEY")
   ```
 
 * **Kaggle**: Store credentials using Kaggle's notebook secrets and retrieve them through the platform's supported secret-management interface.
@@ -160,5 +160,5 @@ For revisions of an existing experiment, retain the relationship to the original
 ```
 
 <div align="center">
-Rahman, R. NiriZan (Version 0.1.0) [Computer software]. https://github.com/Red1-Rahman/NiriZan
+Rahman, R. NiriZan (Version 0.2.0) [Computer software]. https://github.com/Red1-Rahman/NiriZan
 </div>
