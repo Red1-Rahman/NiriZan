@@ -27,7 +27,18 @@ def engine() -> AttributionEngine:
 
 @pytest.fixture
 def stable_scores() -> list[float]:
-    return [0.88, 0.89, 0.90, 0.91, 0.92, 0.90, 0.89, 0.91, 0.90, 0.88]
+    return [
+        0.88,
+        0.89,
+        0.90,
+        0.91,
+        0.92,
+        0.90,
+        0.89,
+        0.91,
+        0.90,
+        0.88,
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -53,26 +64,42 @@ def test_attribution_no_drift(
     assert verdict.system_score_delta == pytest.approx(0.0)
     assert verdict.judge_score_delta == pytest.approx(0.0)
     assert verdict.evaluated_at.tzinfo is not None
+    assert verdict.evaluated_at.utcoffset() == timezone.utc.utcoffset(
+        verdict.evaluated_at
+    )
     assert verdict.explanation
 
 
 def test_attribution_system_drift(engine: AttributionEngine) -> None:
     baseline = [
-        0.88, 0.89, 0.90, 0.91, 0.92,
-        0.90, 0.89, 0.91, 0.90, 0.88,
+        0.88,
+        0.89,
+        0.90,
+        0.91,
+        0.92,
+        0.90,
+        0.89,
+        0.91,
+        0.90,
+        0.88,
     ]
     candidate = [
-        0.55, 0.56, 0.57, 0.58, 0.59,
-        0.57, 0.56, 0.58, 0.57, 0.55,
+        0.55,
+        0.56,
+        0.57,
+        0.58,
+        0.59,
+        0.57,
+        0.56,
+        0.58,
+        0.57,
+        0.55,
     ]
-
-    anchor_ref = baseline.copy()
-    anchor_rescored = baseline.copy()
 
     verdict = engine.analyze(
         anchor_set_id="anchor-v1",
-        anchor_ref_scores=anchor_ref,
-        anchor_rescored_scores=anchor_rescored,
+        anchor_ref_scores=baseline.copy(),
+        anchor_rescored_scores=baseline.copy(),
         prod_baseline_scores=baseline,
         prod_candidate_scores=candidate,
     )
@@ -84,17 +111,40 @@ def test_attribution_system_drift(engine: AttributionEngine) -> None:
 
 def test_attribution_judge_drift(engine: AttributionEngine) -> None:
     anchor_ref = [
-        0.88, 0.89, 0.90, 0.91, 0.92,
-        0.90, 0.89, 0.91, 0.90, 0.88,
+        0.88,
+        0.89,
+        0.90,
+        0.91,
+        0.92,
+        0.90,
+        0.89,
+        0.91,
+        0.90,
+        0.88,
     ]
     anchor_rescored = [
-        0.55, 0.56, 0.57, 0.58, 0.59,
-        0.57, 0.56, 0.58, 0.57, 0.55,
+        0.55,
+        0.56,
+        0.57,
+        0.58,
+        0.59,
+        0.57,
+        0.56,
+        0.58,
+        0.57,
+        0.55,
     ]
-
     production = [
-        0.88, 0.89, 0.90, 0.91, 0.92,
-        0.90, 0.89, 0.91, 0.90, 0.88,
+        0.88,
+        0.89,
+        0.90,
+        0.91,
+        0.92,
+        0.90,
+        0.89,
+        0.91,
+        0.90,
+        0.88,
     ]
 
     verdict = engine.analyze(
@@ -112,21 +162,52 @@ def test_attribution_judge_drift(engine: AttributionEngine) -> None:
 
 def test_attribution_joint_drift(engine: AttributionEngine) -> None:
     anchor_ref = [
-        0.88, 0.89, 0.90, 0.91, 0.92,
-        0.90, 0.89, 0.91, 0.90, 0.88,
+        0.88,
+        0.89,
+        0.90,
+        0.91,
+        0.92,
+        0.90,
+        0.89,
+        0.91,
+        0.90,
+        0.88,
     ]
     anchor_rescored = [
-        0.55, 0.56, 0.57, 0.58, 0.59,
-        0.57, 0.56, 0.58, 0.57, 0.55,
+        0.55,
+        0.56,
+        0.57,
+        0.58,
+        0.59,
+        0.57,
+        0.56,
+        0.58,
+        0.57,
+        0.55,
     ]
-
     baseline = [
-        0.88, 0.89, 0.90, 0.91, 0.92,
-        0.90, 0.89, 0.91, 0.90, 0.88,
+        0.88,
+        0.89,
+        0.90,
+        0.91,
+        0.92,
+        0.90,
+        0.89,
+        0.91,
+        0.90,
+        0.88,
     ]
     candidate = [
-        0.55, 0.56, 0.57, 0.58, 0.59,
-        0.57, 0.56, 0.58, 0.57, 0.55,
+        0.55,
+        0.56,
+        0.57,
+        0.58,
+        0.59,
+        0.57,
+        0.56,
+        0.58,
+        0.57,
+        0.55,
     ]
 
     verdict = engine.analyze(
@@ -145,21 +226,9 @@ def test_attribution_joint_drift(engine: AttributionEngine) -> None:
 @pytest.mark.parametrize(
     ("anchor_ref", "anchor_rescored", "expected_direction"),
     [
-        (
-            [0.8] * 10,
-            [0.8] * 10,
-            0,
-        ),
-        (
-            [0.8] * 10,
-            [0.9] * 10,
-            1,
-        ),
-        (
-            [0.9] * 10,
-            [0.8] * 10,
-            -1,
-        ),
+        ([0.8] * 10, [0.8] * 10, 0),
+        ([0.8] * 10, [0.9] * 10, 1),
+        ([0.9] * 10, [0.8] * 10, -1),
     ],
 )
 def test_judge_delta_direction(
@@ -187,22 +256,61 @@ def test_judge_delta_direction(
 
 
 # ---------------------------------------------------------------------------
-# Input validation and error handling
+# Constructor validation
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
-    "kwargs",
-    [
-        {"alpha": 0.0},
-        {"alpha": 1.0},
-        {"alpha": -0.01},
-        {"alpha": 1.01},
-    ],
+    "alpha",
+    [0.0, 1.0, -0.01, 1.01],
 )
-def test_invalid_alpha_raises(kwargs: dict[str, float]) -> None:
-    with pytest.raises(ValueError, match="alpha must be strictly between 0 and 1"):
-        AttributionEngine(**kwargs)
+def test_invalid_alpha_raises(alpha: float) -> None:
+    with pytest.raises(
+        ValueError,
+        match="alpha must be strictly between 0 and 1",
+    ):
+        AttributionEngine(alpha=alpha)
+
+
+@pytest.mark.parametrize(
+    "confidence_level",
+    [0.0, 1.0, -0.01, 1.01],
+)
+def test_invalid_confidence_level_raises(confidence_level: float) -> None:
+    with pytest.raises(
+        ValueError,
+        match="confidence_level must be strictly between 0 and 1",
+    ):
+        AttributionEngine(confidence_level=confidence_level)
+
+
+@pytest.mark.parametrize("n_bootstrap", [0, -1])
+def test_invalid_n_bootstrap_raises(n_bootstrap: int) -> None:
+    with pytest.raises(
+        ValueError,
+        match="n_bootstrap must be at least 1",
+    ):
+        AttributionEngine(n_bootstrap=n_bootstrap)
+
+
+@pytest.mark.parametrize("seed", [-1, -42])
+def test_negative_seed_raises(seed: int) -> None:
+    with pytest.raises(
+        ValueError,
+        match="seed must be non-negative",
+    ):
+        AttributionEngine(seed=seed)
+
+
+def test_none_seed_is_valid() -> None:
+    engine = AttributionEngine(seed=None)
+
+    assert engine.seed is None
+
+
+# ---------------------------------------------------------------------------
+# Input validation and error handling
+# ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
@@ -314,6 +422,7 @@ def test_small_sample_uses_bootstrap_only(
         )
 
     mann_whitney.assert_not_called()
+
     assert verdict.attribution == DriftAttribution.SYSTEM_DRIFT
     assert verdict.system_score_delta < 0
 
@@ -340,18 +449,103 @@ def test_mann_whitney_is_used_when_both_groups_have_at_least_five_samples(
     assert verdict.attribution == DriftAttribution.SYSTEM_DRIFT
 
 
+def test_mann_whitney_is_skipped_when_only_baseline_is_small(
+    engine: AttributionEngine,
+) -> None:
+    baseline = [0.8] * 4
+    candidate = [0.2] * 5
+
+    with patch(
+        "nirizan.trust.attribution.mann_whitney_regression"
+    ) as mann_whitney:
+        verdict = engine.analyze(
+            anchor_set_id="anchor-v1",
+            anchor_ref_scores=baseline,
+            anchor_rescored_scores=baseline.copy(),
+            prod_baseline_scores=baseline,
+            prod_candidate_scores=candidate,
+        )
+
+    mann_whitney.assert_not_called()
+    assert verdict.attribution == DriftAttribution.SYSTEM_DRIFT
+
+
+def test_mann_whitney_is_skipped_when_only_candidate_is_small(
+    engine: AttributionEngine,
+) -> None:
+    baseline = [0.8] * 5
+    candidate = [0.2] * 4
+
+    with patch(
+        "nirizan.trust.attribution.mann_whitney_regression"
+    ) as mann_whitney:
+        verdict = engine.analyze(
+            anchor_set_id="anchor-v1",
+            anchor_ref_scores=baseline,
+            anchor_rescored_scores=baseline.copy(),
+            prod_baseline_scores=baseline,
+            prod_candidate_scores=candidate,
+        )
+
+    mann_whitney.assert_not_called()
+    assert verdict.attribution == DriftAttribution.SYSTEM_DRIFT
+
+
 # ---------------------------------------------------------------------------
-# Statistical decision logic isolation
+# Statistical decision logic
 # ---------------------------------------------------------------------------
+
+
+def test_shift_evidence_uses_two_sided_alternative_for_judge(
+    engine: AttributionEngine,
+) -> None:
+    baseline = [0.8] * 10
+    candidate = [0.7] * 10
+
+    with patch(
+        "nirizan.trust.attribution.mann_whitney_regression",
+        return_value=(0.0, 0.001),
+    ) as mann_whitney:
+        engine._shift_evidence(
+            baseline,
+            candidate,
+            alternative="two-sided",
+        )
+
+    mann_whitney.assert_called_once_with(
+        candidate,
+        baseline,
+        alternative="two-sided",
+    )
+
+
+def test_shift_evidence_uses_less_alternative_for_system(
+    engine: AttributionEngine,
+) -> None:
+    baseline = [0.8] * 10
+    candidate = [0.7] * 10
+
+    with patch(
+        "nirizan.trust.attribution.mann_whitney_regression",
+        return_value=(0.0, 0.001),
+    ) as mann_whitney:
+        engine._shift_evidence(
+            baseline,
+            candidate,
+            alternative="less",
+        )
+
+    mann_whitney.assert_called_once_with(
+        candidate,
+        baseline,
+        alternative="less",
+    )
 
 
 def test_holm_bonferroni_can_prevent_marginal_judge_shift(
     engine: AttributionEngine,
 ) -> None:
-    """
-    Verify that attribution does not independently trust a marginal p-value.
-    The two hypotheses must pass the shared Holm-Bonferroni correction.
-    """
+    """A marginal judge p-value must not bypass the shared correction."""
 
     def fake_shift_evidence(
         baseline: list[float],
@@ -457,10 +651,7 @@ def test_attribution_decision_matrix(
 def test_positive_system_delta_cannot_be_classified_as_system_drift(
     engine: AttributionEngine,
 ) -> None:
-    """
-    The system hypothesis is one-sided: candidate scores must decrease.
-    A statistically significant improvement must not be reported as regression.
-    """
+    """A significant improvement must not be reported as system regression."""
 
     def fake_shift_evidence(
         baseline: list[float],
@@ -490,14 +681,92 @@ def test_positive_system_delta_cannot_be_classified_as_system_drift(
     assert verdict.system_score_delta == pytest.approx(0.20)
 
 
+def test_bootstrap_significance_is_required_for_judge_shift(
+    engine: AttributionEngine,
+) -> None:
+    def fake_shift_evidence(
+        baseline: list[float],
+        candidate: list[float],
+        *,
+        alternative: str,
+    ) -> tuple[float, float, str, bool]:
+        if alternative == "two-sided":
+            return -0.30, 0.001, "mock", False
+
+        return 0.0, 1.0, "mock", False
+
+    with patch.object(
+        engine,
+        "_shift_evidence",
+        side_effect=fake_shift_evidence,
+    ):
+        verdict = engine.analyze(
+            anchor_set_id="anchor-v1",
+            anchor_ref_scores=[0.9] * 10,
+            anchor_rescored_scores=[0.6] * 10,
+            prod_baseline_scores=[0.8] * 10,
+            prod_candidate_scores=[0.8] * 10,
+        )
+
+    assert verdict.attribution == DriftAttribution.NONE
+
+
+def test_bootstrap_significance_is_required_for_system_shift(
+    engine: AttributionEngine,
+) -> None:
+    def fake_shift_evidence(
+        baseline: list[float],
+        candidate: list[float],
+        *,
+        alternative: str,
+    ) -> tuple[float, float, str, bool]:
+        if alternative == "two-sided":
+            return 0.0, 1.0, "mock", False
+
+        return -0.30, 0.001, "mock", False
+
+    with patch.object(
+        engine,
+        "_shift_evidence",
+        side_effect=fake_shift_evidence,
+    ):
+        verdict = engine.analyze(
+            anchor_set_id="anchor-v1",
+            anchor_ref_scores=[0.8] * 10,
+            anchor_rescored_scores=[0.8] * 10,
+            prod_baseline_scores=[0.8] * 10,
+            prod_candidate_scores=[0.5] * 10,
+        )
+
+    assert verdict.attribution == DriftAttribution.NONE
+
+
 # ---------------------------------------------------------------------------
 # Reproducibility and result integrity
 # ---------------------------------------------------------------------------
 
 
 def test_seed_makes_bootstrap_result_reproducible() -> None:
-    scores_a = [0.70, 0.72, 0.74, 0.76, 0.78, 0.80, 0.82, 0.84]
-    scores_b = [0.40, 0.42, 0.44, 0.46, 0.48, 0.50, 0.52, 0.54]
+    scores_a = [
+        0.70,
+        0.72,
+        0.74,
+        0.76,
+        0.78,
+        0.80,
+        0.82,
+        0.84,
+    ]
+    scores_b = [
+        0.40,
+        0.42,
+        0.44,
+        0.46,
+        0.48,
+        0.50,
+        0.52,
+        0.54,
+    ]
 
     engine_a = AttributionEngine(
         alpha=0.05,
@@ -526,7 +795,7 @@ def test_seed_makes_bootstrap_result_reproducible() -> None:
     assert result_a == result_b
 
 
-def test_evaluated_at_is_timezone_aware(
+def test_evaluated_at_is_timezone_aware_utc(
     engine: AttributionEngine,
     stable_scores: list[float],
 ) -> None:
@@ -540,6 +809,9 @@ def test_evaluated_at_is_timezone_aware(
 
     assert verdict.evaluated_at.tzinfo is not None
     assert verdict.evaluated_at.utcoffset() is not None
+    assert verdict.evaluated_at.utcoffset() == timezone.utc.utcoffset(
+        verdict.evaluated_at
+    )
     assert verdict.evaluated_at <= datetime.now(timezone.utc)
 
 
@@ -558,7 +830,9 @@ def test_evaluated_at_is_timezone_aware(
         DriftAttribution.INCONCLUSIVE,
     ],
 )
-def test_all_drift_attribution_values_are_valid(value: DriftAttribution) -> None:
+def test_all_drift_attribution_values_are_valid(
+    value: DriftAttribution,
+) -> None:
     assert value.value in {
         "none",
         "system_drift",
