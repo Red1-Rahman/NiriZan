@@ -217,15 +217,15 @@ class AttributionEngine:
             verdict = DriftAttribution.JUDGE_DRIFT
             explanation = (
                 f"Judge drift: anchor rescored mean shifted {judge_delta:+.4f} "
-                f"({judge_method}, corrected p={judge_p:.4g} "
-                f"< alpha={self.alpha})."
+                f"({judge_method}, p={judge_p:.4g}, rejected after "
+                f"Holm-Bonferroni correction at alpha={self.alpha})."
             )
         elif has_system_shift:
             verdict = DriftAttribution.SYSTEM_DRIFT
             explanation = (
                 f"System drift: candidate scores dropped {system_delta:+.4f} "
-                f"({system_method}, corrected p={system_p:.4g} "
-                f"< alpha={self.alpha})."
+                f"({system_method}, p={system_p:.4g}, rejected after "
+                f"Holm-Bonferroni correction at alpha={self.alpha})."
             )
         else:
             verdict = DriftAttribution.NONE
