@@ -880,3 +880,94 @@ def test_all_drift_attribution_values_are_valid(
         "joint_drift",
         "inconclusive",
     }
+
+
+# ---------------------------------------------------------------------------
+# Regression tests: small-sample comparisons must not enter Holm-Bonferroni
+# as fabricated p-values (see PR review discussion on issue #37).
+# ---------------------------------------------------------------------------
+
+
+def test_small_sample_non_significant_side_does_not_suppress_real_drift(
+    engine: AttributionEngine,
+) -> None:
+    """A stable small-sample comparison must not tighten the correction
+    threshold applied to a genuine, marginal p-value on the other side.
+
+    Before the fix, an insignificant small-sample bootstrap decision was
+    encoded as p=1.0 and joined the Holm-Bonferroni family, which changed
+    the threshold applied to the real p-value from alpha (m=1) to alpha/2
+    (m=2) and caused a real p=0.0399 judge shift to be rejected.
+    """
+    anchor_ref = [0.90, 0.88, 0.92, 0.89, 0.91, 0.87, 0.93, 0.90, 0.88, 0.92]
+    anchor_rescored = [0.85, 0.90, 0.83, 0.88, 0.91, 0.86, 0.89, 0.84, 0.90, 0.87]
+
+    # Small (n=4), genuinely stable production comparison: bootstrap CI
+    # should straddle zero.
+    prod_baseline = [0.80, 0.81, 0.79, 0.80]
+    prod_candidate = [0.80, 0.79, 0.81, 0.80]
+
+    verdict = engine.analyze(
+        anchor_set_id="anchor-v1",
+        anchor_ref_scores=anchor_ref,
+        anchor_rescored_scores=anchor_rescored,
+        prod_baseline_scores=prod_baseline,
+        prod_candidate_scores=prod_candidate,
+    )
+
+    assert verdict.attribution == DriftAttribution.JUDGE_DRIFT
+    assert verdict.system_score_delta == pytest.approx(0.0)
+
+
+def test_small_sample_significant_side_is_not_over_corrected(
+    engine: AttributionEngine,
+) -> None:
+    """A bootstrap-significant small-sample comparison must be accepted on
+    its own evidence, without needing to survive a multi-hypothesis
+    correction it has no p-value to participate in."""
+    small_baseline = [0.80, 0.81, 0.79, 0.80]
+    small_candidate = [0.40, 0.41, 0.39, 0.40]
+    stable = [0.9] * 10
+
+    verdict = engine.analyze(
+        anchor_set_id="anchor-v1",
+        anchor_ref_scores=stable,
+        anchor_rescored_scores=stable.copy(),
+        prod_baseline_scores=small_baseline,
+        prod_candidate_scores=small_candidate,
+    )
+
+    assert verdict.attribution == DriftAttribution.SYSTEM_DRIFT
+
+
+def test_holm_bonferroni_family_excludes_small_sample_side(
+    engine: AttributionEngine,
+) -> None:
+    """`_shift_evidence` reports `p_value=None`, not a placeholder float,
+    when Mann-Whitney U was not run, and that `None` never reaches
+    `holm_bonferroni`."""
+    small_baseline = [0.8, 0.8, 0.8, 0.8]
+    small_candidate = [0.2, 0.2, 0.2, 0.2]
+
+    _, p_value, method, _ = engine._shift_evidence(
+        small_baseline,
+        small_candidate,
+        alternative="less",
+    )
+
+    assert p_value is None
+    assert method == "bootstrap_ci_only(n<5, uncorrected)"
+
+    with patch("nirizan.trust.attribution.holm_bonferroni") as mock_holm:
+        mock_holm.return_value = {}
+        engine.analyze(
+            anchor_set_id="anchor-v1",
+            anchor_ref_scores=small_baseline,
+            anchor_rescored_scores=small_baseline.copy(),
+            prod_baseline_scores=small_baseline,
+            prod_candidate_scores=small_candidate,
+        )
+
+    # Neither comparison produced a p-value, so holm_bonferroni is never
+    # even called (empty family is short-circuited).
+    mock_holm.assert_not_called()
