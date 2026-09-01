@@ -36,6 +36,7 @@ flowchart TB
     reporting --> trust
     storage --> instrumentation
     storage --> metrics
+    trust --> metrics
 ```
 
 ## File-level imports
@@ -81,7 +82,7 @@ flowchart TB
 | `nirizan.storage.trace_repository` | `src/nirizan/storage/trace_repository.py` | `nirizan.instrumentation.spans`, `nirizan.storage.models` |
 | `nirizan.trust` | `src/nirizan/trust/__init__.py` | _none_ |
 | `nirizan.trust.anchor_set` | `src/nirizan/trust/anchor_set.py` | _none_ |
-| `nirizan.trust.attribution` | `src/nirizan/trust/attribution.py` | _none_ |
+| `nirizan.trust.attribution` | `src/nirizan/trust/attribution.py` | `nirizan.metrics.stats` |
 
 ## Possibly-unused exports
 
@@ -130,9 +131,6 @@ flowchart TB
 | `nirizan.metrics.llm_judge` | `LLMJudge` | no (via `from ... import`) |
 | `nirizan.metrics.llm_judge` | `LLMJudgeResponse` | no (via `from ... import`) |
 | `nirizan.metrics.rag_triad` | `RAGTriadMetric` | no (via `from ... import`) |
-| `nirizan.metrics.stats` | `bootstrap_delta_ci` | no (via `from ... import`) |
-| `nirizan.metrics.stats` | `holm_bonferroni` | no (via `from ... import`) |
-| `nirizan.metrics.stats` | `mann_whitney_regression` | no (via `from ... import`) |
 | `nirizan.orchestrator.collector` | `CollectorExporter` | no (via `from ... import`) |
 | `nirizan.orchestrator.collector` | `TraceCollector` | no (via `from ... import`) |
 | `nirizan.orchestrator.collector` | `TraceSink` | no (via `from ... import`) |
