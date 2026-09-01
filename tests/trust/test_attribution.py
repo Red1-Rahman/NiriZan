@@ -410,8 +410,11 @@ def test_small_sample_uses_bootstrap_only(
     small_baseline = [0.8, 0.8, 0.8, 0.8]
     small_candidate = [0.2, 0.2, 0.2, 0.2]
 
+    # return_value configured so an accidental MWU call fails cleanly at
+    # assert_not_called() instead of crashing on tuple unpacking.
     with patch(
-        "nirizan.trust.attribution.mann_whitney_regression"
+        "nirizan.trust.attribution.mann_whitney_regression",
+        return_value=(0.0, 1.0),
     ) as mann_whitney:
         verdict = engine.analyze(
             anchor_set_id="anchor-small",
@@ -446,7 +449,15 @@ def test_mann_whitney_is_used_when_both_groups_have_at_least_five_samples(
         )
 
     assert mann_whitney.call_count == 2
+    # Judge hypothesis is evaluated first (two-sided), then the system
+    # hypothesis (one-sided "less").
+    alternatives = [
+        call_kwargs["alternative"]
+        for _, call_kwargs in mann_whitney.call_args_list
+    ]
+    assert alternatives == ["two-sided", "less"]
     assert verdict.attribution == DriftAttribution.SYSTEM_DRIFT
+    assert verdict.system_score_delta == pytest.approx(-0.6)
 
 
 def test_mann_whitney_is_skipped_when_only_baseline_is_small(
@@ -455,8 +466,11 @@ def test_mann_whitney_is_skipped_when_only_baseline_is_small(
     baseline = [0.8] * 4
     candidate = [0.2] * 5
 
+    # return_value configured so an accidental MWU call fails cleanly at
+    # assert_not_called() instead of crashing on tuple unpacking.
     with patch(
-        "nirizan.trust.attribution.mann_whitney_regression"
+        "nirizan.trust.attribution.mann_whitney_regression",
+        return_value=(0.0, 1.0),
     ) as mann_whitney:
         verdict = engine.analyze(
             anchor_set_id="anchor-v1",
@@ -473,22 +487,48 @@ def test_mann_whitney_is_skipped_when_only_baseline_is_small(
 def test_mann_whitney_is_skipped_when_only_candidate_is_small(
     engine: AttributionEngine,
 ) -> None:
-    baseline = [0.8] * 5
-    candidate = [0.2] * 4
+    """A small production candidate skips only the system-side MWU call.
+
+    The judge-side comparison (anchor reference vs rescored) still has 5
+    observations per group, so Mann-Whitney runs exactly once for it. The
+    mock must therefore be configured with a valid ``(statistic, p_value)``
+    return value: the previous unconfigured MagicMock could not be unpacked
+    into two values and crashed before the system side was ever evaluated.
+
+    Anchor values (0.6) deliberately differ from production values (0.8,
+    0.2) so the call-args assertion proves which groups reached MWU.
+    """
+    anchor_ref = [0.6] * 5
+    anchor_rescored = [0.6] * 5  # judge is stable
+    prod_baseline = [0.8] * 5
+    prod_candidate = [0.2] * 4  # small candidate group
 
     with patch(
-        "nirizan.trust.attribution.mann_whitney_regression"
+        "nirizan.trust.attribution.mann_whitney_regression",
+        return_value=(0.0, 1.0),
     ) as mann_whitney:
         verdict = engine.analyze(
             anchor_set_id="anchor-v1",
-            anchor_ref_scores=baseline,
-            anchor_rescored_scores=baseline.copy(),
-            prod_baseline_scores=baseline,
-            prod_candidate_scores=candidate,
+            anchor_ref_scores=anchor_ref,
+            anchor_rescored_scores=anchor_rescored,
+            prod_baseline_scores=prod_baseline,
+            prod_candidate_scores=prod_candidate,
         )
 
-    mann_whitney.assert_not_called()
+    # MWU ran exactly once: the judge-side comparison on the anchor groups.
+    mann_whitney.assert_called_once()
+    mann_whitney.assert_called_once_with(
+        anchor_rescored,
+        anchor_ref,
+        alternative="two-sided",
+    )
+
+    # The system-side comparison never reached MWU (candidate has only 4
+    # scores); bootstrap-only evidence carries it: delta = -0.6 with a
+    # CI of [-0.6, -0.6], which excludes zero.
     assert verdict.attribution == DriftAttribution.SYSTEM_DRIFT
+    assert verdict.system_score_delta == pytest.approx(-0.6)
+    assert verdict.judge_score_delta == pytest.approx(0.0)
 
 
 # ---------------------------------------------------------------------------
@@ -548,8 +588,8 @@ def test_holm_bonferroni_can_prevent_marginal_judge_shift(
     """A marginal judge p-value must not bypass the shared correction."""
 
     def fake_shift_evidence(
-        baseline: list[float],
-        candidate: list[float],
+        _baseline: list[float],
+        _candidate: list[float],
         *,
         alternative: str,
     ) -> tuple[float, float, str, bool]:
@@ -578,8 +618,8 @@ def test_holm_bonferroni_allows_strong_system_drift(
     engine: AttributionEngine,
 ) -> None:
     def fake_shift_evidence(
-        baseline: list[float],
-        candidate: list[float],
+        _baseline: list[float],
+        _candidate: list[float],
         *,
         alternative: str,
     ) -> tuple[float, float, str, bool]:
@@ -622,8 +662,8 @@ def test_attribution_decision_matrix(
     expected: DriftAttribution,
 ) -> None:
     def fake_shift_evidence(
-        baseline: list[float],
-        candidate: list[float],
+        _baseline: list[float],
+        _candidate: list[float],
         *,
         alternative: str,
     ) -> tuple[float, float, str, bool]:
@@ -654,8 +694,8 @@ def test_positive_system_delta_cannot_be_classified_as_system_drift(
     """A significant improvement must not be reported as system regression."""
 
     def fake_shift_evidence(
-        baseline: list[float],
-        candidate: list[float],
+        _baseline: list[float],
+        _candidate: list[float],
         *,
         alternative: str,
     ) -> tuple[float, float, str, bool]:
@@ -685,8 +725,8 @@ def test_bootstrap_significance_is_required_for_judge_shift(
     engine: AttributionEngine,
 ) -> None:
     def fake_shift_evidence(
-        baseline: list[float],
-        candidate: list[float],
+        _baseline: list[float],
+        _candidate: list[float],
         *,
         alternative: str,
     ) -> tuple[float, float, str, bool]:
@@ -715,8 +755,8 @@ def test_bootstrap_significance_is_required_for_system_shift(
     engine: AttributionEngine,
 ) -> None:
     def fake_shift_evidence(
-        baseline: list[float],
-        candidate: list[float],
+        _baseline: list[float],
+        _candidate: list[float],
         *,
         alternative: str,
     ) -> tuple[float, float, str, bool]:
