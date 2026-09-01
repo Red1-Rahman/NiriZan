@@ -10,9 +10,36 @@ While NiriZan is on a `0.x` version, breaking changes are reflected in a
 jump to `1.0.0` is reserved for the point the public contract surface is
 considered stable.
 
-## [Unreleased]
+## [0.3.0] - drafted for release
 
-Targeting `0.2.0` via PR #35, which closes #22 and carries the required `pyproject.toml` version bump per
+### Added
+
+- Statistical attribution in `AttributionEngine.analyze()` using bootstrap confidence intervals and Mann-Whitney U tests instead of raw mean-difference thresholds.
+- Holm-Bonferroni correction across the judge-drift and system-drift hypotheses.
+- Explicit small-sample behavior: when either comparison group has fewer than 5 observations, Mann-Whitney U is skipped and attribution relies on bootstrap confidence intervals.
+- Configurable statistical parameters for attribution: `alpha`, `confidence_level`, `n_bootstrap`, and optional `seed`.
+- Statistical method and evidence details in attribution explanations, including deltas, methods, p-values, and correction status.
+
+### Changed
+
+- **Breaking:** Replaced the `AttributionEngine` `significance_threshold` parameter with `alpha`, reflecting that attribution now uses statistical significance rather than a raw score-difference threshold.
+- `AttributionEngine` now distinguishes judge drift using a two-sided statistical test, while system drift specifically tests for a statistically supported decrease in candidate scores.
+- Drift decisions now require statistical evidence rather than treating an absolute mean-score delta of `significance_threshold` as sufficient evidence.
+- `AttributionEngine` now applies Holm-Bonferroni correction across the judge and system hypotheses before classifying statistically significant drift.
+- `AttributionEngine` reuses the centralized statistical helpers in `nirizan.metrics.stats` rather than maintaining attribution-specific statistical implementations.
+- `DriftAttribution.NONE` explanations now report the statistical decision methodology instead of describing a raw threshold comparison as "statistically significant."
+- Existing `DriftAttribution` states and downstream attribution fields remain unchanged.
+
+### Fixed
+
+- Removed the misleading use of `significance_threshold` as a proxy for statistical significance in `AttributionEngine.analyze()`.
+- Prevented attribution from classifying drift solely from the magnitude of a mean-score difference without considering distributional evidence.
+- Explicitly handled insufficient sample sizes by avoiding Mann-Whitney U when either comparison group has fewer than 5 observations.
+- `INCONCLUSIVE` remains reserved for invalid or unusable score inputs, keeping zero/no-change observations distinguishable from unavailable statistical evidence.
+
+## [0.2.0] - 2026-08-28
+
+PR #35 closes #22 and carries the required `pyproject.toml` version bump per
 the Versioning Rule.
 
 ### Added

@@ -178,7 +178,11 @@ async def test_end_to_end_rag_pipeline_evaluation(
 
         # Span ordering is preserved (by started_at)
         kinds = [s.kind for s in trace.spans]
-        assert kinds == [SpanKind.PLANNING, SpanKind.RETRIEVAL, SpanKind.GENERATION]
+        assert kinds == [
+            SpanKind.PLANNING,
+            SpanKind.RETRIEVAL,
+            SpanKind.GENERATION,
+        ]
 
         # Payloads survived round-trip
         planning_span = trace.spans_of_kind(SpanKind.PLANNING)[0]
@@ -217,7 +221,11 @@ async def test_end_to_end_rag_pipeline_evaluation(
     assert len(metric_results) == 3
 
     metric_names = {r.metric_name for r in metric_results}
-    assert metric_names == {"context_relevance", "groundedness", "answer_relevance"}
+    assert metric_names == {
+        "context_relevance",
+        "groundedness",
+        "answer_relevance",
+    }
 
     for result in metric_results:
         assert 0.0 <= result.score <= 1.0
@@ -234,7 +242,10 @@ async def test_end_to_end_rag_pipeline_evaluation(
 
     # 6. Verify logging streams were captured during evaluation
     assert f"Evaluating RAGTriadMetric for trace_id={trace.trace_id}" in caplog.text
-    assert f"completed for trace_id={trace.trace_id}: computed 3 metrics" in caplog.text
+    assert (
+        f"completed for trace_id={trace.trace_id}: computed 3 metrics"
+        in caplog.text
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -251,7 +262,10 @@ async def test_end_to_end_agent_session_and_versioning_tagging(
     Multi-turn agent session tracing (Tracer.session()) and collector-side
     commit/snapshot tagging.
     """
-    monkeypatch.setenv("GIT_COMMIT_SHA", "deadbeefcafebabe1234567890abcdef12345678")
+    monkeypatch.setenv(
+        "GIT_COMMIT_SHA",
+        "deadbeefcafebabe1234567890abcdef12345678",
+    )
     monkeypatch.setenv("NIRIZAN_DATA_SNAPSHOT_ID", "test-snapshot-v1")
 
     app_name = "test-agent-app"
@@ -347,7 +361,10 @@ async def test_end_to_end_phase4_statistical_gating_and_ci_summary(
     # ------------------------------------------------------------------
     # 1. Baseline (Commit A) execution & trace capture
     # ------------------------------------------------------------------
-    monkeypatch.setenv("GIT_COMMIT_SHA", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+    monkeypatch.setenv(
+        "GIT_COMMIT_SHA",
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    )
     monkeypatch.setenv("NIRIZAN_DATA_SNAPSHOT_ID", "snapshot-v1.0")
 
     collector_a = TraceCollector(repository=trace_repo)
@@ -357,15 +374,23 @@ async def test_end_to_end_phase4_statistical_gating_and_ci_summary(
 
     async with tracer_a.session() as session_a_id:
         async with tracer_a.start_span(
-            name="plan", kind=SpanKind.PLANNING, input_payload="Query A"
+            name="plan",
+            kind=SpanKind.PLANNING,
+            input_payload="Query A",
         ) as plan:
             plan.output_payload = "Query A"
+
             async with tracer_a.start_span(
-                name="retrieve", kind=SpanKind.RETRIEVAL, input_payload="Query A"
+                name="retrieve",
+                kind=SpanKind.RETRIEVAL,
+                input_payload="Query A",
             ) as ret:
                 ret.output_payload = "Context A"
+
                 async with tracer_a.start_span(
-                    name="generate", kind=SpanKind.GENERATION, input_payload="Query A"
+                    name="generate",
+                    kind=SpanKind.GENERATION,
+                    input_payload="Query A",
                 ) as gen:
                     gen.output_payload = "Answer A"
 
@@ -374,11 +399,13 @@ async def test_end_to_end_phase4_statistical_gating_and_ci_summary(
 
     traces_a = await trace_repo.list_by_application(app_name)
     assert len(traces_a) == 1
+
     trace_a = traces_a[0]
     assert trace_a.code_commit == "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
     assert trace_a.session_id == session_a_id
 
     metric_results_a = await metric_dispatcher.dispatch(trace_a, sys_type)
+
     run_a = Run(
         run_id=UUID("11111111-1111-1111-1111-111111111111"),
         trace_id=trace_a.trace_id,
@@ -387,9 +414,11 @@ async def test_end_to_end_phase4_statistical_gating_and_ci_summary(
         metric_results=metric_results_a,
         created_at=datetime.now(timezone.utc),
     )
+
     await experiment_store.record_run(run_a)
 
     baseline_id = UUID("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")
+
     baseline = Baseline(
         baseline_id=baseline_id,
         system_type=sys_type,
@@ -397,12 +426,16 @@ async def test_end_to_end_phase4_statistical_gating_and_ci_summary(
         established_at=datetime.now(timezone.utc),
         label="v1.0-gold-baseline",
     )
+
     await baseline_repo.save_baseline(baseline)
 
     # ------------------------------------------------------------------
     # 2. Candidate (Commit B - Degraded) execution & trace capture
     # ------------------------------------------------------------------
-    monkeypatch.setenv("GIT_COMMIT_SHA", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+    monkeypatch.setenv(
+        "GIT_COMMIT_SHA",
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    )
     monkeypatch.setenv("NIRIZAN_DATA_SNAPSHOT_ID", "snapshot-v1.0")
 
     collector_b = TraceCollector(repository=trace_repo)
@@ -412,15 +445,23 @@ async def test_end_to_end_phase4_statistical_gating_and_ci_summary(
 
     async with tracer_b.session():
         async with tracer_b.start_span(
-            name="plan", kind=SpanKind.PLANNING, input_payload="Query B"
+            name="plan",
+            kind=SpanKind.PLANNING,
+            input_payload="Query B",
         ) as plan:
             plan.output_payload = "Query B"
+
             async with tracer_b.start_span(
-                name="retrieve", kind=SpanKind.RETRIEVAL, input_payload="Query B"
+                name="retrieve",
+                kind=SpanKind.RETRIEVAL,
+                input_payload="Query B",
             ) as ret:
                 ret.output_payload = "Context B"
+
                 async with tracer_b.start_span(
-                    name="generate", kind=SpanKind.GENERATION, input_payload="Query B"
+                    name="generate",
+                    kind=SpanKind.GENERATION,
+                    input_payload="Query B",
                 ) as gen:
                     gen.output_payload = "Answer B"
 
@@ -428,11 +469,15 @@ async def test_end_to_end_phase4_statistical_gating_and_ci_summary(
     await collector_b.stop()
 
     all_traces = await trace_repo.list_by_application(app_name)
+
     trace_b = [
-        t for t in all_traces if t.code_commit == "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        t
+        for t in all_traces
+        if t.code_commit == "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
     ][0]
 
     metric_results_b = await metric_dispatcher.dispatch(trace_b, sys_type)
+
     run_b = Run(
         run_id=UUID("22222222-2222-2222-2222-222222222222"),
         trace_id=trace_b.trace_id,
@@ -441,6 +486,7 @@ async def test_end_to_end_phase4_statistical_gating_and_ci_summary(
         metric_results=metric_results_b,
         created_at=datetime.now(timezone.utc),
     )
+
     await experiment_store.record_run(run_b)
 
     # ------------------------------------------------------------------
@@ -449,21 +495,57 @@ async def test_end_to_end_phase4_statistical_gating_and_ci_summary(
     rng = np.random.default_rng(42)
 
     baseline_scores = {
-        "context_relevance": rng.normal(loc=0.90, scale=0.02, size=30).clip(0.0, 1.0),
-        "groundedness": rng.normal(loc=0.88, scale=0.02, size=30).clip(0.0, 1.0),
-        "answer_relevance": rng.normal(loc=0.92, scale=0.02, size=30).clip(0.0, 1.0),
+        "context_relevance": rng.normal(
+            loc=0.90,
+            scale=0.02,
+            size=30,
+        ).clip(0.0, 1.0),
+        "groundedness": rng.normal(
+            loc=0.88,
+            scale=0.02,
+            size=30,
+        ).clip(0.0, 1.0),
+        "answer_relevance": rng.normal(
+            loc=0.92,
+            scale=0.02,
+            size=30,
+        ).clip(0.0, 1.0),
     }
 
     candidate_pass_scores = {
-        "context_relevance": rng.normal(loc=0.91, scale=0.02, size=30).clip(0.0, 1.0),
-        "groundedness": rng.normal(loc=0.89, scale=0.02, size=30).clip(0.0, 1.0),
-        "answer_relevance": rng.normal(loc=0.93, scale=0.02, size=30).clip(0.0, 1.0),
+        "context_relevance": rng.normal(
+            loc=0.91,
+            scale=0.02,
+            size=30,
+        ).clip(0.0, 1.0),
+        "groundedness": rng.normal(
+            loc=0.89,
+            scale=0.02,
+            size=30,
+        ).clip(0.0, 1.0),
+        "answer_relevance": rng.normal(
+            loc=0.93,
+            scale=0.02,
+            size=30,
+        ).clip(0.0, 1.0),
     }
 
     candidate_block_scores = {
-        "context_relevance": rng.normal(loc=0.30, scale=0.05, size=30).clip(0.0, 1.0),
-        "groundedness": rng.normal(loc=0.35, scale=0.05, size=30).clip(0.0, 1.0),
-        "answer_relevance": rng.normal(loc=0.40, scale=0.05, size=30).clip(0.0, 1.0),
+        "context_relevance": rng.normal(
+            loc=0.30,
+            scale=0.05,
+            size=30,
+        ).clip(0.0, 1.0),
+        "groundedness": rng.normal(
+            loc=0.35,
+            scale=0.05,
+            size=30,
+        ).clip(0.0, 1.0),
+        "answer_relevance": rng.normal(
+            loc=0.40,
+            scale=0.05,
+            size=30,
+        ).clip(0.0, 1.0),
     }
 
     comparator = BaselineComparator(
@@ -482,8 +564,10 @@ async def test_end_to_end_phase4_statistical_gating_and_ci_summary(
         )
 
         pass_scores_by_metric = {
-            m: (candidate_pass_scores[m], baseline_scores[m]) for m in candidate_pass_scores
+            m: (candidate_pass_scores[m], baseline_scores[m])
+            for m in candidate_pass_scores
         }
+
         pass_gate_verdict = evaluate_gate(
             verdicts=pass_verdicts,
             scores_by_metric=pass_scores_by_metric,
@@ -501,22 +585,31 @@ async def test_end_to_end_phase4_statistical_gating_and_ci_summary(
         )
 
         block_scores_by_metric = {
-            m: (candidate_block_scores[m], baseline_scores[m]) for m in candidate_block_scores
+            m: (candidate_block_scores[m], baseline_scores[m])
+            for m in candidate_block_scores
         }
+
         block_gate_verdict = evaluate_gate(
             verdicts=block_verdicts,
             scores_by_metric=block_scores_by_metric,
         )
 
         assert block_gate_verdict.passed is False
-        assert any(v.severity == RegressionSeverity.BLOCKING for v in block_verdicts)
+        assert any(
+            v.severity == RegressionSeverity.BLOCKING
+            for v in block_verdicts
+        )
         assert gate_exit_code(block_gate_verdict) == 1
 
         # ------------------------------------------------------------------
         # 4. CI Summary Generation
         # ------------------------------------------------------------------
         summary_buf = io.StringIO()
-        write_github_summary(block_gate_verdict, output=summary_buf)
+        write_github_summary(
+            block_gate_verdict,
+            output=summary_buf,
+        )
+
         summary_text = summary_buf.getvalue()
 
         assert "| Metric | Severity | P-Value | Effect Size |" in summary_text
@@ -553,7 +646,9 @@ async def test_end_to_end_trust_attribution_and_dashboard_reporting(
     4. Assemble full DashboardSnapshots and assert system health score penalties for JOINT_DRIFT and INCONCLUSIVE.
     5. Verify log stream output for dashboard assembly.
     """
-    engine = AttributionEngine(significance_threshold=0.05)
+    # Phase 5 API: significance_threshold was replaced by alpha.
+    engine = AttributionEngine(alpha=0.05)
+
     anchor_id = "anchor-set-v1.0"
 
     ref_scores = [0.90, 0.90, 0.90, 0.90]
@@ -566,16 +661,44 @@ async def test_end_to_end_trust_attribution_and_dashboard_reporting(
 
     # 1. Evaluate attribution across 5 outcomes
     v_none = engine.analyze(
-        anchor_id, ref_scores, rescored_stable, baseline_scores, candidate_stable
+        anchor_id,
+        ref_scores,
+        rescored_stable,
+        baseline_scores,
+        candidate_stable,
     )
-    v_sys = engine.analyze(anchor_id, ref_scores, rescored_stable, baseline_scores, candidate_drift)
+
+    v_sys = engine.analyze(
+        anchor_id,
+        ref_scores,
+        rescored_stable,
+        baseline_scores,
+        candidate_drift,
+    )
+
     v_judge = engine.analyze(
-        anchor_id, ref_scores, rescored_drift, baseline_scores, candidate_stable
+        anchor_id,
+        ref_scores,
+        rescored_drift,
+        baseline_scores,
+        candidate_stable,
     )
+
     v_joint = engine.analyze(
-        anchor_id, ref_scores, rescored_drift, baseline_scores, candidate_drift
+        anchor_id,
+        ref_scores,
+        rescored_drift,
+        baseline_scores,
+        candidate_drift,
     )
-    v_inc = engine.analyze(anchor_id, [], rescored_stable, baseline_scores, candidate_stable)
+
+    v_inc = engine.analyze(
+        anchor_id,
+        [],
+        rescored_stable,
+        baseline_scores,
+        candidate_stable,
+    )
 
     assert v_none.attribution == DriftAttribution.NONE
     assert v_sys.attribution == DriftAttribution.SYSTEM_DRIFT
@@ -583,10 +706,20 @@ async def test_end_to_end_trust_attribution_and_dashboard_reporting(
     assert v_joint.attribution == DriftAttribution.JOINT_DRIFT
     assert v_inc.attribution == DriftAttribution.INCONCLUSIVE
 
-    verdicts = [v_none, v_sys, v_judge, v_joint, v_inc]
+    verdicts = [
+        v_none,
+        v_sys,
+        v_judge,
+        v_joint,
+        v_inc,
+    ]
 
     # 2. Aggregated Judge Reliability Metrics
-    metrics = compute_judge_reliability(verdicts, drift_rate_warning=0.10)
+    metrics = compute_judge_reliability(
+        verdicts,
+        drift_rate_warning=0.10,
+    )
+
     assert metrics.verdict_count == 5
     assert metrics.judge_drift_rate == pytest.approx(2 / 5)
     assert metrics.system_drift_rate == pytest.approx(2 / 5)
@@ -604,10 +737,17 @@ async def test_end_to_end_trust_attribution_and_dashboard_reporting(
             attribution_verdicts=[v_joint],
         )
 
-        expected_joint_health = round(0.90 * 0.95 * 100.0 * 0.70, 1)
+        expected_joint_health = round(
+            0.90 * 0.95 * 100.0 * 0.70,
+            1,
+        )
+
         assert snapshot_joint.health_score == expected_joint_health
         assert snapshot_joint.latest_attribution is not None
-        assert snapshot_joint.latest_attribution.attribution == DriftAttribution.JOINT_DRIFT
+        assert (
+            snapshot_joint.latest_attribution.attribution
+            == DriftAttribution.JOINT_DRIFT
+        )
 
         snapshot_inc = assemble_dashboard_snapshot(
             system_type="rag_pipeline",
@@ -616,9 +756,19 @@ async def test_end_to_end_trust_attribution_and_dashboard_reporting(
             attribution_verdicts=[v_inc],
         )
 
-        expected_inc_health = round(0.90 * 0.95 * 100.0 * 0.85, 1)
+        expected_inc_health = round(
+            0.90 * 0.95 * 100.0 * 0.85,
+            1,
+        )
+
         assert snapshot_inc.health_score == expected_inc_health
         assert snapshot_inc.latest_attribution is not None
-        assert snapshot_inc.latest_attribution.attribution == DriftAttribution.INCONCLUSIVE
+        assert (
+            snapshot_inc.latest_attribution.attribution
+            == DriftAttribution.INCONCLUSIVE
+        )
 
-    assert "Assembled dashboard snapshot for system_type=rag_pipeline" in caplog.text
+    assert (
+        "Assembled dashboard snapshot for system_type=rag_pipeline"
+        in caplog.text
+    )
