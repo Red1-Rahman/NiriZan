@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from enum import Enum
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
 
@@ -90,7 +91,7 @@ class AttributionEngine:
         baseline: list[float],
         candidate: list[float],
         *,
-        alternative: str,
+        alternative: Literal["less", "greater", "two-sided"],
     ) -> tuple[float, float, str, bool]:
         """Return statistical evidence for a candidate-vs-baseline shift.
 
