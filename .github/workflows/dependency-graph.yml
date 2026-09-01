@@ -15,10 +15,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          # The checkout step doesn't need to push anything itself (the
+          # create-pull-request step below authenticates with its own
+          # token), so drop the persisted git credential rather than leave
+          # it sitting in the local git config for the rest of the job.
+          persist-credentials: false
 
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: "3.11"
 
@@ -34,7 +40,7 @@ jobs:
 
       - name: Open pull request
         id: cpr
-        uses: peter-evans/create-pull-request@v8
+        uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           # Restrict the PR to exactly this file, even if something
@@ -61,7 +67,13 @@ jobs:
             documentation
             automated
 
+      # The step's own outputs are passed through `env` rather than
+      # interpolated directly into the `run:` script, so a value containing
+      # shell metacharacters can't expand as code in this step.
       - name: Summary
         if: steps.cpr.outputs.pull-request-number
+        env:
+          PR_NUMBER: ${{ steps.cpr.outputs.pull-request-number }}
+          PR_URL: ${{ steps.cpr.outputs.pull-request-url }}
         run: |
-          echo "Opened PR #${{ steps.cpr.outputs.pull-request-number }}: ${{ steps.cpr.outputs.pull-request-url }}"
+          echo "Opened PR #${PR_NUMBER}: ${PR_URL}"
