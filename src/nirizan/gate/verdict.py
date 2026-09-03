@@ -12,8 +12,18 @@ from nirizan.regression.comparator import (
     RegressionSeverity,
     RegressionVerdict,
 )
+from nirizan.regression.multivariate import CovarianceShiftVerdict
 
 logger = get_logger(__name__)
+
+
+class CovarianceTrackResult(BaseModel):
+    """Pairs a Track 3 covariance-drift verdict with the metric names it was computed over."""
+
+    model_config = ConfigDict(strict=True)
+
+    metric_names: tuple[str, ...] = Field(min_length=2)
+    verdict: CovarianceShiftVerdict
 
 
 class GateVerdict(BaseModel):
@@ -22,6 +32,7 @@ class GateVerdict(BaseModel):
     passed: bool
     confidence_interval: tuple[float, float]
     regression_verdicts: list[RegressionVerdict] = Field(default_factory=list)
+    covariance_verdicts: list[CovarianceTrackResult] = Field(default_factory=list)
     run_id: UUID
 
 
@@ -112,12 +123,24 @@ def evaluate_gate(
         str,
         tuple[np.ndarray, np.ndarray],
     ],
+    covariance_verdicts: list[CovarianceTrackResult] | None = None,
 ) -> GateVerdict:
     """Evaluate overall gate verdict across regression metrics."""
     if not verdicts:
         raise ValueError("Gate requires at least one regression verdict.")
 
     logger.info("Evaluating gate across %d regression verdict(s)", len(verdicts))
+
+    covariance_results = covariance_verdicts or []
+
+    drifted = [result for result in covariance_results if result.verdict.is_drift]
+    if drifted:
+        logger.warning(
+            "Covariance-structure drift (Track 3, informational -- does not "
+            "affect gate pass/fail) detected on %d metric group(s): %s",
+            len(drifted),
+            "; ".join(", ".join(result.metric_names) for result in drifted),
+        )
 
     decision_metric = select_decision_metric(verdicts)
 
@@ -149,5 +172,6 @@ def evaluate_gate(
         passed=passed,
         confidence_interval=confidence_interval,
         regression_verdicts=verdicts,
+        covariance_verdicts=covariance_results,
         run_id=decision_metric.run_id,
     )
