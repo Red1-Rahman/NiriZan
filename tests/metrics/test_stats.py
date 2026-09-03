@@ -10,6 +10,8 @@ from nirizan.metrics.stats import (
     compute_calibration_metrics,
     compute_holm_bonferroni,
     compute_mann_whitney_u,
+    frobenius_covariance_permutation,
+    validate_score_matrix,
     validate_scores,
 )
 
@@ -31,6 +33,96 @@ class TestValidateScores:
     def test_out_of_bounds_scores_raises(self) -> None:
         with pytest.raises(ValueError, match="normalized to"):
             validate_scores(np.array([-0.1, 0.5, 1.2]))
+
+
+class TestValidateScoreMatrix:
+    def test_valid_matrix(self) -> None:
+        matrix = np.array([[0.1, 0.2], [0.3, 0.4], [0.5, 0.6]])
+        result = validate_score_matrix(matrix)
+        np.testing.assert_array_equal(result, matrix)
+
+    def test_non_two_dimensional_raises(self) -> None:
+        with pytest.raises(ValueError, match="two-dimensional"):
+            validate_score_matrix(np.array([0.1, 0.2, 0.3]))
+
+    def test_empty_matrix_raises(self) -> None:
+        with pytest.raises(ValueError, match="empty"):
+            validate_score_matrix(np.empty((0, 3)))
+
+    def test_single_metric_raises(self) -> None:
+        with pytest.raises(ValueError, match="two metrics"):
+            validate_score_matrix(np.array([[0.1], [0.2], [0.3]]))
+
+    def test_non_finite_values_raise(self) -> None:
+        matrix = np.array([[0.1, 0.2], [np.nan, 0.4]])
+        with pytest.raises(ValueError, match="non-finite"):
+            validate_score_matrix(matrix)
+
+    def test_out_of_bounds_values_raise(self) -> None:
+        matrix = np.array([[0.1, 1.5], [0.3, 0.4]])
+        with pytest.raises(ValueError, match=r"\[0, 1\]"):
+            validate_score_matrix(matrix)
+
+
+class TestFrobeniusCovariancePermutation:
+    @pytest.fixture
+    def correlated(self) -> np.ndarray:
+        rng = np.random.default_rng(0)
+        corr = np.array([[1.0, 0.6], [0.6, 1.0]])
+        L = np.linalg.cholesky(corr)
+        z = rng.standard_normal(size=(100, 2)) @ L.T
+        return 1.0 / (1.0 + np.exp(-z))
+
+    def test_identical_groups_give_zero_statistic_and_p_one(self, correlated: np.ndarray) -> None:
+        stat, p_value = frobenius_covariance_permutation(correlated, correlated, n_perm=100, seed=1)
+        assert stat == pytest.approx(0.0)
+        assert p_value == pytest.approx(1.0)
+
+    def test_p_value_is_in_bounds(self, correlated: np.ndarray) -> None:
+        rng = np.random.default_rng(2)
+        other = rng.uniform(0.0, 1.0, size=correlated.shape)
+        stat, p_value = frobenius_covariance_permutation(correlated, other, n_perm=100, seed=2)
+        assert stat >= 0.0
+        assert 0.0 <= p_value <= 1.0
+
+    def test_mismatched_metric_counts_raise(self, correlated: np.ndarray) -> None:
+        rng = np.random.default_rng(3)
+        other = rng.uniform(0.0, 1.0, size=(50, 3))
+        with pytest.raises(ValueError, match="same number of metrics"):
+            frobenius_covariance_permutation(correlated, other)
+
+    def test_non_positive_n_perm_raises(self, correlated: np.ndarray) -> None:
+        with pytest.raises(ValueError, match="n_perm must be positive"):
+            frobenius_covariance_permutation(correlated, correlated, n_perm=0)
+
+    def test_zero_variance_metric_raises_when_using_correlation(self) -> None:
+        constant = np.column_stack([np.full(20, 0.5), np.linspace(0.1, 0.9, 20)])
+        with pytest.raises(ValueError, match="zero variance"):
+            frobenius_covariance_permutation(constant, constant, use_correlation=True)
+
+    def test_zero_variance_metric_is_fine_for_covariance(self) -> None:
+        constant = np.column_stack([np.full(20, 0.5), np.linspace(0.1, 0.9, 20)])
+        stat, p_value = frobenius_covariance_permutation(
+            constant, constant, use_correlation=False, n_perm=50, seed=4
+        )
+        assert stat == pytest.approx(0.0)
+        assert 0.0 <= p_value <= 1.0
+
+    def test_affine_transform_preserves_p_value(self, correlated: np.ndarray) -> None:
+        rng = np.random.default_rng(5)
+        corr_flip = np.array([[1.0, -0.5], [-0.5, 1.0]])
+        L = np.linalg.cholesky(corr_flip)
+        z = rng.standard_normal(size=(100, 2)) @ L.T
+        other = 1.0 / (1.0 + np.exp(-z))
+
+        def affine(arr: np.ndarray, a: float, b: float = 0.5) -> np.ndarray:
+            return b + a * (arr - b)
+
+        _, p_original = frobenius_covariance_permutation(correlated, other, n_perm=150, seed=42)
+        _, p_scaled = frobenius_covariance_permutation(
+            affine(correlated, 0.5), affine(other, 0.5), n_perm=150, seed=42
+        )
+        assert p_original == pytest.approx(p_scaled)
 
 
 class TestComputeMannWhitneyU:

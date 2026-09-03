@@ -30,6 +30,23 @@ def format_gate_summary(verdict: GateVerdict) -> str:
             f"| {effect_size} |"
         )
 
+    if verdict.covariance_verdicts:
+        lines.append("")
+        lines.append(
+            "**Covariance-structure drift (Track 3, informational -- "
+            "does not affect gate pass/fail):**"
+        )
+        lines.append("")
+        lines.append("| Metric Set | Statistic | P-Value | Drift |")
+        lines.append("|---|---:|---:|---|")
+        for result in verdict.covariance_verdicts:
+            lines.append(
+                f"| {', '.join(result.metric_names)} "
+                f"| {result.verdict.statistic:.4f} "
+                f"| {result.verdict.p_value:.4e} "
+                f"| {'YES' if result.verdict.is_drift else 'no'} |"
+            )
+
     lines.append("")
     lines.append(f"**Gate:** {'PASS' if verdict.passed else 'BLOCK'}")
     lines.append(
@@ -56,6 +73,7 @@ def write_github_summary(
 
 
 def gate_exit_code(verdict: GateVerdict) -> int:
+    # Unchanged: keyed on verdict.passed alone, which Track 3 never touches.
     if verdict.passed:
         logger.info("CI Gate PASSED for run_id=%s", verdict.run_id)
         return 0
