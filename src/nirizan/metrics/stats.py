@@ -1,5 +1,6 @@
 # src/nirizan/metrics/stats.py
-"""Centralized statistical utilities and validation helpers for NiriZan metrics, regression, and gate layers."""
+"""Centralized statistical utilities and validation helpers for NiriZan metrics,
+regression, multivariate (covariance-drift), and gate layers."""
 
 from __future__ import annotations
 
@@ -26,6 +27,122 @@ def validate_scores(scores: np.ndarray | Sequence[float]) -> np.ndarray:
         raise ValueError("NiriZan metric scores must be normalized to [0, 1].")
     logger.debug("Successfully validated %d score observations", arr.size)
     return arr
+
+
+def validate_score_matrix(scores: np.ndarray | Sequence[Sequence[float]]) -> np.ndarray:
+    """Validate a [n_samples, n_metrics] score matrix for finite values, bounded
+    range [0, 1], and shape suitable for joint (multivariate) analysis.
+
+    Requires at least two metrics (columns), since a single-metric matrix has
+    no covariance structure to analyze -- that case belongs to the univariate
+    ``validate_scores`` path instead.
+    """
+    arr = np.asarray(scores, dtype=float)
+    if arr.ndim != 2:
+        raise ValueError("Score matrix must be two-dimensional (n_samples, n_metrics).")
+    if arr.shape[0] == 0:
+        raise ValueError("Score matrix is empty.")
+    if arr.shape[1] < 2:
+        raise ValueError(
+            "Score matrix must contain at least two metrics for covariance analysis."
+        )
+    if not np.isfinite(arr).all():
+        raise ValueError("Scores contain non-finite values (NaN/Inf).")
+    if np.any(arr < 0.0) or np.any(arr > 1.0):
+        raise ValueError("NiriZan metric scores must be normalized to [0, 1].")
+    logger.debug(
+        "Successfully validated score matrix with shape %s", arr.shape
+    )
+    return arr
+
+
+def _second_moment_matrix(matrix: np.ndarray, *, use_correlation: bool) -> np.ndarray:
+    """Compute the sample covariance or correlation matrix for one group.
+
+    Raises ValueError when ``use_correlation`` is requested but one or more
+    metrics have zero variance within this group, since the correlation is
+    undefined in that case (division by zero standard deviation).
+    """
+    if use_correlation:
+        stds = np.std(matrix, axis=0, ddof=1)
+        if np.any(stds == 0.0):
+            raise ValueError(
+                "Cannot compute correlation matrix: one or more metrics have "
+                "zero variance within a group."
+            )
+        return np.atleast_2d(np.corrcoef(matrix, rowvar=False))
+    return np.atleast_2d(np.cov(matrix, rowvar=False))
+
+
+def frobenius_covariance_permutation(
+    candidate: np.ndarray | Sequence[Sequence[float]],
+    baseline: np.ndarray | Sequence[Sequence[float]],
+    *,
+    use_correlation: bool = False,
+    n_perm: int = 200,
+    seed: int | None = None,
+) -> tuple[float, float]:
+    """Permutation test on the Frobenius norm of the difference between the
+    candidate and baseline groups' covariance (or correlation) matrices.
+
+    candidate and baseline are [n_samples, n_metrics] score matrices. The
+    null hypothesis is that both groups' joint second-moment structure is
+    the same; the test statistic is the Frobenius norm of the difference
+    between the two groups' covariance (``use_correlation=False``) or
+    correlation (``use_correlation=True``) matrices, with a permutation
+    null built by reshuffling the pooled rows between the two groups.
+
+    The p-value is one-sided by construction: the Frobenius norm is
+    non-negative, so a larger statistic always means "more different",
+    regardless of which direction the shift goes.
+    """
+    if n_perm <= 0:
+        raise ValueError("n_perm must be positive.")
+
+    cand = np.asarray(candidate, dtype=float)
+    base = np.asarray(baseline, dtype=float)
+
+    if cand.ndim != 2 or base.ndim != 2:
+        raise ValueError("candidate and baseline must be two-dimensional (n_samples, n_metrics).")
+    if cand.shape[1] != base.shape[1]:
+        raise ValueError("candidate and baseline must have the same number of metrics.")
+
+    def _statistic(a: np.ndarray, b: np.ndarray) -> float:
+        mat_a = _second_moment_matrix(a, use_correlation=use_correlation)
+        mat_b = _second_moment_matrix(b, use_correlation=use_correlation)
+        return float(np.linalg.norm(mat_a - mat_b, ord="fro"))
+
+    observed = _statistic(cand, base)
+
+    rng = np.random.default_rng(seed)
+    pooled = np.vstack([cand, base])
+    n_cand = cand.shape[0]
+    n_total = pooled.shape[0]
+
+    perm_stats = np.empty(n_perm, dtype=float)
+    for i in range(n_perm):
+        idx = rng.permutation(n_total)
+        perm_stats[i] = _statistic(pooled[idx[:n_cand]], pooled[idx[n_cand:]])
+
+    p_value = float((1 + np.sum(perm_stats >= observed)) / (n_perm + 1))
+
+    return observed, p_value
+
+
+def mann_whitney_regression(
+    candidate_scores: np.ndarray | Sequence[float],
+    baseline_scores: np.ndarray | Sequence[float],
+    *,
+    alternative: Literal["less", "greater", "two-sided"] = "less",
+) -> tuple[float, float]:
+    """Perform Mann-Whitney U test to evaluate score regression between candidate and baseline."""
+    cand = validate_scores(candidate_scores)
+    base = validate_scores(baseline_scores)
+    if len(cand) < 5 or len(base) < 5:
+        raise ValueError("At least five observations are required in each group.")
+
+    res = mannwhitneyu(cand, base, alternative=alternative)
+    return float(res.statistic), float(res.pvalue)
 
 
 def bootstrap_delta_ci(
@@ -58,22 +175,6 @@ def bootstrap_delta_ci(
     ci_upper = float(np.percentile(boot_deltas, (1.0 - alpha / 2.0) * 100.0))
 
     return delta_hat, ci_lower, ci_upper
-
-
-def mann_whitney_regression(
-    candidate_scores: np.ndarray | Sequence[float],
-    baseline_scores: np.ndarray | Sequence[float],
-    *,
-    alternative: Literal["less", "greater", "two-sided"] = "less",
-) -> tuple[float, float]:
-    """Perform Mann-Whitney U test to evaluate score regression between candidate and baseline."""
-    cand = validate_scores(candidate_scores)
-    base = validate_scores(baseline_scores)
-    if len(cand) < 5 or len(base) < 5:
-        raise ValueError("At least five observations are required in each group.")
-
-    res = mannwhitneyu(cand, base, alternative=alternative)
-    return float(res.statistic), float(res.pvalue)
 
 
 def holm_bonferroni(
@@ -159,7 +260,9 @@ __all__ = [
     "compute_calibration_metrics",
     "compute_holm_bonferroni",
     "compute_mann_whitney_u",
+    "frobenius_covariance_permutation",
     "holm_bonferroni",
     "mann_whitney_regression",
+    "validate_score_matrix",
     "validate_scores",
 ]
