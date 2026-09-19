@@ -1,5 +1,6 @@
-from abc import ABC, abstractmethod
+# src\nirizan\instrumentation\exporters.py
 import logging
+from abc import ABC, abstractmethod
 
 from nirizan.instrumentation.spans import Trace
 
@@ -14,6 +15,7 @@ class BaseExporter(ABC):
         """Export a completed Trace to storage or a remote collector."""
         pass
 
+    @abstractmethod
     async def shutdown(self) -> None:
         """Release underlying connections or background workers."""
         pass
@@ -27,6 +29,10 @@ class InMemoryExporter(BaseExporter):
 
     async def export(self, trace: Trace) -> None:
         self._traces.append(trace)
+
+    async def shutdown(self) -> None:
+        """Nothing to release: the in-memory buffer needs no teardown."""
+        pass
 
     def get_traces(self) -> list[Trace]:
         return list(self._traces)
@@ -45,3 +51,7 @@ class ConsoleExporter(BaseExporter):
             trace.application_name,
             len(trace.spans),
         )
+
+    async def shutdown(self) -> None:
+        """Nothing to release: stdlib logging needs no teardown."""
+        pass
