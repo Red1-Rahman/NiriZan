@@ -355,6 +355,7 @@ class GateVerdict(BaseModel):
 
 * `confidence_interval` is required, not optional, even though `passed` alone would satisfy a naive CI integration. A gate that only emits `passed: bool` is a rubber stamp, not a gate. If a CI step only wants the boolean, it reads `.passed`, but the interval is always computed and always present in the contract.
 * `multivariate_verdicts` is an additive Phase 6 field, optional with an empty-list default. Callers that do not run the structure track see an empty list, not a missing key. `passed` flips to `False` on any `BLOCKING` verdict from either `regression_verdicts` or `multivariate_verdicts`. `select_decision_metric` remains univariate-only; it is called with `regression_verdicts` alone.
+* All verdicts participating in one gate evaluation must share the same `(run_id, baseline_id)` comparison identity. `evaluate_gate` raises `ValueError` rather than combining verdicts from different comparisons.
 
 ### `Metric` interface extension for judges
 
@@ -629,6 +630,7 @@ class MultivariateConfig(BaseModel):
 **Contract guarantees:**
 
 * `warning_effect` and `blocking_effect` are **positive magnitudes**, not signed effect sizes. This is the opposite convention from `BaselineComparator`'s negative Cohen's d thresholds, and it is deliberate: structure effects are undirected, so a signed threshold would have no coherent meaning.
+* `blocking_effect` must be strictly greater than `warning_effect`. The model enforces this at construction time, so a valid configuration always has distinct WARNING and BLOCKING regions.
 * Defaults for `warning_effect` and `blocking_effect` are placeholders pending calibration against real NiriZan data. The values shipped here are the ones the ablation study used; they should be revisited once the structure track has a body of real production verdicts.
 * `n_permutations` floors at 199. With fewer permutations, the smallest possible p-value is `1/(R+1)`, which for `R < 199` cannot distinguish `0.05` from `0.10` with enough resolution to be useful at the gate.
 * `min_complete_rows` floors at 10. Below this, the two structure tests are statistically unstable in different ways: `scale` on very small samples has near-zero power, and `dependence`'s rank-correlation matrices become degenerate.
@@ -754,7 +756,7 @@ class MultivariateComparator:
 
 * `compare` returns **exactly two verdicts**, one per method, in the order `[SCALE, DEPENDENCE]`. When `n_metrics == 1`, the dependence verdict is returned as `NONE` with `p_value=1.0`, `statistic=0.0`, and an explanation noting that the test was skipped (a single-metric sample has no off-diagonal pair to test).
 * `compare` raises `ValueError` when the candidate and baseline matrices have different `metric_names`, and `InsufficientDataError` when either matrix has fewer rows than `min_complete_rows`.
-* `compare_metric_results` wraps `compare` for the common case where the caller has raw `MetricResult` records. On insufficient data, it returns two `INCONCLUSIVE` verdicts rather than raising, mirroring the `AttributionVerdict.INCONCLUSIVE` contract in the Trust layer. This is the entry point most callers should use.
+* `compare_metric_results` wraps `compare` for the common case where the caller has raw `MetricResult` records. On insufficient data, it returns two `INCONCLUSIVE` verdicts rather than raising, mirroring the `AttributionVerdict.INCONCLUSIVE` contract in the Trust layer. When both sides retain at least one complete row, their descriptive complete-case `metric_deltas` are preserved; those values never affect the verdict or gate decision. This is the entry point most callers should use.
 * Permutation seeds are derived deterministically from `(run_id, baseline_id)`. The two methods use seeds `seed` and `seed + 1`, so two evaluations of the same comparison produce byte-identical results, including across process restarts.
 * `MetricResult` is only accepted through `compare_metric_results`, never `compare` directly. `compare` requires pre-built `ScoreMatrix` objects, since building them is the step that enforces the row-alignment the structure tests depend on.
 * The comparator is stateless apart from its frozen `MultivariateConfig`. Two instances constructed with the same config behave identically for the same inputs.

@@ -3268,7 +3268,7 @@ The final release decision produced by the gate layer.
 | `passed` | `bool` | Yes | — | `True` if no `BLOCKING`-severity regression was found anywhere in `regression_verdicts`. |
 | `confidence_interval` | `tuple[float, float]` | Yes | — | `(low, high)` bootstrap confidence interval for the mean-score delta of the single "worst" metric, as selected by `select_decision_metric`. Not a confidence interval for every metric in `regression_verdicts`, only the selected one. |
 | `regression_verdicts` | `list[RegressionVerdict]` | No | `[]` | The full list of regression verdicts this gate decision was based on. |
-| `run_id` | `UUID` | Yes | — | The run this gate decision applies to. When built via `evaluate_gate`, this is taken from the selected decision metric's own `run_id`, not independently verified against the other verdicts' `run_id`s. |
+| `run_id` | `UUID` | Yes | — | The run this gate decision applies to. `evaluate_gate` verifies that every univariate and multivariate verdict belongs to the same `(run_id, baseline_id)` comparison before constructing it. |
 
 ---
 
@@ -3367,12 +3367,13 @@ def evaluate_gate(
     *,
     verdicts: list[RegressionVerdict],
     scores_by_metric: dict[str, tuple[np.ndarray, np.ndarray]],
+    multivariate_verdicts: list[MultivariateVerdict] | None = None,
 ) -> GateVerdict
 ```
 
 **Purpose**
 
-Produces a `GateVerdict`: selects the worst metric via `select_decision_metric`, computes its bootstrap confidence interval, and decides pass/fail from whether any verdict in the full list is `BLOCKING`.
+Produces a `GateVerdict`: selects the worst univariate metric via `select_decision_metric`, computes its bootstrap confidence interval, and decides pass/fail from whether any univariate or multivariate verdict is `BLOCKING`.
 
 **Parameters**
 
@@ -3380,12 +3381,13 @@ Produces a `GateVerdict`: selects the worst metric via `select_decision_metric`,
 |---|---|---|---|
 | `verdicts` | `list[RegressionVerdict]` | Yes (keyword-only) | Must be non-empty. |
 | `scores_by_metric` | `dict[str, tuple[np.ndarray, np.ndarray]]` | Yes (keyword-only) | Maps each metric name that appears in `verdicts` to its `(candidate_scores, baseline_scores)` arrays. Must contain an entry for whichever metric `select_decision_metric` ends up selecting; since that isn't known in advance, it should generally cover every metric name in `verdicts`. |
+| `multivariate_verdicts` | `list[MultivariateVerdict] \| None` | No (keyword-only) | Optional structure-track verdicts. Every supplied verdict must share the same `(run_id, baseline_id)` as every univariate verdict. |
 
-**Return value:** a `GateVerdict`. `passed` is `True` only if no verdict in `verdicts` has `severity == RegressionSeverity.BLOCKING`; note this is evaluated over the **entire** `verdicts` list, independently of which metric was selected for the confidence interval. `confidence_interval` comes from calling `bootstrap_delta_ci` (this module's version, with its defaults; not configurable through `evaluate_gate`'s own parameters) on the selected metric's score arrays. `regression_verdicts` on the result is the full, unfiltered `verdicts` list you passed in. `run_id` is taken from the selected decision metric's `run_id`.
+**Return value:** a `GateVerdict`. `passed` is `True` only if no univariate or multivariate verdict has `severity == RegressionSeverity.BLOCKING`; the confidence interval and decision metric remain univariate-only. `confidence_interval` comes from calling `bootstrap_delta_ci` (this module's version, with its defaults; not configurable through `evaluate_gate`'s own parameters) on the selected metric's score arrays. `regression_verdicts` and `multivariate_verdicts` preserve the lists supplied by the caller. `run_id` is the validated shared run identity.
 
 **Exceptions:**
 
-- `ValueError` — if `verdicts` is empty.
+- `ValueError` — if `verdicts` is empty, or verdicts do not share one `(run_id, baseline_id)` identity.
 - `KeyError` — if `scores_by_metric` doesn't contain an entry for the metric name `select_decision_metric` selects. This is a plain `KeyError` from the internal dictionary lookup, not a `ValueError` with a descriptive message.
 - Also propagates any `ValueError` raised by the internal `bootstrap_delta_ci` call (empty score arrays for the selected metric, for instance).
 

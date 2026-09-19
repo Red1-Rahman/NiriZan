@@ -1,5 +1,5 @@
 # src\nirizan\metrics\stats.py
-"""Centralized statistical utilities and validation helpers for NiriZan metrics, regression, and gate layers.
+"""Centralized statistical utilities for NiriZan metrics, regression, and gates.
 
 This module is the single source of truth for the statistical primitives
 shared across NiriZan. Specifics:
@@ -30,6 +30,7 @@ from __future__ import annotations
 import math
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any, Literal, cast
+
 import numpy as np
 from scipy.stats import mannwhitneyu, norm, rankdata
 
@@ -237,7 +238,7 @@ def calculate_sample_size(
     alpha: float = 0.05,
     power: float = 0.80,
 ) -> int:
-    """Calculate approximate required sample size per group for target delta using two-sided alpha."""
+    """Calculate the approximate per-group sample size for a two-sided target delta."""
     if baseline_std <= 0:
         raise ValueError("baseline_std must be positive.")
     if target_delta <= 0:
@@ -343,16 +344,38 @@ def permutation_test(
     if n_permutations < 1:
         raise ValueError("n_permutations must be positive.")
 
-    z = np.vstack([x_arr, y_arr])
-    n1 = x_arr.shape[0]
-    n_total = z.shape[0]
+    return _permutation_distribution(
+        x_arr,
+        y_arr,
+        statistic_fn,
+        n_permutations=n_permutations,
+        seed=seed,
+    )
+
+
+def _permutation_distribution(
+    x: np.ndarray,
+    y: np.ndarray,
+    statistic_fn: Callable[[np.ndarray, np.ndarray], float],
+    *,
+    n_permutations: int,
+    seed: int | None,
+) -> tuple[float, np.ndarray]:
+    """Evaluate a statistic and its random-label permutation distribution.
+
+    Unlike :func:`permutation_test`, this internal helper assumes its inputs
+    have already been validated or transformed by a caller. This permits the
+    structure tests to remove nuisance parameters before pooling while keeping
+    their observed and permuted statistics on one implementation path.
+    """
+    z = np.vstack([x, y])
+    n1 = x.shape[0]
     rng = np.random.default_rng(seed)
 
-    observed = float(statistic_fn(x_arr, y_arr))
-
+    observed = float(statistic_fn(x, y))
     null = np.empty(n_permutations, dtype=float)
     for k in range(n_permutations):
-        idx = rng.permutation(n_total)
+        idx = rng.permutation(z.shape[0])
         null[k] = float(statistic_fn(z[idx[:n1]], z[idx[n1:]]))
     return observed, null
 
@@ -376,9 +399,21 @@ def scale_logvar_statistic(
     Rows are observations, columns are metrics. A 1-D input is treated as
     a single-metric sample.
     """
+    if not math.isfinite(eps) or eps <= 0.0:
+        raise ValueError("eps must be finite and positive.")
     x_arr, y_arr = _as_validated_pair(x, y)
-    vx = x_arr.var(axis=0, ddof=1)
-    vy = y_arr.var(axis=0, ddof=1)
+    return _scale_logvar_from_arrays(x_arr, y_arr, eps=eps)
+
+
+def _scale_logvar_from_arrays(x: np.ndarray, y: np.ndarray, *, eps: float) -> float:
+    """Compute the scale statistic from prevalidated arrays.
+
+    This is shared by the public statistic and the centred-residual
+    permutation null. Centering may yield negative residuals, so validating
+    the score range again here would incorrectly reject that valid null.
+    """
+    vx = x.var(axis=0, ddof=1)
+    vy = y.var(axis=0, ddof=1)
     log_diff = np.log(vx + eps) - np.log(vy + eps)
     return float((log_diff**2).sum())
 
@@ -393,14 +428,24 @@ def scale_logvar_test(
 ) -> tuple[float, np.ndarray, float]:
     """Permutation-calibrated variance-only test.
 
-    Returns ``(observed, null, p_value)``. The permutation null is on
-    variance ratios, which are not rank-invariant, so no preprocessing
-    is applied — the raw values are permuted.
+    Returns ``(observed, null, p_value)``. The permutation null removes
+    nuisance location. Each group's column means are removed before
+    pooling residuals and permuting labels; raw values are not exchangeable
+    under a pure location shift. Variance is translation-invariant, so this
+    leaves the observed statistic unchanged for the intended location-shift
+    family with identically distributed residuals and a common scale.
     """
-    observed, null = permutation_test(
-        x,
-        y,
-        lambda xa, ya: scale_logvar_statistic(xa, ya, eps=eps),
+    if not math.isfinite(eps) or eps <= 0.0:
+        raise ValueError("eps must be finite and positive.")
+    if n_permutations < 1:
+        raise ValueError("n_permutations must be positive.")
+    x_arr, y_arr = _as_validated_pair(x, y)
+    centered_x = x_arr - x_arr.mean(axis=0, keepdims=True)
+    centered_y = y_arr - y_arr.mean(axis=0, keepdims=True)
+    observed, null = _permutation_distribution(
+        centered_x,
+        centered_y,
+        lambda xa, ya: _scale_logvar_from_arrays(xa, ya, eps=eps),
         n_permutations=n_permutations,
         seed=seed,
     )
@@ -503,15 +548,12 @@ def dependence_max_t_test(
 ) -> tuple[float, np.ndarray, float]:
     """Permutation-calibrated rank-dependence test.
 
-    The observed statistic ranks ``x`` and ``y`` independently within each
-    group (see ``dependence_max_t_statistic``). The permutation null pools
-    the raw values, draws a random split, and re-ranks **each resulting
-    group independently** before computing the statistic on that split —
-    this keeps the observed and null statistics on the same code path
-    (``_dependence_max_t_from_groups``), which is what the module's
-    permutation-testing convention requires, and what makes the test
-    correctly calibrated: under permutation, each synthetic "group" is
-    ranked exactly the way a real group would be.
+    The null hypothesis is equal dependence (copula), not equal marginal
+    location or scale. Raw rows are consequently not exchangeable when a
+    group has a different marginal transformation. Each group is first
+    converted to columnwise rank pseudo-observations, then those row vectors
+    are pooled and relabelled. The statistic re-ranks every split, preserving
+    its tie handling and keeping observed and null calculations aligned.
 
     Returns ``(observed, null, p_value)`` with the same ``(k + 1) / (R + 1)``
     convention as the other permutation tests.
@@ -520,17 +562,15 @@ def dependence_max_t_test(
     if n_permutations < 1:
         raise ValueError("n_permutations must be positive.")
 
-    pooled = np.vstack([x_arr, y_arr])
-    n1 = x_arr.shape[0]
-    n_total = pooled.shape[0]
-    rng = np.random.default_rng(seed)
-
-    observed = _dependence_max_t_from_groups(x_arr, y_arr)
-
-    null = np.empty(n_permutations, dtype=float)
-    for k in range(n_permutations):
-        idx = rng.permutation(n_total)
-        null[k] = _dependence_max_t_from_groups(pooled[idx[:n1]], pooled[idx[n1:]])
+    x_pseudo = _rank_columns(x_arr) / (x_arr.shape[0] + 1.0)
+    y_pseudo = _rank_columns(y_arr) / (y_arr.shape[0] + 1.0)
+    observed, null = _permutation_distribution(
+        x_pseudo,
+        y_pseudo,
+        _dependence_max_t_from_groups,
+        n_permutations=n_permutations,
+        seed=seed,
+    )
 
     p_value = permutation_p_value(observed, null, alternative="greater")
     return observed, null, p_value

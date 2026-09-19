@@ -20,21 +20,22 @@ is carved out of the same budget the univariate comparator spends;
 is an explicit opt-in for callers who have done the alpha-spending math.
 
 The two tests are combined with Holm-Bonferroni at the structure track's
-alpha. Below ``min_complete_rows``, or with a zero-variance metric column,
-the comparator emits an INCONCLUSIVE verdict rather than a silent pass,
-mirroring the ``AttributionVerdict.INCONCLUSIVE`` contract in
-``trust/attribution.py``.
+alpha. Below ``min_complete_rows`` the comparator emits an INCONCLUSIVE
+verdict rather than a silent pass, mirroring the
+``AttributionVerdict.INCONCLUSIVE`` contract in ``trust/attribution.py``.
+Zero-variance columns are handled numerically by the scale statistic's
+epsilon floor; they do not independently make a comparison inconclusive.
 """
 
 from __future__ import annotations
 
 import math
 from collections.abc import Sequence
-from enum import Enum
+from enum import StrEnum
 from uuid import UUID
 
 import numpy as np
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from nirizan._logging import get_logger
 from nirizan.metrics.base import MetricResult
@@ -54,7 +55,7 @@ logger = get_logger(__name__)
 # ---------------------------------------------------------------------------
 
 
-class MultivariateMode(str, Enum):
+class MultivariateMode(StrEnum):
     """Controls what the structure track may do, not which test runs.
 
     ``BALANCED`` may raise WARNING only; ``GateVerdict.passed`` is never
@@ -67,7 +68,7 @@ class MultivariateMode(str, Enum):
     STRICT = "strict"
 
 
-class MultivariateMethod(str, Enum):
+class MultivariateMethod(StrEnum):
     """Which structure test produced a verdict."""
 
     SCALE = "scale"
@@ -99,6 +100,13 @@ class MultivariateConfig(BaseModel):
     warning_effect: float = Field(default=0.20, gt=0.0)
     blocking_effect: float = Field(default=0.40, gt=0.0)
     seed: int | None = None
+
+    @model_validator(mode="after")
+    def validate_effect_ordering(self) -> MultivariateConfig:
+        """Require an unambiguous WARNING-to-BLOCKING effect progression."""
+        if self.blocking_effect <= self.warning_effect:
+            raise ValueError("blocking_effect must be greater than warning_effect.")
+        return self
 
 
 # ---------------------------------------------------------------------------
@@ -541,6 +549,11 @@ class MultivariateComparator:
                 baseline_id=baseline_id,
                 run_id=run_id,
                 reason=str(exc),
+                metric_deltas=self._complete_case_metric_deltas(
+                    candidate_results=candidate_results,
+                    baseline_results=baseline_results,
+                    metric_names=metric_names,
+                ),
             )
 
         return self.compare(
@@ -556,7 +569,9 @@ class MultivariateComparator:
         baseline_id: UUID,
         run_id: UUID,
         reason: str,
+        metric_deltas: dict[str, float],
     ) -> list[MultivariateVerdict]:
+        """Build the two placeholder verdicts for an untestable comparison."""
         explanation = f"INCONCLUSIVE: {reason}"
         return [
             MultivariateVerdict(
@@ -568,7 +583,7 @@ class MultivariateComparator:
                 baseline_id=baseline_id,
                 run_id=run_id,
                 explanation=explanation,
-                metric_deltas={},
+                metric_deltas=metric_deltas,
                 inconclusive=True,
             ),
             MultivariateVerdict(
@@ -580,10 +595,43 @@ class MultivariateComparator:
                 baseline_id=baseline_id,
                 run_id=run_id,
                 explanation=explanation,
-                metric_deltas={},
+                metric_deltas=metric_deltas,
                 inconclusive=True,
             ),
         ]
+
+    @staticmethod
+    def _complete_case_metric_deltas(
+        *,
+        candidate_results: Sequence[MetricResult],
+        baseline_results: Sequence[MetricResult],
+        metric_names: Sequence[str],
+    ) -> dict[str, float]:
+        """Compute descriptive deltas when both inputs retain a complete row.
+
+        Statistical testing may require many complete rows, but reporting can
+        still accurately describe the mean shift from the complete cases that
+        survived filtering. No delta is reported if either side has zero such
+        rows; this avoids mixing a complete-case mean with a partial metric.
+        """
+        try:
+            candidate = ScoreMatrix.from_metric_results(
+                candidate_results,
+                metric_names=metric_names,
+                min_complete_rows=1,
+            )
+            baseline = ScoreMatrix.from_metric_results(
+                baseline_results,
+                metric_names=metric_names,
+                min_complete_rows=1,
+            )
+        except InsufficientDataError:
+            return {}
+
+        return {
+            name: float(candidate.values[:, i].mean() - baseline.values[:, i].mean())
+            for i, name in enumerate(candidate.metric_names)
+        }
 
 
 __all__ = [

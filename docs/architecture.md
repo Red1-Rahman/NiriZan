@@ -157,7 +157,7 @@ Two complementary tracks run against the same baseline/candidate pair of score m
 
   The two structure tests are combined with Holm-Bonferroni at the structure track's alpha, and both are inherently **undirected** — a variance increase and a variance decrease of equal magnitude produce the same test statistic.
 
-- **Regime handling.** Below `min_complete_rows` complete cases, or with a zero-variance metric column, the structure track emits an `INCONCLUSIVE` verdict rather than a silent pass, mirroring the `AttributionVerdict.INCONCLUSIVE` contract in the Trust layer.
+- **Regime handling.** Below `min_complete_rows` complete cases, the structure track emits an `INCONCLUSIVE` verdict rather than a silent pass, mirroring the `AttributionVerdict.INCONCLUSIVE` contract in the Trust layer. Zero-variance columns are instead handled by the scale statistic's epsilon floor.
 
 - Feeds both the deployment gate (blocking, subject to mode limits below) and the reporting layer (informational).
 

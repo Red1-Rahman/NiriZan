@@ -94,7 +94,8 @@ def bootstrap_delta_ci(
 
     if candidate_arr.size == 0 or baseline_arr.size == 0:
         logger.error(
-            "Bootstrap CI failed: both distributions must contain observations (candidate size=%d, baseline size=%d).",
+            "Bootstrap CI failed: both distributions must contain observations "
+            "(candidate size=%d, baseline size=%d).",
             candidate_arr.size,
             baseline_arr.size,
         )
@@ -112,7 +113,8 @@ def bootstrap_delta_ci(
         raise ValueError("confidence must be between 0 and 1.")
 
     logger.debug(
-        "Computing bootstrap delta CI: n_bootstrap=%d, confidence=%.2f, candidate_n=%d, baseline_n=%d",
+        "Computing bootstrap delta CI: n_bootstrap=%d, confidence=%.2f, "
+        "candidate_n=%d, baseline_n=%d",
         n_bootstrap,
         confidence,
         candidate_arr.size,
@@ -161,6 +163,19 @@ def select_decision_metric(
     return selected
 
 
+def _comparison_identity(
+    verdicts: list[RegressionVerdict],
+    multivariate_verdicts: list[MultivariateVerdict],
+) -> tuple[UUID, UUID]:
+    """Return the shared ``(run_id, baseline_id)`` after validating it."""
+    first = verdicts[0]
+    identity = (first.run_id, first.baseline_id)
+    all_verdicts = [*verdicts, *multivariate_verdicts]
+    if any((verdict.run_id, verdict.baseline_id) != identity for verdict in all_verdicts):
+        raise ValueError("All gate verdicts must have the same run_id and baseline_id.")
+    return identity
+
+
 def evaluate_gate(
     *,
     verdicts: list[RegressionVerdict],
@@ -186,6 +201,7 @@ def evaluate_gate(
         raise ValueError("Gate requires at least one regression verdict.")
 
     multivariate_list = list(multivariate_verdicts or [])
+    run_id, _ = _comparison_identity(verdicts, multivariate_list)
 
     logger.info(
         "Evaluating gate across %d univariate verdict(s) and %d multivariate verdict(s)",
@@ -213,13 +229,13 @@ def evaluate_gate(
     if passed:
         logger.info(
             "Gate evaluation result: PASSED for run_id=%s",
-            decision_metric.run_id,
+            run_id,
         )
     else:
         logger.warning(
             "Gate evaluation result: BLOCKED for run_id=%s "
             "(%d univariate blocking, %d multivariate blocking)",
-            decision_metric.run_id,
+            run_id,
             len(univariate_blocking),
             len(multivariate_blocking),
         )
@@ -229,5 +245,5 @@ def evaluate_gate(
         confidence_interval=confidence_interval,
         regression_verdicts=verdicts,
         multivariate_verdicts=multivariate_list,
-        run_id=decision_metric.run_id,
+        run_id=run_id,
     )

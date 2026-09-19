@@ -24,7 +24,6 @@ from nirizan.metrics.stats import (
     validate_scores,
 )
 
-
 # ---------------------------------------------------------------------------
 # validate_scores
 # ---------------------------------------------------------------------------
@@ -584,6 +583,14 @@ class TestScaleLogvarTest:
         _, _, p = scale_logvar_test(x, y, n_permutations=199, seed=1)
         assert p < 0.05
 
+    def test_location_shift_with_equal_scale_is_not_significant(self) -> None:
+        """Centering must remove location before calibrating a scale null."""
+        rng = np.random.default_rng(31)
+        x = rng.normal(0.25, 0.04, size=(60, 2))
+        y = rng.normal(0.65, 0.04, size=(60, 2))
+        _, _, p = scale_logvar_test(x, y, n_permutations=499, seed=8)
+        assert p > 0.05
+
     def test_deterministic_with_seed(self) -> None:
         rng = np.random.default_rng(4)
         x = rng.uniform(0.3, 0.7, size=(25, 2))
@@ -605,6 +612,33 @@ class TestScaleLogvarTest:
         assert isinstance(observed, float)
         assert isinstance(null, np.ndarray)
         assert isinstance(p, float)
+
+    def test_zero_and_near_zero_variance_are_finite(self) -> None:
+        x = np.column_stack([np.full(20, 0.5), np.linspace(0.499999, 0.500001, 20)])
+        y = np.column_stack([np.full(20, 0.5), np.linspace(0.499998, 0.500002, 20)])
+        observed, null, p = scale_logvar_test(x, y, n_permutations=19, seed=2)
+        assert np.isfinite(observed)
+        assert np.isfinite(null).all()
+        assert 0.0 < p <= 1.0
+
+    @pytest.mark.parametrize("eps", [0.0, -1e-12, float("inf")])
+    def test_invalid_epsilon_raises(self, eps: float) -> None:
+        values = np.array([0.3, 0.4, 0.5])
+        with pytest.raises(ValueError, match="eps must be finite and positive"):
+            scale_logvar_test(values, values, n_permutations=1, eps=eps)
+
+    @pytest.mark.parametrize(
+        "invalid",
+        [np.array([0.2, float("nan")]), np.array([0.2, 1.1])],
+    )
+    def test_invalid_scores_raise(self, invalid: np.ndarray) -> None:
+        with pytest.raises(ValueError):
+            scale_logvar_test(invalid, np.array([0.2, 0.3]), n_permutations=1)
+
+    def test_zero_permutations_raises(self) -> None:
+        values = np.array([0.3, 0.4, 0.5])
+        with pytest.raises(ValueError, match="n_permutations"):
+            scale_logvar_test(values, values, n_permutations=0)
 
 
 # ---------------------------------------------------------------------------
@@ -697,6 +731,36 @@ class TestDependenceMaxTTest:
         observed, _, p = dependence_max_t_test(x, y, n_permutations=199, seed=1)
         assert observed == pytest.approx(0.0, abs=1e-12)
         assert p == pytest.approx(1.0)
+
+    def test_shifted_and_rescaled_marginals_do_not_fire(self) -> None:
+        """The dependence null must remove marginal location and scale."""
+        rng = np.random.default_rng(77)
+        covariance = np.array([[1.0, 0.7, 0.2], [0.7, 1.0, 0.4], [0.2, 0.4, 1.0]])
+        x_latent = rng.multivariate_normal(np.zeros(3), covariance, 80)
+        y_latent = rng.multivariate_normal(np.zeros(3), covariance, 80)
+        x = 0.3 + 0.1 * np.tanh(x_latent)
+        y = 0.65 + 0.15 * np.tanh(y_latent)
+        assert y.min() >= 0.0 and y.max() <= 1.0
+
+        observed, _, p = dependence_max_t_test(x, y, n_permutations=499, seed=4)
+        assert observed > 0.0
+        assert p > 0.05
+
+    def test_ties_constant_columns_and_small_samples_are_finite(self) -> None:
+        x = np.array([[0.4, 0.2], [0.4, 0.2], [0.4, 0.8]])
+        y = np.array([[0.6, 0.3], [0.6, 0.3], [0.6, 0.9]])
+        observed, null, p = dependence_max_t_test(x, y, n_permutations=9, seed=3)
+        assert np.isfinite(observed)
+        assert np.isfinite(null).all()
+        assert 0.0 < p <= 1.0
+
+    @pytest.mark.parametrize(
+        "invalid",
+        [np.array([[0.2, float("nan")], [0.3, 0.4]]), np.array([[0.2, 1.1], [0.3, 0.4]])],
+    )
+    def test_invalid_scores_raise(self, invalid: np.ndarray) -> None:
+        with pytest.raises(ValueError):
+            dependence_max_t_test(invalid, np.array([[0.2, 0.3], [0.3, 0.4]]), n_permutations=1)
 
     def test_deterministic_with_seed(self) -> None:
         rng = np.random.default_rng(4)

@@ -34,7 +34,6 @@ from nirizan.regression.multivariate import (
     derive_permutation_seed,
 )
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -167,6 +166,12 @@ class TestMultivariateConfig:
     def test_blocking_effect_must_be_positive(self) -> None:
         with pytest.raises(ValidationError):
             MultivariateConfig(blocking_effect=-0.1)
+
+    def test_effect_thresholds_must_be_ordered(self) -> None:
+        with pytest.raises(ValidationError, match="greater than warning_effect"):
+            MultivariateConfig(warning_effect=0.4, blocking_effect=0.4)
+        with pytest.raises(ValidationError, match="greater than warning_effect"):
+            MultivariateConfig(warning_effect=0.4, blocking_effect=0.2)
 
 
 # ---------------------------------------------------------------------------
@@ -752,6 +757,80 @@ class TestCompareMetricResults:
         assert all(v.p_value == 1.0 for v in verdicts)
         assert all("INCONCLUSIVE" in v.explanation for v in verdicts)
         assert "inconclusive" in caplog.text.lower()
+
+    def test_inconclusive_preserves_complete_case_metric_deltas(self) -> None:
+        """Descriptive deltas survive even when the sample is too small to test."""
+        base = np.array([[0.6, 0.7], [0.5, 0.6]])
+        cand = np.array([[0.4, 0.5], [0.3, 0.4]])
+        verdicts = MultivariateComparator(config=_fast_config()).compare_metric_results(
+            candidate_results=_make_metric_results(cand, ["m1", "m2"]),
+            baseline_results=_make_metric_results(base, ["m1", "m2"]),
+            metric_names=["m1", "m2"],
+            baseline_id=uuid4(),
+            run_id=uuid4(),
+        )
+
+        for verdict in verdicts:
+            assert verdict.inconclusive is True
+            assert verdict.metric_deltas == {"m1": pytest.approx(-0.2), "m2": pytest.approx(-0.2)}
+
+    def test_inconclusive_omits_deltas_without_complete_rows(self) -> None:
+        """Partial rows cannot be used as complete-case descriptive data."""
+        now = datetime.now(UTC)
+        trace_id = uuid4()
+        candidate_results = [
+            MetricResult(metric_name="m1", trace_id=trace_id, score=0.4, computed_at=now),
+        ]
+        baseline_results = [
+            MetricResult(metric_name="m1", trace_id=trace_id, score=0.6, computed_at=now),
+            MetricResult(metric_name="m2", trace_id=trace_id, score=0.7, computed_at=now),
+        ]
+        verdicts = MultivariateComparator(config=_fast_config()).compare_metric_results(
+            candidate_results=candidate_results,
+            baseline_results=baseline_results,
+            metric_names=["m1", "m2"],
+            baseline_id=uuid4(),
+            run_id=uuid4(),
+        )
+
+        assert all(verdict.inconclusive for verdict in verdicts)
+        assert all(verdict.metric_deltas == {} for verdict in verdicts)
+
+    def test_inconclusive_deltas_exclude_malformed_complete_cases(self) -> None:
+        """Non-finite rows are dropped before descriptive means are computed."""
+        now = datetime.now(UTC)
+        good_trace, bad_trace, baseline_trace = uuid4(), uuid4(), uuid4()
+        candidate_results = [
+            MetricResult(metric_name="m1", trace_id=good_trace, score=0.4, computed_at=now),
+            MetricResult(metric_name="m2", trace_id=good_trace, score=0.5, computed_at=now),
+            MetricResult.model_construct(
+                metric_name="m1",
+                trace_id=bad_trace,
+                score=float("nan"),
+                confidence=None,
+                details={},
+                computed_at=now,
+            ),
+            MetricResult(metric_name="m2", trace_id=bad_trace, score=0.1, computed_at=now),
+        ]
+        baseline_results = [
+            MetricResult(metric_name="m1", trace_id=baseline_trace, score=0.6, computed_at=now),
+            MetricResult(metric_name="m2", trace_id=baseline_trace, score=0.7, computed_at=now),
+        ]
+        verdicts = MultivariateComparator(config=_fast_config()).compare_metric_results(
+            candidate_results=candidate_results,
+            baseline_results=baseline_results,
+            metric_names=["m1", "m2"],
+            baseline_id=uuid4(),
+            run_id=uuid4(),
+        )
+
+        assert all(verdict.inconclusive for verdict in verdicts)
+        for verdict in verdicts:
+            assert verdict.metric_deltas == {
+                "m1": pytest.approx(-0.2),
+                "m2": pytest.approx(-0.2),
+            }
 
 
 # ---------------------------------------------------------------------------

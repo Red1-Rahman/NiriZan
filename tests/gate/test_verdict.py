@@ -22,10 +22,13 @@ from nirizan.regression.multivariate import (
     MultivariateVerdict,
 )
 
-
 # ---------------------------------------------------------------------------
 # Fixtures and helpers
 # ---------------------------------------------------------------------------
+
+
+TEST_BASELINE_ID = UUID(int=1)
+TEST_RUN_ID = UUID(int=2)
 
 
 @pytest.fixture
@@ -35,8 +38,8 @@ def sample_verdict_none() -> RegressionVerdict:
         severity=RegressionSeverity.NONE,
         p_value=0.5,
         effect_size=-0.01,
-        baseline_id=uuid4(),
-        run_id=uuid4(),
+        baseline_id=TEST_BASELINE_ID,
+        run_id=TEST_RUN_ID,
         explanation="No regression",
     )
 
@@ -48,8 +51,8 @@ def sample_verdict_warning() -> RegressionVerdict:
         severity=RegressionSeverity.WARNING,
         p_value=0.03,
         effect_size=-0.25,
-        baseline_id=uuid4(),
-        run_id=uuid4(),
+        baseline_id=TEST_BASELINE_ID,
+        run_id=TEST_RUN_ID,
         explanation="Warning regression",
     )
 
@@ -61,8 +64,8 @@ def sample_verdict_blocking() -> RegressionVerdict:
         severity=RegressionSeverity.BLOCKING,
         p_value=0.001,
         effect_size=-0.75,
-        baseline_id=uuid4(),
-        run_id=uuid4(),
+        baseline_id=TEST_BASELINE_ID,
+        run_id=TEST_RUN_ID,
         explanation="Blocking regression",
     )
 
@@ -83,8 +86,8 @@ def _multivariate_verdict(
         p_value=p_value,
         statistic=0.0,
         effect_size=effect_size,
-        baseline_id=baseline_id or uuid4(),
-        run_id=run_id or uuid4(),
+        baseline_id=baseline_id if baseline_id is not None else TEST_BASELINE_ID,
+        run_id=run_id if run_id is not None else TEST_RUN_ID,
         explanation="test",
         inconclusive=inconclusive,
     )
@@ -203,6 +206,62 @@ def test_bootstrap_delta_ci_validation() -> None:
 
     with pytest.raises(ValueError, match="confidence must be between 0 and 1."):
         bootstrap_delta_ci(np.array([1.0]), np.array([1.0]), confidence=1.5)
+
+
+def test_gate_rejects_mixed_univariate_comparison_identities(
+    sample_verdict_none: RegressionVerdict,
+) -> None:
+    """A gate may not combine metrics from two run/baseline comparisons."""
+    mismatched = sample_verdict_none.model_copy(update={"run_id": uuid4()})
+
+    with pytest.raises(ValueError, match="same run_id and baseline_id"):
+        evaluate_gate(
+            verdicts=[sample_verdict_none, mismatched],
+            scores_by_metric={
+                "groundedness": (np.array([0.8, 0.9]), np.array([0.8, 0.9])),
+            },
+        )
+
+
+def test_gate_rejects_mixed_multivariate_comparison_identity(
+    sample_verdict_none: RegressionVerdict,
+) -> None:
+    """Structure verdicts must belong to the univariate comparison too."""
+    mismatched = _multivariate_verdict(
+        RegressionSeverity.WARNING,
+        baseline_id=sample_verdict_none.baseline_id,
+        run_id=uuid4(),
+    )
+
+    with pytest.raises(ValueError, match="same run_id and baseline_id"):
+        evaluate_gate(
+            verdicts=[sample_verdict_none],
+            scores_by_metric={
+                "groundedness": (np.array([0.8, 0.9]), np.array([0.8, 0.9])),
+            },
+            multivariate_verdicts=[mismatched],
+        )
+
+
+def test_gate_accepts_matching_comparison_identities(
+    sample_verdict_none: RegressionVerdict,
+) -> None:
+    """Matching univariate and structure verdicts retain their shared run."""
+    structure = _multivariate_verdict(
+        RegressionSeverity.WARNING,
+        baseline_id=sample_verdict_none.baseline_id,
+        run_id=sample_verdict_none.run_id,
+    )
+    result = evaluate_gate(
+        verdicts=[sample_verdict_none],
+        scores_by_metric={
+            "groundedness": (np.array([0.8, 0.9]), np.array([0.8, 0.9])),
+        },
+        multivariate_verdicts=[structure],
+    )
+
+    assert result.run_id == sample_verdict_none.run_id
+    assert result.multivariate_verdicts == [structure]
 
 
 # ---------------------------------------------------------------------------
