@@ -1,13 +1,14 @@
 # src/nirizan/reporting/dashboard.py
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from nirizan._logging import get_logger
-from nirizan.gate.verdict import CovarianceTrackResult, GateVerdict
+from nirizan.gate.verdict import GateVerdict
 from nirizan.regression.comparator import RegressionVerdict
+from nirizan.regression.multivariate import MultivariateVerdict
 from nirizan.reporting.health_score import compute_system_health_score
 from nirizan.reporting.judge_reliability import (
     JudgeReliabilityMetrics,
@@ -26,6 +27,13 @@ class DashboardSnapshot(BaseModel):
     looks at (see architecture.md 3.8: Dashboard, Judge Reliability Panel,
     Drift & Regression Reports are three views over one underlying signal
     set, not three separate computations).
+
+    ``multivariate_verdicts`` carries the structure track's verdicts. They
+    are reported here as informational context; they do not participate in
+    the health score computation, which is driven by the univariate verdicts
+    and the attribution signal. The field defaults to an empty list so
+    callers that do not run the multivariate track see an empty list rather
+    than a missing key.
     """
 
     model_config = ConfigDict(strict=True)
@@ -36,7 +44,7 @@ class DashboardSnapshot(BaseModel):
     latest_attribution: AttributionVerdict | None = None
     judge_reliability: JudgeReliabilityMetrics | None = None
     regression_verdicts: list[RegressionVerdict] = Field(default_factory=list)
-    covariance_verdicts: list[CovarianceTrackResult] = Field(default_factory=list)
+    multivariate_verdicts: list[MultivariateVerdict] = Field(default_factory=list)
     gate_verdict: GateVerdict | None = None
 
 
@@ -47,12 +55,11 @@ def assemble_dashboard_snapshot(
     confidence: float,
     attribution_verdicts: list[AttributionVerdict] | None = None,
     regression_verdicts: list[RegressionVerdict] | None = None,
-    covariance_verdicts: list[CovarianceTrackResult] | None = None,
+    multivariate_verdicts: list[MultivariateVerdict] | None = None,
     gate_verdict: GateVerdict | None = None,
     calibration_errors: list[dict[str, float]] | None = None,
 ) -> DashboardSnapshot:
-    """Combine health score, judge reliability, and regression/gate/covariance
-    output into one snapshot.
+    """Combine health score, judge reliability, and regression/gate output into one snapshot.
 
     quality_score and confidence feed the health score directly (see
     reporting/health_score.py); they are not derived here, since deciding
@@ -65,13 +72,13 @@ def assemble_dashboard_snapshot(
     DriftAttribution.NONE (no attribution history to penalize against) and
     judge_reliability is left unset rather than fabricated from nothing.
 
-    covariance_verdicts, if supplied, carries Track 3 (covariance-structure
-    drift, #46) results directly -- it is not derived from gate_verdict even
-    when gate_verdict.covariance_verdicts is also populated, since a caller
-    may be assembling a snapshot from a standalone drift-monitoring run that
-    never went through gate evaluation at all. It does not feed
-    health_score; Track 3 stays a visibility-only diagnostic here exactly as
-    it does in GateVerdict.
+    multivariate_verdicts, if supplied, are attached to the snapshot as
+    informational reporting data. They do not alter the health score: the
+    structure track is undirected and its severity is capped at WARNING in
+    BALANCED mode, so including it in a numeric score would penalize a
+    directionless signal. Callers that want a numeric structure signal in
+    the snapshot should extend compute_system_health_score directly rather
+    than overloading this argument.
     """
     latest_attribution: AttributionVerdict | None = None
     judge_reliability: JudgeReliabilityMetrics | None = None
@@ -103,22 +110,23 @@ def assemble_dashboard_snapshot(
 
     logger.info(
         "Assembled dashboard snapshot for system_type=%s: health_score=%.1f, "
-        "attribution=%s, regression_verdicts=%d, covariance_verdicts=%d, gate_passed=%s",
+        "attribution=%s, regression_verdicts=%d, multivariate_verdicts=%d, "
+        "gate_passed=%s",
         system_type,
         health_score,
         attribution_for_health.value,
         len(regression_verdicts) if regression_verdicts else 0,
-        len(covariance_verdicts) if covariance_verdicts else 0,
+        len(multivariate_verdicts) if multivariate_verdicts else 0,
         gate_verdict.passed if gate_verdict is not None else "n/a",
     )
 
     return DashboardSnapshot(
-        generated_at=datetime.now(timezone.utc),
+        generated_at=datetime.now(UTC),
         system_type=system_type,
         health_score=health_score,
         latest_attribution=latest_attribution,
         judge_reliability=judge_reliability,
         regression_verdicts=regression_verdicts or [],
-        covariance_verdicts=covariance_verdicts or [],
+        multivariate_verdicts=multivariate_verdicts or [],
         gate_verdict=gate_verdict,
     )
