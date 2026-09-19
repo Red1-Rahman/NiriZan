@@ -58,8 +58,8 @@ flowchart TB
     end
 
     subgraph REG["Regression Detection"]
-        R1[Baseline Comparator]
-        R2["Threshold Alerts<br/>Z-score / statistical test"]
+        R1["Univariate Comparator<br/>(Mann-Whitney + Holm + Cohen's d)"]
+        R2["Structure Track<br/>(scale + dependence, permutation-calibrated)"]
     end
 
     subgraph GATE["Deployment-Aware Gate"]
@@ -71,6 +71,7 @@ flowchart TB
         D1["Dashboard<br/>System Health Score"]
         D2["Judge Reliability Panel"]
         D3["Drift & Regression Reports"]
+        D4["Structure Track Panel"]
     end
 
     APP --> INSTR
@@ -147,8 +148,18 @@ This is intentionally modular so new metrics can be added without changing the o
 
 **Purpose:** Detect quality drops between versions or over time.
 
-- Compares current run metrics against historical baselines using statistical tests (e.g. Z-score, or the kind of test appropriate to the metric's distribution).
-- Feeds both the deployment gate (blocking) and the reporting layer (informational).
+Two complementary tracks run against the same baseline/candidate pair of score matrices:
+
+- **Univariate track** (`regression/comparator.py`). Per-metric Mann-Whitney U with Holm-Bonferroni correction and Cohen's d effect gating. This is the primary decision signal and the only track that has historically driven the deployment gate. It is one-sided (fires only on degradation, not improvement) and its verdicts carry a signed effect size.
+- **Structure track** (`regression/multivariate.py`). Two permutation-calibrated tests targeting changes the univariate track is blind to, per the internal N=3000 ablation study:
+  - `scale`: variance-only change, computed as a permutation test on the sum of squared log-variance ratios across metrics. The univariate track fires on this at roughly its nominal false-alarm rate (2.3%), i.e. it has no power to detect it.
+  - `dependence`: rank-correlation change, computed as a permutation-calibrated maxT of the off-diagonal differences between the two groups' rank-correlation matrices. A pure copula shift leaves every marginal unchanged, so the univariate track has no information about it by construction. Rank correlation is used rather than covariance Frobenius specifically because the ablation showed covariance Frobenius leaks variance changes into the dependence test.
+
+  The two structure tests are combined with Holm-Bonferroni at the structure track's alpha, and both are inherently **undirected** — a variance increase and a variance decrease of equal magnitude produce the same test statistic.
+
+- **Regime handling.** Below `min_complete_rows` complete cases, or with a zero-variance metric column, the structure track emits an `INCONCLUSIVE` verdict rather than a silent pass, mirroring the `AttributionVerdict.INCONCLUSIVE` contract in the Trust layer.
+
+- Feeds both the deployment gate (blocking, subject to mode limits below) and the reporting layer (informational).
 
 ### 3.7 Deployment-Aware Gate
 
@@ -156,6 +167,10 @@ This is intentionally modular so new metrics can be added without changing the o
 
 - Integrates with CI/CD (GitHub Actions, GitLab CI, or similar) as a build step.
 - Emits a pass/fail signal with an attached confidence interval, not just a raw score, so teams can set risk-appropriate thresholds.
+- **Two-track authority.** `GateVerdict.multivariate_verdicts` carries the structure track's verdicts alongside `regression_verdicts` (the univariate track). `passed` flips to `False` on any `BLOCKING` verdict from either track. Structure verdicts do not participate in `select_decision_metric`, which is univariate-only by design.
+- **Structure track mode caps its authority.** The structure track runs in one of two modes (see `MultivariateConfig.mode`):
+  - `BALANCED` (default): the structure track may raise `WARNING`, never `BLOCKING`. `GateVerdict.passed` is never flipped by a structure verdict in this mode. The reason is directionality: a variance change that is an improvement and one that is a regression produce the same test statistic, so a BLOCKING structure verdict would fail a release on a change that might be desirable. WARNING severity surfaces the signal to a human without gating on it automatically.
+  - `STRICT` (opt-in): the structure track may raise `BLOCKING`. The caller is responsible for carving the structure track's alpha out of the same budget the univariate comparator spends, because the ablation showed that any second block-capable track inflates the gate's worst-configuration false-alarm rate above the nominal 5% unless the alpha is shared.
 
 ### 3.8 Quality Reporting
 
@@ -164,6 +179,7 @@ This is intentionally modular so new metrics can be added without changing the o
 - **System Health Score:** an aggregated view combining retrieval relevance, agent plan quality, and drift signals into one summary metric, inspired by aggregation approaches used in tools like Deepchecks.
 - **Judge Reliability Panel:** tracks judge consistency and bias longitudinally, as a first-class, dashboarded metric rather than an afterthought.
 - **Drift & Regression Reports:** surfaces what changed, when, and whether it was attributed to the system or the judge.
+- **Structure Track Panel:** surfaces the multivariate structure verdicts alongside the univariate verdicts in `DashboardSnapshot.multivariate_verdicts`. Structure verdicts are reported as informational context and deliberately **do not participate in the numeric health score**: a directionless signal cannot honestly be reduced to a scalar degradation value, and folding it in would either require picking a direction (wrong, since the tests are undirected) or double-counting univariate signals that already flow into the score.
 
 ---
 
@@ -175,6 +191,7 @@ This is intentionally modular so new metrics can be added without changing the o
 | Static vs. living benchmarks | Static benchmarks risk data leakage and memorization; some proposals favor continuously refreshed evaluation sets | Support living data pipelines so benchmark data can be refreshed rather than going stale |
 | Judge agreement metrics | Raw exact-match agreement overstates judge quality; Cohen's kappa is a more honest metric; position bias affects even strong models | Track judge reliability (including bias and consistency) as its own longitudinal metric, not just a one-time validation step |
 | Cost vs. accuracy of judging | LLM-as-judge is accurate but expensive at scale; lightweight classifiers are cheap but need calibration | Use lightweight judges for volume, calibrate against a small gold set with statistical gating, reserve LLM-as-judge for lower-volume, higher-stakes evaluation |
+| Directed vs. undirected regression signals | Per-metric tests are one-sided and carry a direction; structure tests (variance, dependence) are undirected | Keep both tracks, but cap the structure track at `WARNING` in the default `BALANCED` mode so an undirected signal never blocks a release automatically |
 
 ---
 
@@ -184,6 +201,7 @@ This is intentionally modular so new metrics can be added without changing the o
 2. **Judge-reliability tracking as a first-class, dashboarded metric**, not a one-off audit.
 3. **Integrity-checked evaluation.** Guard against benchmark gaming (e.g. an agent reading reference answers directly rather than solving the task) through integrity-checking analysis modules.
 4. **Data freshness and ownership signals.** A RAG system can score well on faithfulness while still answering from stale or unowned data; NiriZan should track data freshness/ownership metadata alongside inference-layer scores.
+5. **Structure-aware regression detection.** The univariate ablation study showed that per-metric tests are blind to variance-only and dependence-only degradations at the FAR-eligible operating point. NiriZan's structure track exists specifically to cover those two cases, and only those two cases, without reopening the false-alarm budget the univariate track already spends.
 
 ---
 
@@ -196,3 +214,4 @@ This is intentionally modular so new metrics can be added without changing the o
 | Attribution Engine | Judge-vs-system drift attribution research | Disambiguating whether a score drop is the system or the judge |
 | Behavioral Anchor Detector | Embedding-based persona/behavior monitoring | Real-time agent drift detection, cheap enough for continuous use |
 | Holistic Reporter | HELM's multi-metric, multi-scenario visibility model | Giving teams one place to see overall AI system quality |
+| Structure Track | Internal N=3000 ablation of the multivariate structure tests | Detecting variance-only and dependence-only degradation that univariate tests miss, without reopening the false-alarm budget |

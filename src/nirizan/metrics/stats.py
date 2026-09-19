@@ -1,12 +1,37 @@
 # src/nirizan/metrics/stats.py
-"""Centralized statistical utilities and validation helpers for NiriZan metrics, regression, and gate layers."""
+"""Centralized statistical utilities and validation helpers for NiriZan metrics, regression, and gate layers.
+
+This module is the single source of truth for the statistical primitives
+shared across NiriZan. Specifics:
+
+* ``bootstrap_delta_ci`` returns the 3-tuple ``(delta_hat, ci_lower, ci_upper)``.
+  The 2-tuple wrappers in ``metrics/statistical_gating.py`` and
+  ``gate/verdict.py`` are deprecated; both should call this function and
+  discard ``delta_hat`` if they only need the interval.
+* ``cohens_d`` lives here, not in ``regression/comparator.py``. The
+  comparator imports it from here for backward compatibility.
+* The multivariate structure track's statistics (``scale_logvar_test``,
+  ``dependence_max_t_test``) also live here, alongside the shared
+  ``permutation_test`` engine, so that observed and permutation statistics
+  share a single code path.
+
+Project conventions that apply to this module:
+* No pydantic models here, so ``ConfigDict(strict=True)`` does not appear.
+  Where this module's outputs are consumed by models, the models carry
+  that config themselves.
+* No datetime values here. Where this module's outputs feed records that
+  timestamp results, those records use timezone-aware UTC datetimes via
+  the ``datetime.UTC`` alias (Python 3.11+), never ``datetime.now()``
+  without a tz, never ``utcnow()``.
+"""
 
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping, Sequence
-from typing import Literal
+from typing import Any, Callable, Literal, cast
 import numpy as np
-from scipy.stats import mannwhitneyu, norm
+from scipy.stats import mannwhitneyu, norm, rankdata
 
 from nirizan._logging import get_logger
 
@@ -26,6 +51,91 @@ def validate_scores(scores: np.ndarray | Sequence[float]) -> np.ndarray:
         raise ValueError("NiriZan metric scores must be normalized to [0, 1].")
     logger.debug("Successfully validated %d score observations", arr.size)
     return arr
+
+
+def validate_score_matrix(
+    scores: np.ndarray | Sequence[Sequence[float]],
+    *,
+    min_rows: int = 2,
+    min_columns: int = 1,
+) -> np.ndarray:
+    """Validate a 2-D metric-score matrix.
+
+    Each row is one trace's scores across all metrics; each column is one
+    metric. Every entry must be finite and in ``[0, 1]``. Rows with any
+    non-finite entry should be dropped by the caller (via ``ScoreMatrix``
+    construction), not silently coerced here.
+    """
+    arr = np.asarray(scores, dtype=float)
+    if arr.ndim != 2:
+        raise ValueError("Score matrix must be two-dimensional.")
+    if arr.shape[0] < min_rows:
+        raise ValueError(f"Score matrix has {arr.shape[0]} rows; at least {min_rows} required.")
+    if arr.shape[1] < min_columns:
+        raise ValueError(
+            f"Score matrix has {arr.shape[1]} columns; at least {min_columns} required."
+        )
+    if not np.isfinite(arr).all():
+        raise ValueError("Score matrix contains non-finite values (NaN/Inf).")
+    if np.any(arr < 0.0) or np.any(arr > 1.0):
+        raise ValueError("NiriZan metric scores must be normalized to [0, 1].")
+    return arr
+
+
+def _as_validated_pair(
+    x: np.ndarray | Sequence[float] | Sequence[Sequence[float]],
+    y: np.ndarray | Sequence[float] | Sequence[Sequence[float]],
+    *,
+    min_metrics: int = 1,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Coerce and validate ``x`` / ``y`` as a 2-D ``(n, p)`` pair.
+
+    A 1-D input is treated as a single-metric sample and reshaped to
+    ``(n, 1)``. Both arrays must end up 2-D with the same ``p``.
+    """
+    x_arr = np.asarray(x, dtype=float)
+    y_arr = np.asarray(y, dtype=float)
+    if x_arr.ndim == 1:
+        x_arr = x_arr[:, None]
+    if y_arr.ndim == 1:
+        y_arr = y_arr[:, None]
+    if x_arr.ndim != 2 or y_arr.ndim != 2:
+        raise ValueError("x and y must be 1-D or 2-D arrays.")
+    if x_arr.shape[1] != y_arr.shape[1]:
+        raise ValueError("x and y must have the same number of columns.")
+    if x_arr.shape[1] < min_metrics:
+        raise ValueError(f"Requires at least {min_metrics} metric(s), got {x_arr.shape[1]}.")
+    for name, arr in (("x", x_arr), ("y", y_arr)):
+        if arr.shape[0] < 2:
+            raise ValueError(f"{name} must have at least 2 observations.")
+        if not np.isfinite(arr).all():
+            raise ValueError(f"{name} contains non-finite values (NaN/Inf).")
+        if np.any(arr < 0.0) or np.any(arr > 1.0):
+            raise ValueError(f"{name} contains scores outside the [0, 1] range.")
+    return x_arr, y_arr
+
+
+def cohens_d(
+    candidate_scores: np.ndarray | Sequence[float],
+    baseline_scores: np.ndarray | Sequence[float],
+) -> float:
+    """Cohen's d effect size between candidate and baseline.
+
+    Uses the pooled standard deviation formula
+    ``sqrt((s_c² + s_b²) / 2)`` rather than the equal-n pooled formula,
+    since candidate and baseline sizes routinely differ in production.
+    Returns ``0.0`` when the pooled standard deviation is exactly zero
+    (both distributions constant) rather than raising or returning inf;
+    a zero-variance pair has no meaningful effect size.
+    """
+    cand = validate_scores(candidate_scores)
+    base = validate_scores(baseline_scores)
+    candidate_std = float(cand.std(ddof=1))
+    baseline_std = float(base.std(ddof=1))
+    pooled_std = math.sqrt((candidate_std**2 + baseline_std**2) / 2.0)
+    if pooled_std == 0.0:
+        return 0.0
+    return float((cand.mean() - base.mean()) / pooled_std)
 
 
 def bootstrap_delta_ci(
@@ -66,14 +176,26 @@ def mann_whitney_regression(
     *,
     alternative: Literal["less", "greater", "two-sided"] = "less",
 ) -> tuple[float, float]:
-    """Perform Mann-Whitney U test to evaluate score regression between candidate and baseline."""
+    """Perform Mann-Whitney U test to evaluate score regression between candidate and baseline.
+
+    Returns ``(statistic, p_value)``. scipy's type stubs for
+    ``mannwhitneyu`` declare the result as a generic tuple whose element
+    type is ``_T_co@tuple``, so neither attribute access nor positional
+    unpacking resolves to a concrete ``float`` for a static checker. We
+    cast the whole result to ``Any`` at this single point and read the
+    named-tuple fields off it. The runtime object is a
+    ``MannwhitneyuResult`` with both fields, so behavior is unchanged;
+    the cast is the documented escape hatch for the stub gap, contained
+    to one expression.
+    """
     cand = validate_scores(candidate_scores)
     base = validate_scores(baseline_scores)
     if len(cand) < 5 or len(base) < 5:
         raise ValueError("At least five observations are required in each group.")
 
-    res = mannwhitneyu(cand, base, alternative=alternative)
-    return float(res.statistic), float(res.pvalue)
+    result = mannwhitneyu(cand, base, alternative=alternative)
+    result_any = cast(Any, result)
+    return float(result_any.statistic), float(result_any.pvalue)
 
 
 def holm_bonferroni(
@@ -147,6 +269,247 @@ def compute_calibration_metrics(
     return {"mae": mae, "mse": mse, "rmse": rmse}
 
 
+# ---------------------------------------------------------------------------
+# Permutation tests: shared engine, p-value convention, and the two
+# multivariate structure statistics (variance-only and dependence-only).
+# ---------------------------------------------------------------------------
+
+
+def permutation_p_value(
+    observed: float,
+    null: np.ndarray,
+    *,
+    alternative: Literal["greater", "less", "two-sided"] = "greater",
+) -> float:
+    """Exact permutation p-value with the ``(k + 1) / (R + 1)`` correction.
+
+    The ``+1`` in the numerator is the observed value itself (treated as
+    one more permutation, the identity one); the ``+1`` in the denominator
+    accounts for it. This matches the convention used by the notebook's
+    existing permutation-calibrated tests (welch_t2, energy, mmd, etc.)
+    and guarantees ``p > 0`` even when the observed statistic is extreme.
+    """
+    null_arr = np.asarray(null, dtype=float)
+    if null_arr.ndim != 1 or null_arr.size == 0:
+        raise ValueError("null must be a non-empty 1-D array.")
+    if alternative == "greater":
+        count = int((null_arr >= observed).sum())
+    elif alternative == "less":
+        count = int((null_arr <= observed).sum())
+    elif alternative == "two-sided":
+        count = int((np.abs(null_arr) >= abs(observed)).sum())
+    else:
+        raise ValueError(f"Unknown alternative: {alternative}")
+    return (count + 1) / (null_arr.size + 1)
+
+
+def permutation_test(
+    x: np.ndarray | Sequence[float],
+    y: np.ndarray | Sequence[float],
+    statistic_fn: Callable[[np.ndarray, np.ndarray], float],
+    *,
+    n_permutations: int = 999,
+    seed: int | None = None,
+) -> tuple[float, np.ndarray]:
+    """Generic two-sample permutation test.
+
+    The pooled data is sliced into ``n_permutations`` random splits and
+    ``statistic_fn`` is evaluated on each. The observed value is computed
+    on the actual ``x`` / ``y`` split using the same ``statistic_fn``, so
+    observed and null share a code path — this is the invariant the
+    notebook's ablation was careful to preserve, and the reason a bug in
+    one branch cannot silently corrupt every p-value.
+
+    Parameters
+    ----------
+    x, y : array-like
+        Baseline and candidate samples. Rows are observations, columns are
+        metrics. A 1-D input is treated as a single-metric sample.
+    statistic_fn : callable
+        ``(x_arr, y_arr) -> float``. Must accept 2-D arrays.
+    n_permutations : int
+        Number of permutations. The observed value is not counted.
+    seed : int or None
+        RNG seed. ``None`` uses system entropy.
+
+    Returns
+    -------
+    observed : float
+        Statistic on the actual ``x`` / ``y`` split.
+    null : np.ndarray, shape ``(n_permutations,)``
+        Statistic values from random pooled splits.
+    """
+    x_arr, y_arr = _as_validated_pair(x, y)
+    if n_permutations < 1:
+        raise ValueError("n_permutations must be positive.")
+
+    z = np.vstack([x_arr, y_arr])
+    n1 = x_arr.shape[0]
+    n_total = z.shape[0]
+    rng = np.random.default_rng(seed)
+
+    observed = float(statistic_fn(x_arr, y_arr))
+
+    null = np.empty(n_permutations, dtype=float)
+    for k in range(n_permutations):
+        idx = rng.permutation(n_total)
+        null[k] = float(statistic_fn(z[idx[:n1]], z[idx[n1:]]))
+    return observed, null
+
+
+# --- Variance-only statistic -------------------------------------------------
+
+
+def scale_logvar_statistic(
+    x: np.ndarray | Sequence[float],
+    y: np.ndarray | Sequence[float],
+    *,
+    eps: float = 1e-12,
+) -> float:
+    """Variance-only statistic: ``Σ_j (log s²_{y,j} - log s²_{x,j})²``.
+
+    ``eps`` floors the variances before the log, guarding against
+    zero-variance columns (metric scores routinely saturate against the
+    ``[0, 1]`` boundaries). The statistic is undirected: a variance
+    increase and a decrease of equal magnitude produce the same value.
+
+    Rows are observations, columns are metrics. A 1-D input is treated as
+    a single-metric sample.
+    """
+    x_arr, y_arr = _as_validated_pair(x, y)
+    vx = x_arr.var(axis=0, ddof=1)
+    vy = y_arr.var(axis=0, ddof=1)
+    log_diff = np.log(vx + eps) - np.log(vy + eps)
+    return float((log_diff**2).sum())
+
+
+def scale_logvar_test(
+    x: np.ndarray | Sequence[float],
+    y: np.ndarray | Sequence[float],
+    *,
+    n_permutations: int = 999,
+    seed: int | None = None,
+    eps: float = 1e-12,
+) -> tuple[float, np.ndarray, float]:
+    """Permutation-calibrated variance-only test.
+
+    Returns ``(observed, null, p_value)``. The permutation null is on
+    variance ratios, which are not rank-invariant, so no preprocessing
+    is applied — the raw values are permuted.
+    """
+    observed, null = permutation_test(
+        x,
+        y,
+        lambda xa, ya: scale_logvar_statistic(xa, ya, eps=eps),
+        n_permutations=n_permutations,
+        seed=seed,
+    )
+    p_value = permutation_p_value(observed, null, alternative="greater")
+    return observed, null, p_value
+
+
+# --- Dependence-only statistic ----------------------------------------------
+
+
+def _rank_columns(z: np.ndarray) -> np.ndarray:
+    """Rank each column independently (average ties).
+
+    Applied once to the pooled data. Under the null that the two samples
+    share a copula, the pooled ranks are exchangeable, so permuting them
+    is the correct null — this is the "on pooled ranks" convention the
+    ablation used.
+    """
+    ranked = np.empty_like(z, dtype=float)
+    for j in range(z.shape[1]):
+        ranked[:, j] = rankdata(z[:, j])
+    return ranked
+
+
+def _pearson_from_ranks(r: np.ndarray) -> np.ndarray:
+    """Pearson correlation matrix from a rank matrix. Equivalent to Spearman.
+
+    Columns with zero variance within the group contribute zero correlation
+    rather than NaN; under the permutation null this asymmetry is symmetric
+    across the two groups, so it does not bias the test.
+    """
+    centered = r - r.mean(axis=0, keepdims=True)
+    norms = np.sqrt((centered**2).sum(axis=0))
+    norms = np.where(norms == 0.0, 1.0, norms)
+    normalized = centered / norms
+    corr = normalized.T @ normalized
+    corr = (corr + corr.T) / 2.0
+    np.clip(corr, -1.0, 1.0, out=corr)
+    return corr
+
+
+def _dependence_max_t_from_ranks(rx: np.ndarray, ry: np.ndarray) -> float:
+    """max |Δρ| over off-diagonal pairs, both inputs pre-ranked."""
+    cx = _pearson_from_ranks(rx)
+    cy = _pearson_from_ranks(ry)
+    p = cx.shape[0]
+    iu = np.triu_indices(p, k=1)
+    return float(np.abs(cx[iu] - cy[iu]).max())
+
+
+def dependence_max_t_statistic(
+    x: np.ndarray | Sequence[float],
+    y: np.ndarray | Sequence[float],
+) -> float:
+    """Dependence-structure statistic: ``max |Δρ|`` over off-diagonal pairs.
+
+    Uses **rank** correlation (Spearman), not covariance Frobenius. The
+    ablation showed that covariance Frobenius leaks variance changes into
+    the dependence test (17.9% firing on variance-only vs 4.5% for the
+    rank version), because the covariance matrix conflates scale and
+    dependence. Rank correlation isolates dependence from marginals, which
+    is what the structure track is supposed to detect.
+
+    Rows are observations, columns are metrics. Requires ``p >= 2``; a
+    single metric has no pairwise dependence to test.
+    """
+    x_arr, y_arr = _as_validated_pair(x, y, min_metrics=2)
+    pooled = np.vstack([x_arr, y_arr])
+    ranked = _rank_columns(pooled)
+    n1 = x_arr.shape[0]
+    return _dependence_max_t_from_ranks(ranked[:n1], ranked[n1:])
+
+
+def dependence_max_t_test(
+    x: np.ndarray | Sequence[float],
+    y: np.ndarray | Sequence[float],
+    *,
+    n_permutations: int = 999,
+    seed: int | None = None,
+) -> tuple[float, np.ndarray, float]:
+    """Permutation-calibrated rank-dependence test.
+
+    Ranks the pooled data **once**, then permutes the pooled ranks rather
+    than the raw values. This keeps the permutation null cheap and preserves
+    the exchangeability of the ranks under H0. Returns
+    ``(observed, null, p_value)`` with the same ``(k + 1) / (R + 1)``
+    convention as the other permutation tests.
+    """
+    x_arr, y_arr = _as_validated_pair(x, y, min_metrics=2)
+    if n_permutations < 1:
+        raise ValueError("n_permutations must be positive.")
+
+    pooled = np.vstack([x_arr, y_arr])
+    ranked = _rank_columns(pooled)
+    n1 = x_arr.shape[0]
+    n_total = ranked.shape[0]
+    rng = np.random.default_rng(seed)
+
+    observed = _dependence_max_t_from_ranks(ranked[:n1], ranked[n1:])
+
+    null = np.empty(n_permutations, dtype=float)
+    for k in range(n_permutations):
+        idx = rng.permutation(n_total)
+        null[k] = _dependence_max_t_from_ranks(ranked[idx[:n1]], ranked[idx[n1:]])
+
+    p_value = permutation_p_value(observed, null, alternative="greater")
+    return observed, null, p_value
+
+
 # Aliases for backward compatibility
 calculate_bootstrap_ci = bootstrap_delta_ci
 compute_holm_bonferroni = holm_bonferroni
@@ -156,10 +519,18 @@ __all__ = [
     "bootstrap_delta_ci",
     "calculate_bootstrap_ci",
     "calculate_sample_size",
+    "cohens_d",
     "compute_calibration_metrics",
     "compute_holm_bonferroni",
     "compute_mann_whitney_u",
+    "dependence_max_t_statistic",
+    "dependence_max_t_test",
     "holm_bonferroni",
     "mann_whitney_regression",
+    "permutation_p_value",
+    "permutation_test",
+    "scale_logvar_statistic",
+    "scale_logvar_test",
+    "validate_score_matrix",
     "validate_scores",
 ]
