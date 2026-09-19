@@ -1,4 +1,4 @@
-# src/nirizan/metrics/stats.py
+# src\nirizan\metrics\stats.py
 """Centralized statistical utilities and validation helpers for NiriZan metrics, regression, and gate layers.
 
 This module is the single source of truth for the statistical primitives
@@ -28,8 +28,8 @@ Project conventions that apply to this module:
 from __future__ import annotations
 
 import math
-from collections.abc import Mapping, Sequence
-from typing import Any, Callable, Literal, cast
+from collections.abc import Callable, Mapping, Sequence
+from typing import Any, Literal, cast
 import numpy as np
 from scipy.stats import mannwhitneyu, norm, rankdata
 
@@ -191,7 +191,7 @@ def mann_whitney_regression(
     cand = validate_scores(candidate_scores)
     base = validate_scores(baseline_scores)
     if len(cand) < 5 or len(base) < 5:
-        raise ValueError("At least five observations are required in each group.")
+        raise ValueError("at least five observations are required in each group.")
 
     result = mannwhitneyu(cand, base, alternative=alternative)
     result_any = cast(Any, result)
@@ -412,12 +412,19 @@ def scale_logvar_test(
 
 
 def _rank_columns(z: np.ndarray) -> np.ndarray:
-    """Rank each column independently (average ties).
+    """Rank each column of ``z`` independently (average ties).
 
-    Applied once to the pooled data. Under the null that the two samples
-    share a copula, the pooled ranks are exchangeable, so permuting them
-    is the correct null — this is the "on pooled ranks" convention the
-    ablation used.
+    Applied separately to each group (``x`` and ``y``, or each permuted
+    split), never to the pooled data. Spearman/rank correlation is
+    invariant to a monotonic transform of a variable *within its own
+    group* — ranking a group jointly with another group and then slicing
+    the joint ranks back apart does **not** preserve that invariance,
+    because a value's rank then depends on where the other group's values
+    happen to interleave with it. Rank-within-group is what makes the
+    dependence statistic blind to a pure per-column rescale of one group
+    relative to the other, which is the whole point of using rank
+    correlation instead of covariance Frobenius (see the module docstring
+    and ``dependence_max_t_statistic``).
     """
     ranked = np.empty_like(z, dtype=float)
     for j in range(z.shape[1]):
@@ -442,8 +449,18 @@ def _pearson_from_ranks(r: np.ndarray) -> np.ndarray:
     return corr
 
 
-def _dependence_max_t_from_ranks(rx: np.ndarray, ry: np.ndarray) -> float:
-    """max |Δρ| over off-diagonal pairs, both inputs pre-ranked."""
+def _dependence_max_t_from_groups(x_arr: np.ndarray, y_arr: np.ndarray) -> float:
+    """max |Δρ| over off-diagonal pairs, ranking ``x`` and ``y`` independently.
+
+    Each group is ranked **within itself** (see ``_rank_columns``), not as
+    a pooled-then-split ranking. This is what gives the statistic its
+    ablation-critical invariance property: a per-column positive affine
+    rescale of one group relative to the other leaves each group's own
+    internal rank order, and therefore its Spearman correlation matrix,
+    completely unchanged, so the statistic is exactly zero.
+    """
+    rx = _rank_columns(x_arr)
+    ry = _rank_columns(y_arr)
     cx = _pearson_from_ranks(rx)
     cy = _pearson_from_ranks(ry)
     p = cx.shape[0]
@@ -464,14 +481,17 @@ def dependence_max_t_statistic(
     dependence. Rank correlation isolates dependence from marginals, which
     is what the structure track is supposed to detect.
 
+    Each of ``x`` and ``y`` is ranked **independently, within its own
+    group** (not pooled), which is what makes the statistic exactly
+    invariant to a per-column positive affine rescale of one group
+    relative to the other — a pure variance-only change that leaves every
+    marginal's rank order untouched must not move this statistic.
+
     Rows are observations, columns are metrics. Requires ``p >= 2``; a
     single metric has no pairwise dependence to test.
     """
     x_arr, y_arr = _as_validated_pair(x, y, min_metrics=2)
-    pooled = np.vstack([x_arr, y_arr])
-    ranked = _rank_columns(pooled)
-    n1 = x_arr.shape[0]
-    return _dependence_max_t_from_ranks(ranked[:n1], ranked[n1:])
+    return _dependence_max_t_from_groups(x_arr, y_arr)
 
 
 def dependence_max_t_test(
@@ -483,10 +503,17 @@ def dependence_max_t_test(
 ) -> tuple[float, np.ndarray, float]:
     """Permutation-calibrated rank-dependence test.
 
-    Ranks the pooled data **once**, then permutes the pooled ranks rather
-    than the raw values. This keeps the permutation null cheap and preserves
-    the exchangeability of the ranks under H0. Returns
-    ``(observed, null, p_value)`` with the same ``(k + 1) / (R + 1)``
+    The observed statistic ranks ``x`` and ``y`` independently within each
+    group (see ``dependence_max_t_statistic``). The permutation null pools
+    the raw values, draws a random split, and re-ranks **each resulting
+    group independently** before computing the statistic on that split —
+    this keeps the observed and null statistics on the same code path
+    (``_dependence_max_t_from_groups``), which is what the module's
+    permutation-testing convention requires, and what makes the test
+    correctly calibrated: under permutation, each synthetic "group" is
+    ranked exactly the way a real group would be.
+
+    Returns ``(observed, null, p_value)`` with the same ``(k + 1) / (R + 1)``
     convention as the other permutation tests.
     """
     x_arr, y_arr = _as_validated_pair(x, y, min_metrics=2)
@@ -494,17 +521,16 @@ def dependence_max_t_test(
         raise ValueError("n_permutations must be positive.")
 
     pooled = np.vstack([x_arr, y_arr])
-    ranked = _rank_columns(pooled)
     n1 = x_arr.shape[0]
-    n_total = ranked.shape[0]
+    n_total = pooled.shape[0]
     rng = np.random.default_rng(seed)
 
-    observed = _dependence_max_t_from_ranks(ranked[:n1], ranked[n1:])
+    observed = _dependence_max_t_from_groups(x_arr, y_arr)
 
     null = np.empty(n_permutations, dtype=float)
     for k in range(n_permutations):
         idx = rng.permutation(n_total)
-        null[k] = _dependence_max_t_from_ranks(ranked[idx[:n1]], ranked[idx[n1:]])
+        null[k] = _dependence_max_t_from_groups(pooled[idx[:n1]], pooled[idx[n1:]])
 
     p_value = permutation_p_value(observed, null, alternative="greater")
     return observed, null, p_value

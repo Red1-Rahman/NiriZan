@@ -1,4 +1,4 @@
-# tests/metrics/test_stats.py
+# tests\metrics\test_stats.py
 from __future__ import annotations
 
 import numpy as np
@@ -137,11 +137,15 @@ class TestCohensD:
 
     def test_known_value(self) -> None:
         # Two disjoint groups, same variance, same size.
-        # cand mean = 0.3, base mean = 0.7, both stds = sqrt(0.02) ≈ 0.1414.
-        # Pooled std = 0.1414; d = (0.3 - 0.7) / 0.1414 ≈ -2.828.
+        # Deviations from each group's own mean are [-0.1, 0, 0.1, 0, 0],
+        # giving sample variance (ddof=1) of 0.02/4 = 0.005 and
+        # std = sqrt(0.005) ≈ 0.07071 for both groups. Since both stds are
+        # equal, the pooled std sqrt((s_c²+s_b²)/2) reduces to that same
+        # std. cand mean = 0.3, base mean = 0.7, so
+        # d = (0.3 - 0.7) / 0.07071 ≈ -5.657.
         cand = np.array([0.2, 0.3, 0.4, 0.3, 0.3])
         base = np.array([0.6, 0.7, 0.8, 0.7, 0.7])
-        assert cohens_d(cand, base) == pytest.approx(-2.828, abs=0.01)
+        assert cohens_d(cand, base) == pytest.approx(-5.657, abs=0.01)
 
     def test_invalid_scores_raise(self) -> None:
         with pytest.raises(ValueError):
@@ -543,9 +547,13 @@ class TestScaleLogvarStatistic:
 
     def test_known_value(self) -> None:
         # Two-metric case with variance ratio exactly 2 in both columns.
-        x = np.array([[0.2, 0.4], [0.4, 0.6], [0.6, 0.8], [0.8, 1.0]])
+        # Both columns are centered at 0.5 with a max deviation of 0.15,
+        # so a sqrt(2) inflation stays safely within [0, 1]
+        # (0.5 +/- 0.15*sqrt(2) ~= 0.5 +/- 0.212).
+        x = np.array([[0.35, 0.35], [0.45, 0.45], [0.55, 0.55], [0.65, 0.65]])
         center = x.mean(axis=0)
         y = center + (x - center) * np.sqrt(2.0)
+        assert y.min() >= 0.0 and y.max() <= 1.0
         stat = scale_logvar_statistic(x, y)
         # Each column contributes (log 2)^2; two columns.
         expected = 2 * (np.log(2.0) ** 2)
@@ -617,10 +625,11 @@ class TestDependenceMaxTStatistic:
 
     def test_rank_preserving_variance_scaling_gives_zero(self) -> None:
         """The ablation-critical property: a per-column positive linear
-        rescale preserves the pooled rank order within each column, so
-        the correlation matrices are identical and the statistic is
-        exactly zero. This is why rank correlation is used instead of
-        covariance Frobenius — the latter would fire on the same input.
+        rescale preserves the rank order *within each group*, so ranking
+        ``x`` and ``y`` independently gives identical correlation matrices
+        and the statistic is exactly zero. This is why rank correlation
+        (computed within each group) is used instead of covariance
+        Frobenius — the latter would fire on the same input.
         """
         rng = np.random.default_rng(7)
         x = rng.uniform(0.3, 0.7, size=(60, 3))
@@ -671,9 +680,10 @@ class TestDependenceMaxTTest:
 
     def test_rank_preserving_variance_scaling_does_not_fire(self) -> None:
         """Ablation-critical: the dependence test must not fire on a
-        pure variance change that leaves rank order intact. This is the
-        property that justifies using rank correlation rather than
-        covariance Frobenius for the dependence statistic.
+        pure variance change that leaves rank order intact within each
+        group. This is the property that justifies using within-group
+        rank correlation rather than covariance Frobenius for the
+        dependence statistic.
         """
         rng = np.random.default_rng(7)
         x = rng.uniform(0.3, 0.7, size=(60, 3))
