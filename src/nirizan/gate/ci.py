@@ -1,4 +1,14 @@
 # src/nirizan/gate/ci.py
+"""CI-facing formatting and exit-code helpers for gate verdicts.
+
+The summary renders two tables when both tracks produced verdicts: the
+univariate table first (one row per metric, the primary decision signal)
+and the structure track table second (one row per multivariate method).
+When ``multivariate_verdicts`` is empty, the structure table is omitted
+entirely, so the output is byte-identical to the pre-multivariate-track
+behavior for callers that do not run the structure track.
+"""
+
 from __future__ import annotations
 
 import json
@@ -18,11 +28,9 @@ def format_gate_summary(verdict: GateVerdict) -> str:
 
     for regression in verdict.regression_verdicts:
         p_value = f"{regression.p_value:.4e}" if regression.p_value is not None else "n/a"
-
         effect_size = (
             f"{regression.effect_size:.3f}" if regression.effect_size is not None else "n/a"
         )
-
         lines.append(
             f"| {regression.metric_name} "
             f"| {regression.severity.value} "
@@ -30,21 +38,22 @@ def format_gate_summary(verdict: GateVerdict) -> str:
             f"| {effect_size} |"
         )
 
-    if verdict.covariance_verdicts:
+    # Structure track table, rendered only when verdicts are present so
+    # callers that do not run the multivariate track see unchanged output.
+    if verdict.multivariate_verdicts:
         lines.append("")
-        lines.append(
-            "**Covariance-structure drift (Track 3, informational -- "
-            "does not affect gate pass/fail):**"
-        )
+        lines.append("**Structure track (multivariate):**")
         lines.append("")
-        lines.append("| Metric Set | Statistic | P-Value | Drift |")
-        lines.append("|---|---:|---:|---|")
-        for result in verdict.covariance_verdicts:
+        lines.append("| Method | Severity | P-Value | Effect Size | Inconclusive |")
+        lines.append("|---|---|---:|---:|:---:|")
+        for mv in verdict.multivariate_verdicts:
+            inconclusive = "yes" if mv.inconclusive else "no"
             lines.append(
-                f"| {', '.join(result.metric_names)} "
-                f"| {result.verdict.statistic:.4f} "
-                f"| {result.verdict.p_value:.4e} "
-                f"| {'YES' if result.verdict.is_drift else 'no'} |"
+                f"| {mv.method.value} "
+                f"| {mv.severity.value} "
+                f"| {mv.p_value:.4e} "
+                f"| {mv.effect_size:.3f} "
+                f"| {inconclusive} |"
             )
 
     lines.append("")
@@ -64,22 +73,23 @@ def write_github_summary(
     output: TextIO,
 ) -> None:
     logger.info(
-        "Writing GitHub CI summary for run_id=%s (passed=%s)",
+        "Writing GitHub CI summary for run_id=%s (passed=%s, "
+        "univariate_verdicts=%d, multivariate_verdicts=%d)",
         verdict.run_id,
         verdict.passed,
+        len(verdict.regression_verdicts),
+        len(verdict.multivariate_verdicts),
     )
     output.write(format_gate_summary(verdict))
     output.write("\n")
 
 
 def gate_exit_code(verdict: GateVerdict) -> int:
-    # Unchanged: keyed on verdict.passed alone, which Track 3 never touches.
     if verdict.passed:
         logger.info("CI Gate PASSED for run_id=%s", verdict.run_id)
         return 0
-    else:
-        logger.error("CI Gate BLOCKED for run_id=%s", verdict.run_id)
-        return 1
+    logger.error("CI Gate BLOCKED for run_id=%s", verdict.run_id)
+    return 1
 
 
 def serialize_gate_verdict(verdict: GateVerdict) -> str:
