@@ -240,3 +240,13 @@ class BaselineComparator:
         )
 
         return final
+
+
+__all__ = [
+    "BaselineComparator",
+    "RegressionSeverity",
+    "RegressionVerdict",
+    "classify_severity",
+    "cohens_d",
+    "mean_delta",
+]

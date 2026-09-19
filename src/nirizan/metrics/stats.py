@@ -443,7 +443,7 @@ def _pearson_from_ranks(r: np.ndarray) -> np.ndarray:
     norms = np.sqrt((centered**2).sum(axis=0))
     norms = np.where(norms == 0.0, 1.0, norms)
     normalized = centered / norms
-    corr = normalized.T @ normalized
+    corr: np.ndarray = np.asarray(normalized.T @ normalized)
     corr = (corr + corr.T) / 2.0
     np.clip(corr, -1.0, 1.0, out=corr)
     return corr
