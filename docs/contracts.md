@@ -325,6 +325,8 @@ class RegressionVerdict(BaseModel):
     metric_name: str
     severity: RegressionSeverity
     z_score: float | None = None
+    p_value: float | None = Field(default=None, ge=0.0, le=1.0)
+    effect_size: float | None = None
     baseline_id: UUID
     run_id: UUID
     explanation: str
@@ -334,6 +336,7 @@ class RegressionVerdict(BaseModel):
 
 * `severity` is always one of the three enum values; there is no raw boolean pass/fail anywhere in this contract. A `RegressionVerdict` that collapses to true/false before it reaches the Gate has thrown away information the Gate needs.
 * `explanation` is required and must be non-empty. A regression verdict with no human-readable reason is not acceptable output; if the comparator can't explain itself, it hasn't finished computing the verdict.
+* `p_value` and `effect_size` are optional. `p_value` is the raw Mann-Whitney p-value before Holm-Bonferroni correction; `effect_size` is Cohen's d. Both are `None` only for verdicts that bypass statistical testing, which the current implementation does not do; they are optional here to allow a future verdict type (e.g. a forced-flag verdict) that does not carry them.
 
 ### `GateVerdict` (`gate/verdict.py`)
 
@@ -344,12 +347,14 @@ class GateVerdict(BaseModel):
     passed: bool
     confidence_interval: tuple[float, float]
     regression_verdicts: list[RegressionVerdict] = Field(default_factory=list)
+    multivariate_verdicts: list[MultivariateVerdict] = Field(default_factory=list)  # Phase 6
     run_id: UUID
 ```
 
 **Contract guarantees:**
 
 * `confidence_interval` is required, not optional, even though `passed` alone would satisfy a naive CI integration. A gate that only emits `passed: bool` is a rubber stamp, not a gate. If a CI step only wants the boolean, it reads `.passed`, but the interval is always computed and always present in the contract.
+* `multivariate_verdicts` is an additive Phase 6 field, optional with an empty-list default. Callers that do not run the structure track see an empty list, not a missing key. `passed` flips to `False` on any `BLOCKING` verdict from either `regression_verdicts` or `multivariate_verdicts`. `select_decision_metric` remains univariate-only; it is called with `regression_verdicts` alone.
 
 ### `Metric` interface extension for judges
 
@@ -513,25 +518,27 @@ class DashboardSnapshot(BaseModel):
     latest_attribution: AttributionVerdict | None = None
     judge_reliability: JudgeReliabilityMetrics | None = None
     regression_verdicts: list[RegressionVerdict] = Field(default_factory=list)
+    multivariate_verdicts: list[MultivariateVerdict] = Field(default_factory=list)  # Phase 6
     gate_verdict: GateVerdict | None = None
 ```
 
 **Contract guarantees:**
 
 * `model_config = ConfigDict(strict=True)` means the snapshot validates its declared types without implicit coercion.
-* `generated_at` records when the snapshot was assembled. The assembly function populates it with the current UTC time.
+* `generated_at` records when the snapshot was assembled. The assembly function populates it with the current UTC time (timezone-aware, using the `datetime.UTC` alias).
 * `system_type` identifies the system represented by the snapshot.
 * `health_score` is bounded to `[0.0, 100.0]`. It is the output of `compute_system_health_score`; `DashboardSnapshot` stores the resulting score rather than recomputing it.
 * `latest_attribution` is optional and defaults to `None`. When attribution history is supplied, it contains the `AttributionVerdict` with the latest `evaluated_at` timestamp.
 * `judge_reliability` is optional and defaults to `None`. It is populated from supplied attribution history when that history passes the reliability aggregation contract. It is not fabricated when no attribution history is available.
 * `regression_verdicts` defaults to an empty list and represents the regression information available for the snapshot. The list is supplied by the caller and is not recomputed by dashboard assembly.
+* `multivariate_verdicts` is an additive Phase 6 field, optional with an empty-list default. It carries the structure track's verdicts as informational context; **it deliberately does not participate in `compute_system_health_score`**. The structure tests are undirected (a variance increase and decrease of equal magnitude produce the same statistic), so reducing their output to a scalar degradation value would either require arbitrarily picking a direction or double-counting univariate signals that already flow into the score. Callers that want a numeric structure signal should extend `compute_system_health_score` directly rather than overloading this field.
 * `gate_verdict` is optional and defaults to `None`. When present, it carries the Phase 4 CI/deployment gate result rather than duplicating or reducing it to a boolean.
-* `DashboardSnapshot` represents five distinct reporting signals without recomputing their underlying meanings: system health through `health_score`, attribution through `latest_attribution`, longitudinal judge reliability through `judge_reliability`, regression information through `regression_verdicts`, and CI/deployment gating through `gate_verdict`.
+* `DashboardSnapshot` represents six distinct reporting signals without recomputing their underlying meanings: system health through `health_score`, attribution through `latest_attribution`, longitudinal judge reliability through `judge_reliability`, univariate regression information through `regression_verdicts`, structure track information through `multivariate_verdicts`, and CI/deployment gating through `gate_verdict`.
 * `assemble_dashboard_snapshot` takes `quality_score` and `confidence` as direct inputs to `compute_system_health_score`. The reporting layer does not decide which upstream quality metric should represent the system.
 * If `attribution_verdicts` is omitted or empty, `latest_attribution` remains `None`, `judge_reliability` remains `None`, and the health-score attribution input falls back to `DriftAttribution.NONE`.
 * If attribution history is supplied, the latest verdict determines the attribution component used by the health-score computation.
 * Judge reliability is computed from the supplied attribution history. If reliability aggregation fails validation, such as when the verdicts contain mixed anchor sets, the dashboard assembly logs the failure and continues with the health score rather than failing the entire snapshot.
-* `regression_verdicts` and `gate_verdict` are optional reporting inputs. Omitting them produces an empty regression list and a `None` gate verdict respectively.
+* `regression_verdicts`, `multivariate_verdicts`, and `gate_verdict` are optional reporting inputs. Omitting them produces empty lists and a `None` gate verdict respectively.
 * The model is data only. It does not render, persist, or otherwise own presentation behavior.
 
 ## Phase 5 (post-launch) — Breaking Change: `DriftAttribution` expansion and `judge_drift_rate` / `system_drift_rate` redefinition
@@ -581,6 +588,179 @@ Implements the same `Metric` protocol from Phase 2. Its `MetricResult.details` c
 
 ---
 
+## Phase 6 Contracts: Multivariate Structure Track
+
+Phase 6 adds a second regression-detection track that runs in parallel with the Phase 4 univariate comparator. The structure track targets two specific classes of change the univariate track is blind to at its FAR-eligible operating point, per the internal N=3000 ablation study:
+
+- **variance-only degradation**, where every marginal is unchanged but the spread around the mean has grown; and
+- **dependence-only degradation**, where every marginal is unchanged but the copula between metrics has shifted.
+
+Both tests are **undirected**: a variance increase and a variance decrease of equal magnitude produce the same statistic, and a dependence-strengthening and a dependence-weakening change likewise. That directionlessness is the reason the track has a **mode** that caps its authority rather than a fixed severity threshold like the univariate comparator.
+
+### `MultivariateMode` (`regression/multivariate.py`)
+
+Controls what the structure track may do, not which test runs.
+
+- `BALANCED` (default): the structure track may raise `WARNING` only. `GateVerdict.passed` is never affected by a structure verdict in this mode. This is the default because the ablation showed that any second block-capable track inflates the gate's worst-configuration false-alarm rate above the nominal 5% unless its alpha is carved out of the same budget the univariate comparator spends.
+- `STRICT`: the structure track may raise `BLOCKING`. The caller is responsible for lowering the `BaselineComparator` alpha by the same amount the structure track consumes, because the two tracks share the same family-wise error budget.
+
+### `MultivariateMethod` (`regression/multivariate.py`)
+
+Which structure test produced a verdict.
+
+- `SCALE`: variance-only change, computed by `metrics.stats.scale_logvar_test`.
+- `DEPENDENCE`: rank-correlation change, computed by `metrics.stats.dependence_max_t_test`. Uses rank correlation, not covariance Frobenius, because the ablation showed covariance Frobenius leaks variance changes into the dependence test and therefore blurs the two methods' responsibilities.
+
+### `MultivariateConfig` (`regression/multivariate.py`)
+
+```python
+class MultivariateConfig(BaseModel):
+    model_config = ConfigDict(strict=True, frozen=True)
+
+    mode: MultivariateMode = MultivariateMode.BALANCED
+    structure_alpha: float = Field(default=0.05, gt=0.0, lt=1.0)
+    n_permutations: int = Field(default=999, ge=199)
+    min_complete_rows: int = Field(default=20, ge=10)
+    warning_effect: float = Field(default=0.20, gt=0.0)
+    blocking_effect: float = Field(default=0.40, gt=0.0)
+    seed: int | None = None
+```
+
+**Contract guarantees:**
+
+* `warning_effect` and `blocking_effect` are **positive magnitudes**, not signed effect sizes. This is the opposite convention from `BaselineComparator`'s negative Cohen's d thresholds, and it is deliberate: structure effects are undirected, so a signed threshold would have no coherent meaning.
+* Defaults for `warning_effect` and `blocking_effect` are placeholders pending calibration against real NiriZan data. The values shipped here are the ones the ablation study used; they should be revisited once the structure track has a body of real production verdicts.
+* `n_permutations` floors at 199. With fewer permutations, the smallest possible p-value is `1/(R+1)`, which for `R < 199` cannot distinguish `0.05` from `0.10` with enough resolution to be useful at the gate.
+* `min_complete_rows` floors at 10. Below this, the two structure tests are statistically unstable in different ways: `scale` on very small samples has near-zero power, and `dependence`'s rank-correlation matrices become degenerate.
+* `seed` is `None` by default. When `None`, the comparator derives a deterministic seed from `SeedSequence([run_id, baseline_id])` so two evaluations of the same comparison produce identical results. Setting a seed explicitly overrides this for testing or forced reproducibility.
+
+### `ScoreMatrix` (`regression/multivariate.py`)
+
+A row-aligned `(n_traces, n_metrics)` array built by pivoting `MetricResult` records on `trace_id`, complete cases only.
+
+```python
+class ScoreMatrix(BaseModel):
+    model_config = ConfigDict(
+        strict=True,
+        frozen=False,
+        arbitrary_types_allowed=True,
+    )
+
+    values: np.ndarray
+    metric_names: tuple[str, ...]
+    dropped_rows: int = Field(default=0, ge=0)
+
+    @classmethod
+    def from_metric_results(
+        cls,
+        metric_results: Sequence[MetricResult],
+        *,
+        metric_names: Sequence[str],
+        min_complete_rows: int = 20,
+    ) -> ScoreMatrix: ...
+```
+
+**Contract guarantees:**
+
+* The `values` array is 2-D `(n_traces, n_metrics)`. Rows are traces, columns are metrics. This is the opposite orientation from `MetricResult`, which carries one score per record; `ScoreMatrix` is the row-aligned form the structure tests need.
+* A trace is **retained** only if it has a record for every metric in `metric_names` and every one of those scores is finite and in `[0, 1]`. Traces that fail either check are counted in `dropped_rows` and excluded from the matrix.
+* `from_metric_results` raises `InsufficientDataError` (a subclass of `ValueError`) when fewer than `min_complete_rows` traces survive filtering. The caller is expected to emit an `INCONCLUSIVE` verdict in that case, not a silent pass.
+* Rows are ordered by `trace_id` for determinism: two calls with the same records in any input order produce byte-identical matrices. This is what lets the comparator's permutation seed be a pure function of the run identity without also depending on incidental input ordering.
+* Duplicate `(trace_id, metric_name)` records are resolved first-wins, not last-wins. First-wins is order-independent for an unordered input list; last-wins would depend on list order, which makes the resulting matrix non-deterministic for the same logical input set.
+* `arbitrary_types_allowed=True` is required because pydantic cannot validate `np.ndarray` natively. Content validation happens inside `from_metric_results`, not on direct model construction; direct construction is reserved for tests and for callers that already have a validated array.
+* The model is **not frozen**. `values` is a mutable ndarray; freezing the model would give a false sense of immutability since the array itself remains mutable. The contract requires callers not to mutate `values` after construction.
+
+### `MultivariateVerdict` (`regression/multivariate.py`)
+
+One structure test's verdict. Deliberately a separate type from `RegressionVerdict`.
+
+```python
+class MultivariateVerdict(BaseModel):
+    model_config = ConfigDict(strict=True, frozen=True)
+
+    method: MultivariateMethod
+    severity: RegressionSeverity
+    p_value: float = Field(ge=0.0, le=1.0)
+    statistic: float
+    effect_size: float = Field(ge=0.0)
+    baseline_id: UUID
+    run_id: UUID
+    explanation: str
+    metric_deltas: dict[str, float] = Field(default_factory=dict)
+    inconclusive: bool = False
+```
+
+**Contract guarantees:**
+
+* Separate from `RegressionVerdict` because a structure verdict has **no single `metric_name`** (both tests are inherently multi-metric) and **no signed effect size** (both tests are undirected). Reusing `RegressionVerdict` would force both fields to be faked, and `select_decision_metric` in the gate would raise `KeyError` trying to look up a `metric_name` that does not exist.
+* `effect_size` is bounded to `>= 0.0` because structure effects are magnitudes, not signed values.
+* `metric_deltas` carries per-metric mean differences `candidate - baseline` even when the verdict is INCONCLUSIVE, so Reporting can display the underlying metric shifts alongside the structure signal.
+* `inconclusive=True` takes precedence over any other field's nominal value. When `inconclusive` is `True`, the verdict represents "the structure test could not run" rather than "the structure test ran and found nothing." Callers must check `inconclusive` before reading `severity` or `p_value`, since those fields carry their placeholder values (`NONE`, `1.0`) rather than measured results in that case.
+* The model is frozen. Verdicts are emitted and read; nothing mutates them.
+
+### `classify_structure_severity` and `apply_mode` (`regression/multivariate.py`)
+
+Two functions that together determine the final severity of a structure verdict.
+
+```python
+def classify_structure_severity(
+    *,
+    significant: bool,
+    effect_size: float,
+    warning_effect: float,
+    blocking_effect: float,
+) -> RegressionSeverity: ...
+
+def apply_mode(
+    severity: RegressionSeverity,
+    mode: MultivariateMode,
+) -> RegressionSeverity: ...
+```
+
+**Contract guarantees:**
+
+* `classify_structure_severity` compares a **non-negative** `effect_size` against **positive** thresholds, in contrast to `comparator.classify_severity` which compares a signed Cohen's d against negative thresholds. These are intentionally separate functions, not an overloaded one; an overloaded function would need to detect the sign convention at runtime and would blur the semantic difference.
+* `apply_mode` caps `BLOCKING` to `WARNING` in `BALANCED` mode. This is the whole reason the mode exists; if a future change removes the cap, the gate will start blocking on undirected signals, which is the failure mode the ablation study was designed to prevent.
+
+### `MultivariateComparator` (`regression/multivariate.py`)
+
+Runs the `SCALE` and `DEPENDENCE` tests with Holm-Bonferroni correction at the structure track's alpha, in the configured mode.
+
+```python
+class MultivariateComparator:
+    def __init__(self, *, config: MultivariateConfig | None = None) -> None: ...
+
+    def compare(
+        self,
+        *,
+        candidate: ScoreMatrix,
+        baseline: ScoreMatrix,
+        baseline_id: UUID,
+        run_id: UUID,
+    ) -> list[MultivariateVerdict]: ...
+
+    def compare_metric_results(
+        self,
+        *,
+        candidate_results: Sequence[MetricResult],
+        baseline_results: Sequence[MetricResult],
+        metric_names: Sequence[str],
+        baseline_id: UUID,
+        run_id: UUID,
+    ) -> list[MultivariateVerdict]: ...
+```
+
+**Contract guarantees:**
+
+* `compare` returns **exactly two verdicts**, one per method, in the order `[SCALE, DEPENDENCE]`. When `n_metrics == 1`, the dependence verdict is returned as `NONE` with `p_value=1.0`, `statistic=0.0`, and an explanation noting that the test was skipped (a single-metric sample has no off-diagonal pair to test).
+* `compare` raises `ValueError` when the candidate and baseline matrices have different `metric_names`, and `InsufficientDataError` when either matrix has fewer rows than `min_complete_rows`.
+* `compare_metric_results` wraps `compare` for the common case where the caller has raw `MetricResult` records. On insufficient data, it returns two `INCONCLUSIVE` verdicts rather than raising, mirroring the `AttributionVerdict.INCONCLUSIVE` contract in the Trust layer. This is the entry point most callers should use.
+* Permutation seeds are derived deterministically from `(run_id, baseline_id)`. The two methods use seeds `seed` and `seed + 1`, so two evaluations of the same comparison produce byte-identical results, including across process restarts.
+* `MetricResult` is only accepted through `compare_metric_results`, never `compare` directly. `compare` requires pre-built `ScoreMatrix` objects, since building them is the step that enforces the row-alignment the structure tests depend on.
+* The comparator is stateless apart from its frozen `MultivariateConfig`. Two instances constructed with the same config behave identically for the same inputs.
+
+---
+
 ## Import Direction Rule (applies to every phase)
 
 To keep the "no circular dependency" requirement enforceable by tooling and not just by good intentions, imports flow in one direction only:
@@ -592,6 +772,8 @@ instrumentation  →  orchestrator  →  metrics  →  trust
 ```
 
 A module may import from anything to its left in this chain. It may never import from anything to its right. `storage/models.py` is the one exception: because `Run` and `Baseline` embed `MetricResult`, `storage/models.py` is permitted to import the `MetricResult` type from `metrics/base.py` specifically, and nothing else from `metrics/`. If you find yourself importing `regression` from inside `metrics/`, or `reporting` from inside `storage/`, stop, that import is the circular dependency this rule exists to prevent, and the fix is to move the shared type into `storage/models.py` or `metrics/base.py`, not to add the import and suppress the warning.
+
+Phase 6 additions respect this rule: `regression/multivariate.py` imports from `metrics/base.py`, `metrics/stats.py`, and `regression/comparator.py`, all of which sit to its left. It is imported by `gate/verdict.py` and `reporting/dashboard.py`, both of which sit to its right. No new edges cross the chain in the wrong direction.
 
 `ruff`'s `TID` (flake8-tidy-imports) rules are configured in `pyproject.toml` to ban relative imports project-wide, which forces every cross-module import to be explicit and absolute (`from nirizan.metrics.base import Metric`), making violations of this rule easy to spot in review rather than hidden behind `from ..metrics import base`.
 
