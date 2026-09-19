@@ -3265,9 +3265,10 @@ The final release decision produced by the gate layer.
 
 | Field | Type | Required | Default | Meaning |
 |---|---|---|---|---|
-| `passed` | `bool` | Yes | — | `True` if no `BLOCKING`-severity regression was found anywhere in `regression_verdicts`. |
+| `passed` | `bool` | Yes | — | `True` if no `BLOCKING`-severity regression was found anywhere in `regression_verdicts` or `multivariate_verdicts`. |
 | `confidence_interval` | `tuple[float, float]` | Yes | — | `(low, high)` bootstrap confidence interval for the mean-score delta of the single "worst" metric, as selected by `select_decision_metric`. Not a confidence interval for every metric in `regression_verdicts`, only the selected one. |
-| `regression_verdicts` | `list[RegressionVerdict]` | No | `[]` | The full list of regression verdicts this gate decision was based on. |
+| `regression_verdicts` | `list[RegressionVerdict]` | No | `[]` | The full list of univariate regression verdicts this gate decision was based on. |
+| `multivariate_verdicts` | `list[MultivariateVerdict]` | No | `[]` | The full list of multivariate regression verdicts this gate decision was based on. |
 | `run_id` | `UUID` | Yes | — | The run this gate decision applies to. `evaluate_gate` verifies that every univariate and multivariate verdict belongs to the same `(run_id, baseline_id)` comparison before constructing it. |
 
 ---
