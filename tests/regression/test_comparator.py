@@ -139,6 +139,9 @@ def test_compare_raises_on_missing_metric(
         "b": np.array([0.1, 0.2, 0.3, 0.4, 0.5]),
     }
 
+    # candidate_scores is missing "b" (present in baseline_scores). Metric
+    # names are iterated in sorted order ("a", then "b"); "a" is present on
+    # both sides, so the first raise happens on "b".
     with pytest.raises(ValueError, match="Candidate is missing metric: b"):
         comparator.compare(
             candidate_scores=candidate_scores,
@@ -147,7 +150,11 @@ def test_compare_raises_on_missing_metric(
             run_id=run_id,
         )
 
-    with pytest.raises(ValueError, match="Baseline is missing metric: a"):
+    # Swapped: now "baseline_scores" (the old candidate_scores, {"a"}) is
+    # missing "b", which is present in the new "candidate_scores" (the old
+    # baseline_scores, {"a", "b"}). Sorted iteration hits "a" first (present
+    # on both sides), then "b": present in candidate, missing from baseline.
+    with pytest.raises(ValueError, match="Baseline is missing metric: b"):
         comparator.compare(
             candidate_scores=baseline_scores,
             baseline_scores=candidate_scores,
