@@ -467,7 +467,13 @@ class TestApplyMode:
 
     def test_balanced_never_produces_blocking(self) -> None:
         """The whole point of BALANCED mode: no severity can be BLOCKING."""
-        for severity in RegressionSeverity:
+        # Iterate over list(RegressionSeverity) rather than the enum class
+        # directly: RegressionSeverity is iterable at runtime via its
+        # EnumMeta, but some static analyzers (e.g. CodeQL) don't model
+        # that protocol and flag direct class iteration as a potential
+        # non-iterable-in-for-loop defect. list(...) gives the checker an
+        # unambiguous, concretely-iterable object with no behavior change.
+        for severity in list(RegressionSeverity):
             assert apply_mode(severity, MultivariateMode.BALANCED) != RegressionSeverity.BLOCKING
 
 
@@ -756,7 +762,10 @@ class TestCompareMetricResults:
 class TestRegressionGuards:
     def test_balanced_mode_never_blocks_via_apply_mode(self) -> None:
         """If a future refactor removes the BALANCED cap, this fails."""
-        for severity in RegressionSeverity:
+        # See the identical comment in TestApplyMode.test_balanced_never_
+        # produces_blocking: list(...) avoids a CodeQL false positive on
+        # direct enum-class iteration without changing behavior.
+        for severity in list(RegressionSeverity):
             assert apply_mode(severity, MultivariateMode.BALANCED) != RegressionSeverity.BLOCKING
 
     def test_balanced_comparison_never_emits_blocking(self) -> None:
