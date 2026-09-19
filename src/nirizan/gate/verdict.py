@@ -3,10 +3,10 @@
 
 The gate consumes two streams of verdicts:
 
-* ``RegressionVerdict`` — the univariate track's per-metric verdicts from
+* ``RegressionVerdict``: the univariate track's per-metric verdicts from
   ``regression.comparator.BaselineComparator``. These are the primary
   decision signal; a single univariate BLOCKING verdict fails the gate.
-* ``MultivariateVerdict`` — the structure track's verdicts from
+* ``MultivariateVerdict``: the structure track's verdicts from
   ``regression.multivariate.MultivariateComparator``. These are an
   escalation signal only. In the default BALANCED mode the comparator
   caps their severity at WARNING, so any BLOCKING multivariate verdict
@@ -170,7 +170,10 @@ def _comparison_identity(
     """Return the shared ``(run_id, baseline_id)`` after validating it."""
     first = verdicts[0]
     identity = (first.run_id, first.baseline_id)
-    all_verdicts = [*verdicts, *multivariate_verdicts]
+    all_verdicts: list[RegressionVerdict | MultivariateVerdict] = [
+        *verdicts,
+        *multivariate_verdicts,
+    ]
     if any((verdict.run_id, verdict.baseline_id) != identity for verdict in all_verdicts):
         raise ValueError("All gate verdicts must have the same run_id and baseline_id.")
     return identity
