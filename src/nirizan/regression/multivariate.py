@@ -444,7 +444,7 @@ class MultivariateComparator:
             scale_significant = corrected["scale"]
             dep_significant = corrected["dependence"]
         else:
-            scale_significant = scale_p < self.config.structure_alpha
+            scale_significant = scale_p <= self.config.structure_alpha
             dep_significant = False
 
         scale_severity = apply_mode(

@@ -663,6 +663,40 @@ class TestMultivariateComparatorCompare:
         assert dep.severity == RegressionSeverity.NONE
         assert "skipped" in dep.explanation
 
+    def test_single_metric_boundary_alpha_yields_significant(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Explicitly assert scale_p == config.structure_alpha yields scale_significant = True in single-metric mode."""
+        config = _fast_config(structure_alpha=0.05, warning_effect=0.20)
+        comparator = MultivariateComparator(config=config)
+
+        # Mock scale_logvar_test to return scale_p exactly equal to structure_alpha (0.05)
+        # and a statistic yielding an effect size above warning_effect (sqrt(0.09 / 1) = 0.30 >= 0.20).
+        def mock_scale_logvar_test(
+            x: np.ndarray, y: np.ndarray, n_permutations: int = 199, seed: int | None = None
+        ) -> tuple[float, None, float]:
+            return 0.09, None, 0.05
+
+        monkeypatch.setattr(
+            "nirizan.regression.multivariate.scale_logvar_test", mock_scale_logvar_test
+        )
+
+        base = np.zeros((20, 1))
+        cand = np.zeros((20, 1))
+        baseline = _build_matrix(base, ["m1"], min_complete_rows=10)
+        candidate = _build_matrix(cand, ["m1"], min_complete_rows=10)
+
+        verdicts = comparator.compare(
+            candidate=candidate,
+            baseline=baseline,
+            baseline_id=uuid4(),
+            run_id=uuid4(),
+        )
+        scale = next(v for v in verdicts if v.method == MultivariateMethod.SCALE)
+        assert scale.p_value == 0.05
+        assert "significant_after_holm=True" in scale.explanation
+        assert scale.severity == RegressionSeverity.WARNING
+
     def test_mismatched_metric_names_raises(self) -> None:
         rng = np.random.default_rng(6)
         baseline = _build_matrix(
