@@ -250,7 +250,9 @@ def test_gate_fails_on_multivariate_blocking(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """A BLOCKING multivariate verdict flips ``passed`` to False even when
-    every univariate verdict is NONE.
+    every univariate verdict is NONE. Since the only univariate verdict
+    passed in has severity NONE, the univariate-blocking count in the log
+    line is correctly 0; only the multivariate track is blocking here.
     """
     scores = {
         "groundedness": (np.array([0.9, 0.85]), np.array([0.91, 0.87])),
@@ -265,7 +267,7 @@ def test_gate_fails_on_multivariate_blocking(
         )
 
     assert result.passed is False
-    assert "1 univariate blocking, 1 multivariate blocking" in caplog.text
+    assert "0 univariate blocking, 1 multivariate blocking" in caplog.text
     assert result.multivariate_verdicts == [mv_blocking]
 
 
