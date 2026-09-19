@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import logging
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import numpy as np
 import pytest
@@ -12,10 +12,20 @@ from nirizan.gate.verdict import (
     evaluate_gate,
     select_decision_metric,
 )
+from nirizan.metrics.stats import bootstrap_delta_ci as stats_bootstrap_delta_ci
 from nirizan.regression.comparator import (
     RegressionSeverity,
     RegressionVerdict,
 )
+from nirizan.regression.multivariate import (
+    MultivariateMethod,
+    MultivariateVerdict,
+)
+
+
+# ---------------------------------------------------------------------------
+# Fixtures and helpers
+# ---------------------------------------------------------------------------
 
 
 @pytest.fixture
@@ -57,6 +67,34 @@ def sample_verdict_blocking() -> RegressionVerdict:
     )
 
 
+def _multivariate_verdict(
+    severity: RegressionSeverity,
+    *,
+    method: MultivariateMethod = MultivariateMethod.SCALE,
+    baseline_id: UUID | None = None,
+    run_id: UUID | None = None,
+    p_value: float = 0.5,
+    effect_size: float = 0.0,
+    inconclusive: bool = False,
+) -> MultivariateVerdict:
+    return MultivariateVerdict(
+        method=method,
+        severity=severity,
+        p_value=p_value,
+        statistic=0.0,
+        effect_size=effect_size,
+        baseline_id=baseline_id or uuid4(),
+        run_id=run_id or uuid4(),
+        explanation="test",
+        inconclusive=inconclusive,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Univariate gate behaviour (existing, unchanged in spirit)
+# ---------------------------------------------------------------------------
+
+
 def test_blocking_regression_fails_gate(
     sample_verdict_none: RegressionVerdict,
     sample_verdict_blocking: RegressionVerdict,
@@ -73,7 +111,7 @@ def test_blocking_regression_fails_gate(
 
     assert result.passed is False
     assert "Gate evaluation result: BLOCKED" in caplog.text
-    assert "1 blocking regression(s)" in caplog.text
+    assert "1 univariate blocking, 0 multivariate blocking" in caplog.text
 
 
 def test_warning_regression_passes_gate(
@@ -165,3 +203,213 @@ def test_bootstrap_delta_ci_validation() -> None:
 
     with pytest.raises(ValueError, match="confidence must be between 0 and 1."):
         bootstrap_delta_ci(np.array([1.0]), np.array([1.0]), confidence=1.5)
+
+
+# ---------------------------------------------------------------------------
+# Multivariate verdicts on the gate
+# ---------------------------------------------------------------------------
+
+
+def test_gate_backward_compatible_when_multivariate_verdicts_omitted(
+    sample_verdict_none: RegressionVerdict,
+) -> None:
+    """Omitting the new argument must reproduce the pre-multivariate behavior
+    exactly: ``passed=True`` for a single NONE verdict, and an empty list
+    on the GateVerdict.
+    """
+    scores = {
+        "groundedness": (np.array([0.9, 0.85]), np.array([0.91, 0.87])),
+    }
+
+    result = evaluate_gate(verdicts=[sample_verdict_none], scores_by_metric=scores)
+
+    assert result.passed is True
+    assert result.multivariate_verdicts == []
+
+
+def test_gate_backward_compatible_when_multivariate_verdicts_none(
+    sample_verdict_none: RegressionVerdict,
+) -> None:
+    """Explicit ``None`` is treated the same as omitted."""
+    scores = {
+        "groundedness": (np.array([0.9, 0.85]), np.array([0.91, 0.87])),
+    }
+
+    result = evaluate_gate(
+        verdicts=[sample_verdict_none],
+        scores_by_metric=scores,
+        multivariate_verdicts=None,
+    )
+
+    assert result.passed is True
+    assert result.multivariate_verdicts == []
+
+
+def test_gate_fails_on_multivariate_blocking(
+    sample_verdict_none: RegressionVerdict,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A BLOCKING multivariate verdict flips ``passed`` to False even when
+    every univariate verdict is NONE.
+    """
+    scores = {
+        "groundedness": (np.array([0.9, 0.85]), np.array([0.91, 0.87])),
+    }
+    mv_blocking = _multivariate_verdict(RegressionSeverity.BLOCKING)
+
+    with caplog.at_level(logging.WARNING):
+        result = evaluate_gate(
+            verdicts=[sample_verdict_none],
+            scores_by_metric=scores,
+            multivariate_verdicts=[mv_blocking],
+        )
+
+    assert result.passed is False
+    assert "1 univariate blocking, 1 multivariate blocking" in caplog.text
+    assert result.multivariate_verdicts == [mv_blocking]
+
+
+def test_gate_passes_on_multivariate_warning(
+    sample_verdict_none: RegressionVerdict,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A multivariate WARNING does not flip ``passed``; warnings are
+    informational, not blocking.
+    """
+    scores = {
+        "groundedness": (np.array([0.9, 0.85]), np.array([0.91, 0.87])),
+    }
+    mv_warning = _multivariate_verdict(RegressionSeverity.WARNING, p_value=0.01)
+
+    with caplog.at_level(logging.INFO):
+        result = evaluate_gate(
+            verdicts=[sample_verdict_none],
+            scores_by_metric=scores,
+            multivariate_verdicts=[mv_warning],
+        )
+
+    assert result.passed is True
+    assert "Gate evaluation result: PASSED" in caplog.text
+    assert result.multivariate_verdicts == [mv_warning]
+
+
+def test_gate_carries_multivariate_verdicts_through(
+    sample_verdict_none: RegressionVerdict,
+) -> None:
+    """Every passed-in multivariate verdict must appear on the returned
+    GateVerdict, in order, unmodified. This is the contract Reporting
+    relies on for the structure table.
+    """
+    scores = {
+        "groundedness": (np.array([0.9, 0.85]), np.array([0.91, 0.87])),
+    }
+    mv_scale = _multivariate_verdict(RegressionSeverity.WARNING, method=MultivariateMethod.SCALE)
+    mv_dependence = _multivariate_verdict(
+        RegressionSeverity.NONE, method=MultivariateMethod.DEPENDENCE
+    )
+
+    result = evaluate_gate(
+        verdicts=[sample_verdict_none],
+        scores_by_metric=scores,
+        multivariate_verdicts=[mv_scale, mv_dependence],
+    )
+
+    assert result.multivariate_verdicts == [mv_scale, mv_dependence]
+    assert result.multivariate_verdicts[0].method == MultivariateMethod.SCALE
+    assert result.multivariate_verdicts[1].method == MultivariateMethod.DEPENDENCE
+
+
+def test_gate_ignores_inconclusive_multivariate_verdicts(
+    sample_verdict_none: RegressionVerdict,
+) -> None:
+    """An INCONCLUSIVE multivariate verdict carries severity=NONE and
+    must not flip ``passed``. INCONCLUSIVE means "the structure test
+    could not run", not "a structure regression was detected."
+    """
+    scores = {
+        "groundedness": (np.array([0.9, 0.85]), np.array([0.91, 0.87])),
+    }
+    mv_inconclusive = _multivariate_verdict(RegressionSeverity.NONE, inconclusive=True)
+
+    result = evaluate_gate(
+        verdicts=[sample_verdict_none],
+        scores_by_metric=scores,
+        multivariate_verdicts=[mv_inconclusive],
+    )
+
+    assert result.passed is True
+    assert result.multivariate_verdicts == [mv_inconclusive]
+    assert result.multivariate_verdicts[0].inconclusive is True
+
+
+def test_gate_fails_when_both_tracks_block(
+    sample_verdict_blocking: RegressionVerdict,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """When both tracks block, the log line reports both counts."""
+    scores = {
+        "answer_relevance": (np.array([0.4, 0.5]), np.array([0.9, 0.88])),
+    }
+    mv_blocking = _multivariate_verdict(RegressionSeverity.BLOCKING)
+
+    with caplog.at_level(logging.WARNING):
+        result = evaluate_gate(
+            verdicts=[sample_verdict_blocking],
+            scores_by_metric=scores,
+            multivariate_verdicts=[mv_blocking],
+        )
+
+    assert result.passed is False
+    assert "1 univariate blocking, 1 multivariate blocking" in caplog.text
+
+
+def test_select_decision_metric_is_univariate_only(
+    sample_verdict_blocking: RegressionVerdict,
+) -> None:
+    """Regression guard: ``select_decision_metric`` must be called with
+    univariate verdicts only. Multivariate verdicts lack ``metric_name``
+    and the downstream ``scores_by_metric`` lookup would raise KeyError,
+    so the decision function's contract excludes them by design. This
+    test documents that a univariate verdict alone is what the function
+    expects.
+    """
+    selected = select_decision_metric([sample_verdict_blocking])
+    assert selected.metric_name == "answer_relevance"
+
+
+# ---------------------------------------------------------------------------
+# Shim consistency with stats.bootstrap_delta_ci
+# ---------------------------------------------------------------------------
+
+
+def test_bootstrap_delta_ci_shim_matches_stats_canonical() -> None:
+    """The gate's 2-tuple shim must produce the same interval as the
+    canonical 3-tuple ``stats.bootstrap_delta_ci`` for the same seed and
+    inputs. This is what makes the shim a genuine delegation rather than
+    an independent reimplementation.
+    """
+    candidate = np.array([0.4, 0.5, 0.6, 0.5, 0.4])
+    baseline = np.array([0.7, 0.8, 0.9, 0.8, 0.7])
+
+    _, stats_low, stats_high = stats_bootstrap_delta_ci(
+        candidate, baseline, n_bootstrap=200, confidence_level=0.95, seed=7
+    )
+    shim_low, shim_high = bootstrap_delta_ci(
+        candidate, baseline, n_bootstrap=200, confidence=0.95, seed=7
+    )
+
+    assert shim_low == pytest.approx(stats_low)
+    assert shim_high == pytest.approx(stats_high)
+
+
+def test_bootstrap_delta_ci_shim_returns_two_tuple() -> None:
+    """Shape contract: the shim returns exactly ``(ci_low, ci_high)``,
+    not the 3-tuple that ``stats.bootstrap_delta_ci`` returns. Callers
+    of the gate API rely on this shape.
+    """
+    candidate = np.array([0.4, 0.5, 0.6, 0.5, 0.4])
+    baseline = np.array([0.7, 0.8, 0.9, 0.8, 0.7])
+    result = bootstrap_delta_ci(candidate, baseline, n_bootstrap=200, seed=1)
+    assert isinstance(result, tuple)
+    assert len(result) == 2
+    assert result[0] <= result[1]
