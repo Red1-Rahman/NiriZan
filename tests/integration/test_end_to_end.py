@@ -242,10 +242,7 @@ async def test_end_to_end_rag_pipeline_evaluation(
 
     # 6. Verify logging streams were captured during evaluation
     assert f"Evaluating RAGTriadMetric for trace_id={trace.trace_id}" in caplog.text
-    assert (
-        f"completed for trace_id={trace.trace_id}: computed 3 metrics"
-        in caplog.text
-    )
+    assert f"completed for trace_id={trace.trace_id}: computed 3 metrics" in caplog.text
 
 
 # ---------------------------------------------------------------------------
@@ -471,9 +468,7 @@ async def test_end_to_end_phase4_statistical_gating_and_ci_summary(
     all_traces = await trace_repo.list_by_application(app_name)
 
     trace_b = [
-        t
-        for t in all_traces
-        if t.code_commit == "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        t for t in all_traces if t.code_commit == "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
     ][0]
 
     metric_results_b = await metric_dispatcher.dispatch(trace_b, sys_type)
@@ -564,8 +559,7 @@ async def test_end_to_end_phase4_statistical_gating_and_ci_summary(
         )
 
         pass_scores_by_metric = {
-            m: (candidate_pass_scores[m], baseline_scores[m])
-            for m in candidate_pass_scores
+            m: (candidate_pass_scores[m], baseline_scores[m]) for m in candidate_pass_scores
         }
 
         pass_gate_verdict = evaluate_gate(
@@ -585,8 +579,7 @@ async def test_end_to_end_phase4_statistical_gating_and_ci_summary(
         )
 
         block_scores_by_metric = {
-            m: (candidate_block_scores[m], baseline_scores[m])
-            for m in candidate_block_scores
+            m: (candidate_block_scores[m], baseline_scores[m]) for m in candidate_block_scores
         }
 
         block_gate_verdict = evaluate_gate(
@@ -595,10 +588,7 @@ async def test_end_to_end_phase4_statistical_gating_and_ci_summary(
         )
 
         assert block_gate_verdict.passed is False
-        assert any(
-            v.severity == RegressionSeverity.BLOCKING
-            for v in block_verdicts
-        )
+        assert any(v.severity == RegressionSeverity.BLOCKING for v in block_verdicts)
         assert gate_exit_code(block_gate_verdict) == 1
 
         # ------------------------------------------------------------------
@@ -744,10 +734,7 @@ async def test_end_to_end_trust_attribution_and_dashboard_reporting(
 
         assert snapshot_joint.health_score == expected_joint_health
         assert snapshot_joint.latest_attribution is not None
-        assert (
-            snapshot_joint.latest_attribution.attribution
-            == DriftAttribution.JOINT_DRIFT
-        )
+        assert snapshot_joint.latest_attribution.attribution == DriftAttribution.JOINT_DRIFT
 
         snapshot_inc = assemble_dashboard_snapshot(
             system_type="rag_pipeline",
@@ -763,12 +750,6 @@ async def test_end_to_end_trust_attribution_and_dashboard_reporting(
 
         assert snapshot_inc.health_score == expected_inc_health
         assert snapshot_inc.latest_attribution is not None
-        assert (
-            snapshot_inc.latest_attribution.attribution
-            == DriftAttribution.INCONCLUSIVE
-        )
+        assert snapshot_inc.latest_attribution.attribution == DriftAttribution.INCONCLUSIVE
 
-    assert (
-        "Assembled dashboard snapshot for system_type=rag_pipeline"
-        in caplog.text
-    )
+    assert "Assembled dashboard snapshot for system_type=rag_pipeline" in caplog.text
