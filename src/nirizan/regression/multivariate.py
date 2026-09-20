@@ -126,9 +126,9 @@ class InsufficientDataError(ValueError):
 class ScoreMatrix(BaseModel):
     """Row-aligned ``(n_traces, n_metrics)`` score matrix.
 
-    Construct via ``from_metric_results``. Direct instantiation is allowed
-    for tests and for callers that already have a validated ndarray; the
-    model does not re-validate the array's content on construction.
+    The model validates the structural and score-value invariants on every
+    construction path. ``from_metric_results`` additionally applies the
+    complete-case policy and may drop malformed input traces.
     """
 
     model_config = ConfigDict(
@@ -140,6 +140,27 @@ class ScoreMatrix(BaseModel):
     values: np.ndarray
     metric_names: tuple[str, ...]
     dropped_rows: int = Field(default=0, ge=0)
+
+    @model_validator(mode="after")
+    def validate_contract(self) -> ScoreMatrix:
+        """Enforce the public ``ScoreMatrix`` shape and value contract."""
+        if not self.metric_names:
+            raise ValueError("metric_names must contain at least one metric.")
+        if len(set(self.metric_names)) != len(self.metric_names):
+            raise ValueError("metric_names must be unique.")
+
+        # Use the canonical score-matrix validator so direct construction and
+        # factory construction share the same finite/[0, 1]/dimensionality
+        # semantics. ``min_rows=0`` keeps row-count sufficiency as the
+        # comparator/factory policy rather than a structural constructor rule.
+        values = validate_score_matrix(
+            self.values,
+            min_rows=0,
+            min_columns=1,
+        )
+        if values.shape[1] != len(self.metric_names):
+            raise ValueError("metric_names length must match values.shape[1].")
+        return self
 
     @classmethod
     def from_metric_results(
@@ -154,9 +175,10 @@ class ScoreMatrix(BaseModel):
         Pivots on ``trace_id`` and keeps complete cases only: a trace is
         retained only if it has a record for every metric in
         ``metric_names`` and every one of those scores is finite and in
-        ``[0, 1]``. Incomplete or malformed traces are counted in
-        ``dropped_rows``. Rows are ordered by ``trace_id`` for determinism,
-        so two calls with the same records produce byte-identical matrices.
+        ``[0, 1]``. Incomplete, malformed, or duplicate-key traces are
+        counted in ``dropped_rows``. Rows are ordered by ``trace_id`` for
+        determinism, and ambiguous duplicate records are dropped rather than
+        resolved by input sequence order.
         """
         if not metric_names:
             raise ValueError("metric_names must contain at least one metric.")
@@ -168,19 +190,26 @@ class ScoreMatrix(BaseModel):
         unique_metrics = tuple(metric_names)
 
         per_trace: dict[UUID, dict[str, float]] = {}
+        duplicate_traces: set[UUID] = set()
         for record in metric_results:
             if record.metric_name not in unique_metrics:
                 continue
             slot = per_trace.setdefault(record.trace_id, {})
-            # First-wins on duplicate (trace, metric) records; the
-            # alternative (last-wins) would silently depend on list order.
-            if record.metric_name not in slot:
-                slot[record.metric_name] = float(record.score)
+            if record.metric_name in slot:
+                # A duplicate requested metric is ambiguous: selecting the
+                # first/last record would make the matrix depend on input
+                # sequence order. Drop the entire trace instead.
+                duplicate_traces.add(record.trace_id)
+                continue
+            slot[record.metric_name] = float(record.score)
 
         rows: list[list[float]] = []
         dropped = 0
         for trace_id in sorted(per_trace.keys()):
             slot = per_trace[trace_id]
+            if trace_id in duplicate_traces:
+                dropped += 1
+                continue
             if not all(name in slot for name in unique_metrics):
                 dropped += 1
                 continue

@@ -284,15 +284,93 @@ class TestScoreMatrixFromMetricResults:
         # values 0.3, 0.5, 0.1.
         np.testing.assert_array_almost_equal(matrix.values[:, 0], np.array([0.3, 0.5, 0.1]))
 
-    def test_duplicate_trace_metric_record_first_wins(self) -> None:
+    def test_duplicate_trace_metric_record_drops_ambiguous_trace(self) -> None:
+        """Conflicting duplicates must never be resolved by input order."""
         now = datetime.now(UTC)
-        trace_id = uuid4()
+        duplicate_trace = UUID(int=1)
+        good_trace = UUID(int=2)
         results = [
-            MetricResult(metric_name="m1", trace_id=trace_id, score=0.2, computed_at=now),
-            MetricResult(metric_name="m1", trace_id=trace_id, score=0.9, computed_at=now),
+            MetricResult(metric_name="m1", trace_id=duplicate_trace, score=0.2, computed_at=now),
+            MetricResult(metric_name="m1", trace_id=duplicate_trace, score=0.9, computed_at=now),
+            MetricResult(metric_name="m1", trace_id=good_trace, score=0.7, computed_at=now),
         ]
+
         matrix = ScoreMatrix.from_metric_results(results, metric_names=["m1"], min_complete_rows=1)
-        assert matrix.values[0, 0] == pytest.approx(0.2)
+
+        assert matrix.dropped_rows == 1
+        np.testing.assert_array_equal(matrix.values, np.array([[0.7]]))
+
+    def test_duplicate_trace_metric_records_are_input_order_independent(self) -> None:
+        """Reordering conflicting duplicates must not change the matrix."""
+        now = datetime.now(UTC)
+        duplicate_trace = UUID(int=1)
+        good_trace = UUID(int=2)
+        first = MetricResult(metric_name="m1", trace_id=duplicate_trace, score=0.2, computed_at=now)
+        second = MetricResult(
+            metric_name="m1", trace_id=duplicate_trace, score=0.9, computed_at=now
+        )
+        good = MetricResult(metric_name="m1", trace_id=good_trace, score=0.7, computed_at=now)
+
+        a = ScoreMatrix.from_metric_results(
+            [first, second, good], metric_names=["m1"], min_complete_rows=1
+        )
+        b = ScoreMatrix.from_metric_results(
+            [second, first, good], metric_names=["m1"], min_complete_rows=1
+        )
+
+        assert a.dropped_rows == b.dropped_rows == 1
+        np.testing.assert_array_equal(a.values, b.values)
+
+
+# ---------------------------------------------------------------------------
+# ScoreMatrix direct-construction contract
+# ---------------------------------------------------------------------------
+
+
+class TestScoreMatrixDirectConstruction:
+    def test_rejects_one_dimensional_values(self) -> None:
+        with pytest.raises(ValidationError, match="two-dimensional"):
+            ScoreMatrix(values=np.array([0.1, 0.2]), metric_names=("m1",))
+
+    def test_rejects_zero_metric_columns(self) -> None:
+        with pytest.raises(ValidationError, match="at least 1"):
+            ScoreMatrix(values=np.empty((3, 0)), metric_names=("m1",))
+
+    def test_rejects_non_finite_values(self) -> None:
+        with pytest.raises(ValidationError, match="non-finite"):
+            ScoreMatrix(
+                values=np.array([[0.1, np.nan]]),
+                metric_names=("m1", "m2"),
+            )
+
+    def test_rejects_out_of_range_values(self) -> None:
+        with pytest.raises(ValidationError, match=r"normalized to \[0, 1\]"):
+            ScoreMatrix(
+                values=np.array([[0.1, 1.5]]),
+                metric_names=("m1", "m2"),
+            )
+
+    def test_rejects_duplicate_metric_names(self) -> None:
+        with pytest.raises(ValidationError, match="unique"):
+            ScoreMatrix(
+                values=np.array([[0.1, 0.2]]),
+                metric_names=("m1", "m1"),
+            )
+
+    def test_rejects_metric_name_column_count_mismatch(self) -> None:
+        with pytest.raises(ValidationError, match=r"values.shape\[1\]"):
+            ScoreMatrix(
+                values=np.array([[0.1, 0.2]]),
+                metric_names=("m1",),
+            )
+
+    def test_accepts_valid_direct_matrix(self) -> None:
+        matrix = ScoreMatrix(
+            values=np.array([[0.1, 0.2], [0.3, 0.4]]),
+            metric_names=("m1", "m2"),
+        )
+        assert matrix.n_rows == 2
+        assert matrix.n_metrics == 2
 
 
 # ---------------------------------------------------------------------------
