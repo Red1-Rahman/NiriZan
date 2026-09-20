@@ -118,7 +118,7 @@ The installed version is available as a plain string attribute on the package:
 import nirizan
 
 print(nirizan.__version__)
-# "0.1.0"
+# "0.4.0"
 ```
 
 There is currently no separate version-checking function; read `nirizan.__version__` directly, or use `importlib.metadata.version("nirizan")` from the standard library.
