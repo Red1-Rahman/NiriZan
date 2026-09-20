@@ -321,6 +321,26 @@ class TestScoreMatrixFromMetricResults:
         assert a.dropped_rows == b.dropped_rows == 1
         np.testing.assert_array_equal(a.values, b.values)
 
+    def test_conflicting_duplicate_records_are_rejected_in_both_orders(self) -> None:
+        now = datetime.now(UTC)
+        duplicate_trace = UUID(int=1)
+        good_trace = UUID(int=2)
+        first = MetricResult(metric_name="m1", trace_id=duplicate_trace, score=0.2, computed_at=now)
+        second = MetricResult(
+            metric_name="m1", trace_id=duplicate_trace, score=0.9, computed_at=now
+        )
+        good = MetricResult(metric_name="m1", trace_id=good_trace, score=0.7, computed_at=now)
+
+        forward = ScoreMatrix.from_metric_results(
+            [first, second, good], metric_names=["m1"], min_complete_rows=1
+        )
+        reversed_records = ScoreMatrix.from_metric_results(
+            [second, first, good], metric_names=["m1"], min_complete_rows=1
+        )
+
+        assert forward.dropped_rows == reversed_records.dropped_rows == 1
+        np.testing.assert_array_equal(forward.values, reversed_records.values)
+
 
 # ---------------------------------------------------------------------------
 # ScoreMatrix direct-construction contract
@@ -371,6 +391,10 @@ class TestScoreMatrixDirectConstruction:
         )
         assert matrix.n_rows == 2
         assert matrix.n_metrics == 2
+
+    def test_rejects_empty_matrix(self) -> None:
+        with pytest.raises(ValidationError, match="at least 1"):
+            ScoreMatrix(values=np.empty((0, 1)), metric_names=("m1",))
 
 
 # ---------------------------------------------------------------------------
@@ -612,6 +636,34 @@ class TestMultivariateComparatorInit:
 
 
 class TestMultivariateComparatorCompare:
+    @pytest.mark.parametrize(
+        ("values", "metric_names", "message"),
+        [
+            (np.zeros(20), ("m1",), "two-dimensional"),
+            (np.zeros((20, 2)), ("m1",), r"values.shape\[1\]"),
+            (np.zeros((20, 1)), (), "at least one metric"),
+        ],
+    )
+    def test_rejects_malformed_direct_matrices_with_value_error(
+        self,
+        values: np.ndarray,
+        metric_names: tuple[str, ...],
+        message: str,
+    ) -> None:
+        malformed = ScoreMatrix.model_construct(
+            values=values,
+            metric_names=metric_names,
+            dropped_rows=0,
+        )
+        with pytest.raises(ValueError, match=message) as exc_info:
+            MultivariateComparator(config=_fast_config()).compare(
+                candidate=malformed,
+                baseline=malformed,
+                baseline_id=uuid4(),
+                run_id=uuid4(),
+            )
+        assert not isinstance(exc_info.value, IndexError)
+
     def test_returns_two_verdicts_one_per_method(self) -> None:
         rng = np.random.default_rng(0)
         base = rng.uniform(0.3, 0.7, size=(30, 3))

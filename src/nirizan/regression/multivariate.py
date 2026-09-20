@@ -151,11 +151,11 @@ class ScoreMatrix(BaseModel):
 
         # Use the canonical score-matrix validator so direct construction and
         # factory construction share the same finite/[0, 1]/dimensionality
-        # semantics. ``min_rows=0`` keeps row-count sufficiency as the
-        # comparator/factory policy rather than a structural constructor rule.
+        # semantics. Direct matrices must contain at least one row; the
+        # factory applies the stronger comparison-specific minimum separately.
         values = validate_score_matrix(
             self.values,
-            min_rows=0,
+            min_rows=1,
             min_columns=1,
         )
         if values.shape[1] != len(self.metric_names):
@@ -401,6 +401,17 @@ class MultivariateComparator:
         off-diagonal pair to test) and its verdict is emitted as NONE with
         ``p_value=1.0`` and an explanation noting the skip.
         """
+        # ``model_construct`` and other deserialization shortcuts can bypass
+        # Pydantic validators. Re-validate at this public boundary so malformed
+        # matrices fail with the contract's ValueError instead of an incidental
+        # shape/index error while deriving deltas or running a test.
+        for label, matrix in (("candidate", candidate), ("baseline", baseline)):
+            values = validate_score_matrix(matrix.values, min_rows=0, min_columns=1)
+            if not matrix.metric_names:
+                raise ValueError(f"{label} metric_names must contain at least one metric.")
+            if values.shape[1] != len(matrix.metric_names):
+                raise ValueError(f"{label} metric_names length must match values.shape[1].")
+
         if candidate.metric_names != baseline.metric_names:
             raise ValueError(
                 f"Candidate metrics {candidate.metric_names} do not match "
