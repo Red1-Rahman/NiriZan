@@ -15,7 +15,7 @@ This policy aligns with:
 
 - ACM Code of Ethics and Professional Conduct
 - Contributor Covenant
-- GPL License
+- Apache 2.0
 - Applicable privacy regulations
 
 ---

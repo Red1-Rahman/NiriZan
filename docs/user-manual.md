@@ -1,7 +1,7 @@
 # NiriZan User Manual
 
 *Continuous evaluation infrastructure for production AI systems.*
-> version: `0.1.0`
+> version: `0.4.0`
 
 ---
 
@@ -3324,14 +3324,24 @@ Computes a bootstrap confidence interval for `mean(candidate) - mean(baseline)`,
 
 **Synchronous.**
 
-> **Not the same as `nirizan.metrics.statistical_gating.bootstrap_delta_ci`.** Both compute the same statistic with the same default `n_bootstrap`/`confidence`/`seed`, but:
+> **Relationship to `nirizan.metrics.statistical_gating.bootstrap_delta_ci`.** Both `nirizan.gate.verdict.bootstrap_delta_ci` and `nirizan.metrics.statistical_gating.bootstrap_delta_ci` are backward-compatible 2-tuple wrappers around the canonical `nirizan.metrics.stats.bootstrap_delta_ci` implementation.
 >
-> | | `nirizan.metrics.statistical_gating` | `nirizan.gate.verdict` |
-> |---|---|---|
-> | Input validation | Calls `validate_scores` on both arrays: checks non-empty, finite, and every value in `[0.0, 1.0]`. Coerces inputs with `np.asarray(..., dtype=float)`. | Only checks `.size == 0` for both arrays. Does not check finiteness or `[0.0, 1.0]` range. Does not coerce dtype. |
-> | `n_bootstrap` validation | Not checked; a value less than 1 is not explicitly rejected. | Explicitly checked: raises `ValueError` if `n_bootstrap < 1`. |
+> Both wrappers use the historical defaults `n_bootstrap=5000`, `confidence=0.95`, and `seed=42`, and both return `(ci_lower, ci_upper)`. The canonical `nirizan.metrics.stats.bootstrap_delta_ci` returns the full `(delta_hat, ci_lower, ci_upper)` tuple instead. Its tests verify the 3-tuple contract, deterministic results for a fixed seed, and rejection of invalid confidence levels and non-positive bootstrap counts.
 >
-> `evaluate_gate` uses the `nirizan.gate.verdict` version exclusively. Pick the module deliberately if you're calling `bootstrap_delta_ci` outside of `evaluate_gate`.
+> |                          | `nirizan.metrics.statistical_gating.bootstrap_delta_ci`                                      | `nirizan.gate.verdict.bootstrap_delta_ci`                                                            |
+> | ------------------------ | -------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+> | Canonical implementation | Delegates to `nirizan.metrics.stats.bootstrap_delta_ci`                                      | Delegates to `nirizan.metrics.stats.bootstrap_delta_ci`                                              |
+> | Return value             | Historical `(ci_lower, ci_upper)` 2-tuple                                                    | Historical `(ci_lower, ci_upper)` 2-tuple                                                            |
+> | Input coercion           | Delegated to the canonical implementation                                                    | Explicitly coerces with `np.asarray(..., dtype=float)` before validation                             |
+> | Score validation         | Canonical implementation validates non-empty, one-dimensional, finite scores in `[0.0, 1.0]` | Same canonical validation after wrapper-level coercion                                               |
+> | Empty input              | Rejected by the canonical implementation                                                     | Rejected explicitly by the wrapper before delegation, preserving the gate's historical error message |
+> | `n_bootstrap` validation | Ultimately enforced by the canonical implementation                                          | Explicitly rejects values `< 1` before delegation                                                    |
+> | `confidence` validation  | Explicitly rejects values outside `(0, 1)` before delegation                                 | Explicitly rejects values outside `(0, 1)` before delegation                                         |
+>
+> `evaluate_gate` uses `nirizan.gate.verdict.bootstrap_delta_ci` exclusively. This preserves the gate's historical 2-tuple API and its wrapper-specific validation and error-message contract.
+>
+> For new code that does not require the legacy 2-tuple API, prefer `nirizan.metrics.stats.bootstrap_delta_ci`, which is the single canonical implementation and returns `(delta_hat, ci_lower, ci_upper)`.
+
 
 ---
 
@@ -4478,5 +4488,5 @@ Closes the underlying SQLite connection. **Synchronous.**
 # End of User Manual
 
 <div align="center">
-Rahman, R. NiriZan (Version 0.1.0) [Computer software]. https://github.com/Red1-Rahman/NiriZan
+Rahman, R. NiriZan (Version 0.4.0) [Computer software]. https://github.com/Red1-Rahman/NiriZan
 </div>

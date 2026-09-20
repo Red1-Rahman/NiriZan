@@ -2,7 +2,7 @@
 
 ## Project Status
 
-NiriZan is an independent open-source project. The latest released version is `0.2.0`, published on PyPI on 2026-08-28. `0.3.0` is drafted (see `CHANGELOG.md`) and has not been released yet. The package is publicly available on PyPI and can be installed with:
+NiriZan is an independent open-source project. The latest released version is `0.3.0`, published on PyPI on Sep 1, 2026. `0.4.0` is drafted (see `CHANGELOG.md`) and has not been released yet. The package is publicly available on PyPI and can be installed with:
 
 ```bash
 pip install nirizan
