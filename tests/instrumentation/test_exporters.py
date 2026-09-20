@@ -1,4 +1,5 @@
-from datetime import datetime, timezone
+# tests\instrumentation\test_exporters.py
+from datetime import UTC, datetime
 from uuid import uuid4
 
 import pytest
@@ -10,7 +11,7 @@ from nirizan.instrumentation.spans import Span, SpanKind, Trace
 @pytest.fixture
 def sample_trace() -> Trace:
     trace_id = uuid4()
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     span = Span(
         span_id=uuid4(),
         trace_id=trace_id,
@@ -40,6 +41,8 @@ async def test_in_memory_exporter(sample_trace: Trace) -> None:
     exporter.clear()
     assert len(exporter.get_traces()) == 0
 
+    await exporter.shutdown()
+
 
 @pytest.mark.asyncio
 async def test_console_exporter(sample_trace: Trace, caplog: pytest.LogCaptureFixture) -> None:
@@ -49,3 +52,5 @@ async def test_console_exporter(sample_trace: Trace, caplog: pytest.LogCaptureFi
 
     assert "Trace Exported" in caplog.text
     assert str(sample_trace.trace_id) in caplog.text
+
+    await exporter.shutdown()
