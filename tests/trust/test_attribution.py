@@ -64,9 +64,7 @@ def test_attribution_no_drift(
     assert verdict.system_score_delta == pytest.approx(0.0)
     assert verdict.judge_score_delta == pytest.approx(0.0)
     assert verdict.evaluated_at.tzinfo is not None
-    assert verdict.evaluated_at.utcoffset() == timezone.utc.utcoffset(
-        verdict.evaluated_at
-    )
+    assert verdict.evaluated_at.utcoffset() == timezone.utc.utcoffset(verdict.evaluated_at)
     assert verdict.explanation
 
 
@@ -451,10 +449,7 @@ def test_mann_whitney_is_used_when_both_groups_have_at_least_five_samples(
     assert mann_whitney.call_count == 2
     # Judge hypothesis is evaluated first (two-sided), then the system
     # hypothesis (one-sided "less").
-    alternatives = [
-        call_kwargs["alternative"]
-        for _, call_kwargs in mann_whitney.call_args_list
-    ]
+    alternatives = [call_kwargs["alternative"] for _, call_kwargs in mann_whitney.call_args_list]
     assert alternatives == ["two-sided", "less"]
     assert verdict.attribution == DriftAttribution.SYSTEM_DRIFT
     assert verdict.system_score_delta == pytest.approx(-0.6)
@@ -849,9 +844,7 @@ def test_evaluated_at_is_timezone_aware_utc(
 
     assert verdict.evaluated_at.tzinfo is not None
     assert verdict.evaluated_at.utcoffset() is not None
-    assert verdict.evaluated_at.utcoffset() == timezone.utc.utcoffset(
-        verdict.evaluated_at
-    )
+    assert verdict.evaluated_at.utcoffset() == timezone.utc.utcoffset(verdict.evaluated_at)
     assert verdict.evaluated_at <= datetime.now(timezone.utc)
 
 
