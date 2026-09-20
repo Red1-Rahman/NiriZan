@@ -81,6 +81,17 @@ class TestValidateScoreMatrix:
         with pytest.raises(ValueError, match="rows"):
             validate_score_matrix(np.array([[0.1, 0.2]]), min_rows=2)
 
+    def test_default_min_rows_and_columns_are_applied(self) -> None:
+        # Defaults are min_rows=2, min_columns=1; a single row must fail
+        # even with no explicit min_rows passed.
+        with pytest.raises(ValueError, match="rows"):
+            validate_score_matrix(np.array([[0.1, 0.2]]))
+
+    def test_default_min_rows_boundary_passes(self) -> None:
+        matrix = np.array([[0.1, 0.2], [0.3, 0.4]])
+        result = validate_score_matrix(matrix)
+        np.testing.assert_array_equal(result, matrix)
+
     def test_too_few_columns_raises(self) -> None:
         with pytest.raises(ValueError, match="columns"):
             validate_score_matrix(np.zeros((5, 1)), min_columns=2)
@@ -340,6 +351,14 @@ class TestCalculateSampleSize:
         with pytest.raises(ValueError, match="baseline_std"):
             calculate_sample_size(baseline_std=-0.1, target_delta=0.05)
 
+    def test_invalid_alpha_raises(self) -> None:
+        with pytest.raises(ValueError, match="alpha"):
+            calculate_sample_size(baseline_std=0.1, target_delta=0.05, alpha=1.5)
+
+    def test_alpha_boundary_zero_raises(self) -> None:
+        with pytest.raises(ValueError, match="alpha"):
+            calculate_sample_size(baseline_std=0.1, target_delta=0.05, alpha=0.0)
+
     def test_zero_target_delta_raises(self) -> None:
         with pytest.raises(ValueError, match="target_delta"):
             calculate_sample_size(baseline_std=0.1, target_delta=0.0)
@@ -562,6 +581,24 @@ class TestScaleLogvarStatistic:
         with pytest.raises(ValueError, match="same number of columns"):
             scale_logvar_statistic(np.zeros((5, 2)), np.zeros((5, 3)))
 
+    @pytest.mark.parametrize("eps", [0.0, -1e-12, float("inf")])
+    def test_invalid_epsilon_raises(self, eps: float) -> None:
+        values = np.array([0.3, 0.4, 0.5])
+        with pytest.raises(ValueError, match="eps must be finite and positive"):
+            scale_logvar_statistic(values, values, eps=eps)
+
+
+class TestAsValidatedPairBoundaries:
+    """Test ``_as_validated_pair`` observation-count boundaries indirectly."""
+
+    def test_single_observation_per_group_raises(self) -> None:
+        with pytest.raises(ValueError, match="at least 2 observations"):
+            scale_logvar_statistic(np.array([0.5]), np.array([0.4, 0.6]))
+
+    def test_single_observation_in_second_group_raises(self) -> None:
+        with pytest.raises(ValueError, match="at least 2 observations"):
+            scale_logvar_statistic(np.array([0.4, 0.6]), np.array([0.5]))
+
 
 class TestScaleLogvarTest:
     def test_null_case_not_significant(self) -> None:
@@ -639,6 +676,12 @@ class TestScaleLogvarTest:
         values = np.array([0.3, 0.4, 0.5])
         with pytest.raises(ValueError, match="n_permutations"):
             scale_logvar_test(values, values, n_permutations=0)
+
+    def test_n_permutations_boundary_minimum_succeeds(self) -> None:
+        values = np.array([0.3, 0.4, 0.5])
+        # n_permutations=1 is the minimum accepted value (>=1), must not raise.
+        observed, null, p = scale_logvar_test(values, values, n_permutations=1, seed=1)
+        assert null.shape == (1,)
 
 
 # ---------------------------------------------------------------------------
@@ -794,3 +837,10 @@ class TestDependenceMaxTTest:
         y = rng.uniform(0.3, 0.7, size=(10, 2))
         with pytest.raises(ValueError, match="n_permutations"):
             dependence_max_t_test(x, y, n_permutations=0)
+
+    def test_n_permutations_boundary_minimum_succeeds(self) -> None:
+        rng = np.random.default_rng(40)
+        x = rng.uniform(0.3, 0.7, size=(10, 2))
+        y = rng.uniform(0.3, 0.7, size=(10, 2))
+        observed, null, p = dependence_max_t_test(x, y, n_permutations=1, seed=1)
+        assert null.shape == (1,)

@@ -877,6 +877,363 @@ class TestMultivariateComparatorCompare:
 
 
 # ---------------------------------------------------------------------------
+# MultivariateComparator.compare — defense-in-depth revalidation
+# (Insert after TestMultivariateComparatorCompare, or as new methods inside it)
+# ---------------------------------------------------------------------------
+
+
+class TestCompareDefenseInDepthRevalidation:
+    """Targets the re-validation loop at the top of ``compare()``.
+
+    ``ScoreMatrix`` is ``frozen=False`` with no ``validate_assignment``, so
+    a caller can mutate ``.values`` after construction without tripping any
+    Pydantic validator. These tests exercise exactly that mutation path,
+    which ``model_construct``-based tests elsewhere in this file do not
+    cover, and confirm the loop actually protects both the candidate and
+    the baseline argument independently rather than only the first one
+    checked.
+    """
+
+    def test_mutated_values_with_nan_are_caught_not_silently_propagated(self) -> None:
+        """Mutating .values post-construction must still be caught.
+
+        Without the defense-in-depth loop, this NaN would flow straight
+        into the ``metric_deltas`` computation as a silent NaN rather than
+        raising here.
+        """
+        rng = np.random.default_rng(20)
+        good = _build_matrix(
+            rng.uniform(0.3, 0.7, size=(30, 2)), ["m1", "m2"], min_complete_rows=10
+        )
+        good.values = np.full((good.n_rows, good.n_metrics), float("nan"))
+
+        with pytest.raises(ValueError, match="non-finite"):
+            MultivariateComparator(config=_fast_config()).compare(
+                candidate=good,
+                baseline=good,
+                baseline_id=uuid4(),
+                run_id=uuid4(),
+            )
+
+    def test_mutated_values_out_of_range_are_caught(self) -> None:
+        rng = np.random.default_rng(21)
+        good = _build_matrix(
+            rng.uniform(0.3, 0.7, size=(30, 2)), ["m1", "m2"], min_complete_rows=10
+        )
+        good.values = np.full((good.n_rows, good.n_metrics), 1.5)
+
+        with pytest.raises(ValueError, match=r"normalized to \[0, 1\]"):
+            MultivariateComparator(config=_fast_config()).compare(
+                candidate=good,
+                baseline=good,
+                baseline_id=uuid4(),
+                run_id=uuid4(),
+            )
+
+    def test_baseline_only_malformed_matrix_is_caught(self) -> None:
+        """A malformed *baseline* (with a valid candidate) must still raise.
+
+        The existing malformed-matrix tests always pass the same object as
+        both candidate and baseline, so they cannot distinguish whether the
+        baseline branch of the revalidation loop actually runs. This uses
+        an asymmetric pair to close that gap.
+        """
+        rng = np.random.default_rng(22)
+        good = _build_matrix(
+            rng.uniform(0.3, 0.7, size=(20, 2)), ["m1", "m2"], min_complete_rows=10
+        )
+        malformed_baseline = ScoreMatrix.model_construct(
+            values=np.zeros(20),  # 1-D: fails the "two-dimensional" check
+            metric_names=("m1", "m2"),
+            dropped_rows=0,
+        )
+
+        with pytest.raises(ValueError, match="two-dimensional"):
+            MultivariateComparator(config=_fast_config()).compare(
+                candidate=good,
+                baseline=malformed_baseline,
+                baseline_id=uuid4(),
+                run_id=uuid4(),
+            )
+
+    def test_candidate_only_malformed_matrix_is_caught(self) -> None:
+        """Mirror of the baseline-only case, for the candidate argument."""
+        rng = np.random.default_rng(23)
+        good = _build_matrix(
+            rng.uniform(0.3, 0.7, size=(20, 2)), ["m1", "m2"], min_complete_rows=10
+        )
+        malformed_candidate = ScoreMatrix.model_construct(
+            values=np.zeros(20),
+            metric_names=("m1", "m2"),
+            dropped_rows=0,
+        )
+
+        with pytest.raises(ValueError, match="two-dimensional"):
+            MultivariateComparator(config=_fast_config()).compare(
+                candidate=malformed_candidate,
+                baseline=good,
+                baseline_id=uuid4(),
+                run_id=uuid4(),
+            )
+
+    @pytest.mark.parametrize(
+        ("values", "metric_names", "message"),
+        [
+            (
+                np.array([[0.5, float("nan")]] * 20),
+                ("m1", "m2"),
+                "non-finite",
+            ),
+            (
+                np.array([[0.5, 1.5]] * 20),
+                ("m1", "m2"),
+                "normalized to",
+            ),
+        ],
+    )
+    def test_rejects_value_range_corruption_not_just_shape_corruption(
+        self,
+        values: np.ndarray,
+        metric_names: tuple[str, ...],
+        message: str,
+    ) -> None:
+        """The existing parametrized malformed-matrix test only covers
+        *structural* corruption (bad ndim, shape mismatch, empty
+        metric_names). This covers the *value-range* checks the same loop
+        is responsible for, which is the check most directly tied to the
+        NaN-propagation risk the loop exists to prevent.
+        """
+        malformed = ScoreMatrix.model_construct(
+            values=values,
+            metric_names=metric_names,
+            dropped_rows=0,
+        )
+        with pytest.raises(ValueError, match=message):
+            MultivariateComparator(config=_fast_config()).compare(
+                candidate=malformed,
+                baseline=malformed,
+                baseline_id=uuid4(),
+                run_id=uuid4(),
+            )
+
+
+# ---------------------------------------------------------------------------
+# Holm-Bonferroni interaction inside compare() — pinned p-values
+# ---------------------------------------------------------------------------
+
+
+class TestCompareHolmCorrectionWithPinnedPValues:
+    """Exercise the two-test Holm-Bonferroni branch with known p-values.
+
+    ``test_single_metric_boundary_alpha_yields_significant`` mocks
+    ``scale_logvar_test`` but only in the single-metric path, where Holm
+    correction is bypassed entirely (``run_dependence=False``). These tests
+    mock both ``scale_logvar_test`` and ``dependence_max_t_test`` to pin
+    exact p-values and assert the corrected significance flags precisely,
+    rather than relying on randomized data to probabilistically exercise
+    the branch.
+    """
+
+    def _matrices(self) -> tuple[ScoreMatrix, ScoreMatrix]:
+        rng = np.random.default_rng(30)
+        base = rng.uniform(0.3, 0.7, size=(20, 2))
+        cand = rng.uniform(0.3, 0.7, size=(20, 2))
+        baseline = _build_matrix(base, ["m1", "m2"], min_complete_rows=10)
+        candidate = _build_matrix(cand, ["m1", "m2"], min_complete_rows=10)
+        return candidate, baseline
+
+    def test_only_smaller_p_value_survives_holm_at_m_equals_2(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """At alpha=0.05, m=2: sorted p-values [0.03, 0.04].
+        Threshold for rank 1 is 0.05/2 = 0.025; 0.03 > 0.025 -> NOT rejected.
+        So neither should survive here -- pick values that actually split:
+        [0.02, 0.04]. Threshold rank1 = 0.025; 0.02 <= 0.025 -> reject.
+        Then threshold rank2 = 0.05; 0.04 <= 0.05 -> reject too.
+        Use a case with a genuine split: scale_p=0.01, dep_p=0.04.
+        Threshold rank1=0.025; 0.01<=0.025 reject. Threshold rank2=0.05;
+        0.04<=0.05 reject too -- Holm step-down doesn't stop once the first
+        rank clears, so both can pass. To get exactly one surviving, use
+        scale_p=0.01 (rejects, threshold 0.025) and dep_p=0.06 (0.06>0.05,
+        stops here) so only scale survives.
+        """
+        config = _fast_config(structure_alpha=0.05, warning_effect=0.05, blocking_effect=0.5)
+        comparator = MultivariateComparator(config=config)
+        candidate, baseline = self._matrices()
+
+        def mock_scale(*args: object, **kwargs: object) -> tuple[float, None, float]:
+            return 1.0, None, 0.01
+
+        def mock_dep(*args: object, **kwargs: object) -> tuple[float, None, float]:
+            return 0.5, None, 0.06
+
+        monkeypatch.setattr("nirizan.regression.multivariate.scale_logvar_test", mock_scale)
+        monkeypatch.setattr("nirizan.regression.multivariate.dependence_max_t_test", mock_dep)
+
+        verdicts = comparator.compare(
+            candidate=candidate,
+            baseline=baseline,
+            baseline_id=uuid4(),
+            run_id=uuid4(),
+        )
+        scale = next(v for v in verdicts if v.method == MultivariateMethod.SCALE)
+        dep = next(v for v in verdicts if v.method == MultivariateMethod.DEPENDENCE)
+
+        assert "significant_after_holm=True" in scale.explanation
+        assert "significant_after_holm=False" in dep.explanation
+        # dep's effect_size (0.5) alone would clear blocking_effect if it
+        # were significant; asserting NONE here proves the Holm rejection,
+        # not just the effect-size classification, drove the outcome.
+        assert dep.severity == RegressionSeverity.NONE
+
+    def test_both_p_values_survive_holm_when_both_small(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        config = _fast_config(structure_alpha=0.05, warning_effect=0.05, blocking_effect=0.5)
+        comparator = MultivariateComparator(config=config)
+        candidate, baseline = self._matrices()
+
+        def mock_scale(*args: object, **kwargs: object) -> tuple[float, None, float]:
+            return 1.0, None, 0.001
+
+        def mock_dep(*args: object, **kwargs: object) -> tuple[float, None, float]:
+            return 0.5, None, 0.01
+
+        monkeypatch.setattr("nirizan.regression.multivariate.scale_logvar_test", mock_scale)
+        monkeypatch.setattr("nirizan.regression.multivariate.dependence_max_t_test", mock_dep)
+
+        verdicts = comparator.compare(
+            candidate=candidate,
+            baseline=baseline,
+            baseline_id=uuid4(),
+            run_id=uuid4(),
+        )
+        for v in verdicts:
+            assert f"significant_after_holm=True" in v.explanation
+
+    def test_neither_survives_holm_when_both_large(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        config = _fast_config(structure_alpha=0.05, warning_effect=0.05, blocking_effect=0.5)
+        comparator = MultivariateComparator(config=config)
+        candidate, baseline = self._matrices()
+
+        def mock_scale(*args: object, **kwargs: object) -> tuple[float, None, float]:
+            return 1.0, None, 0.20
+
+        def mock_dep(*args: object, **kwargs: object) -> tuple[float, None, float]:
+            return 0.5, None, 0.30
+
+        monkeypatch.setattr("nirizan.regression.multivariate.scale_logvar_test", mock_scale)
+        monkeypatch.setattr("nirizan.regression.multivariate.dependence_max_t_test", mock_dep)
+
+        verdicts = comparator.compare(
+            candidate=candidate,
+            baseline=baseline,
+            baseline_id=uuid4(),
+            run_id=uuid4(),
+        )
+        assert all(v.severity == RegressionSeverity.NONE for v in verdicts)
+        assert all("significant_after_holm=False" in v.explanation for v in verdicts)
+
+
+# ---------------------------------------------------------------------------
+# effect_size formula correctness (isolated from severity thresholds)
+# ---------------------------------------------------------------------------
+
+
+class TestCompareEffectSizeFormulas:
+    """Pin the exact effect-size arithmetic, independent of severity.
+
+    ``test_single_metric_boundary_alpha_yields_significant`` asserts a
+    severity outcome that is *consistent with* the effect-size formula but
+    does not isolate the formula itself: a formula bug that still clears
+    the warning threshold would pass that test unnoticed. These assert the
+    numeric value directly.
+    """
+
+    def test_scale_effect_is_sqrt_statistic_over_n_metrics(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        rng = np.random.default_rng(31)
+        base = rng.uniform(0.3, 0.7, size=(20, 3))
+        cand = rng.uniform(0.3, 0.7, size=(20, 3))
+        baseline = _build_matrix(base, ["m1", "m2", "m3"], min_complete_rows=10)
+        candidate = _build_matrix(cand, ["m1", "m2", "m3"], min_complete_rows=10)
+
+        def mock_scale(*args: object, **kwargs: object) -> tuple[float, None, float]:
+            return 0.36, None, 1.0  # not significant, so severity math stays out of it
+
+        monkeypatch.setattr("nirizan.regression.multivariate.scale_logvar_test", mock_scale)
+
+        verdicts = MultivariateComparator(config=_fast_config()).compare(
+            candidate=candidate,
+            baseline=baseline,
+            baseline_id=uuid4(),
+            run_id=uuid4(),
+        )
+        scale = next(v for v in verdicts if v.method == MultivariateMethod.SCALE)
+        # sqrt(0.36 / 3) = sqrt(0.12) ~= 0.34641
+        assert scale.effect_size == pytest.approx(0.34641, abs=1e-4)
+        assert scale.statistic == pytest.approx(0.36)
+
+    def test_dependence_effect_equals_statistic_identity(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        rng = np.random.default_rng(32)
+        base = rng.uniform(0.3, 0.7, size=(20, 2))
+        cand = rng.uniform(0.3, 0.7, size=(20, 2))
+        baseline = _build_matrix(base, ["m1", "m2"], min_complete_rows=10)
+        candidate = _build_matrix(cand, ["m1", "m2"], min_complete_rows=10)
+
+        def mock_dep(*args: object, **kwargs: object) -> tuple[float, None, float]:
+            return 0.777, None, 1.0
+
+        monkeypatch.setattr("nirizan.regression.multivariate.dependence_max_t_test", mock_dep)
+
+        verdicts = MultivariateComparator(config=_fast_config()).compare(
+            candidate=candidate,
+            baseline=baseline,
+            baseline_id=uuid4(),
+            run_id=uuid4(),
+        )
+        dep = next(v for v in verdicts if v.method == MultivariateMethod.DEPENDENCE)
+        assert dep.effect_size == pytest.approx(0.777)
+        assert dep.statistic == pytest.approx(0.777)
+
+
+# ---------------------------------------------------------------------------
+# Disambiguate overlapping "at least one metric" error sources
+# ---------------------------------------------------------------------------
+
+
+class TestAtLeastOneMetricErrorSource:
+    """The existing parametrized case for empty ``metric_names`` matches a
+    substring ("at least one metric") produced by *two* different checks:
+    the defense-in-depth loop's per-matrix message and the later explicit
+    ``candidate.n_metrics < 1`` check. These tests isolate which one fires
+    so a change that silently removes either check is caught.
+    """
+
+    def test_empty_metric_names_is_caught_by_the_defense_loop(self) -> None:
+        """With metric_names=() but n_metrics computed from values.shape[1]
+        (which would be >=1 for a nonempty values array), the failure must
+        come from the metric_names emptiness check itself, not the
+        n_metrics check (which only looks at values.shape[1]).
+        """
+        malformed = ScoreMatrix.model_construct(
+            values=np.zeros((20, 1)),
+            metric_names=(),
+            dropped_rows=0,
+        )
+        with pytest.raises(ValueError, match="metric_names must contain at least one metric"):
+            MultivariateComparator(config=_fast_config()).compare(
+                candidate=malformed,
+                baseline=malformed,
+                baseline_id=uuid4(),
+                run_id=uuid4(),
+            )
+
+
+# ---------------------------------------------------------------------------
 # MultivariateComparator.compare_metric_results
 # ---------------------------------------------------------------------------
 
