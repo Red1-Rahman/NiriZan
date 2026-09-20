@@ -70,6 +70,7 @@ The long-term vision of NiriZan is to become the **engineering quality layer for
 - [User Manual](user-manual.md) — installation, guides, and API usage
 - [Architecture](architecture.md) — system design and component breakdown
 - [Literature Review](literature-review.md) — the research grounding NiriZan's design
+- [Dependency Graph](dependency-graph.md) - NiriZan's dependency graph
 - [Governance → Data Policy](governance/DATA_POLICY.md) and [KPI Definitions](governance/KPI-Definitions.md)
 - [Standards Mapping](standards/ISO-IEC-IEEE.md) — alignment with ISO/IEC/IEEE, UN SDG, ACM CS2023, EUR-ACE, and Washington Accord
 - [Research Lab](experiments.md) — the experiment notebooks behind NiriZan's design
@@ -80,6 +81,8 @@ The long-term vision of NiriZan is to become the **engineering quality layer for
 
 ## License
 
-Copyright (C) 2026 Redwan Rahman. Licensed under the **GNU General Public License v3.0 or later**.
+NiriZan is licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE) for the full text.
+
+Releases 0.1.0 to 0.3.0 were published under GPL-3.0-or-later and remain available under those terms. Version 0.4.0 and later are licensed under Apache-2.0.
 
 **Author:** Redwan Rahman — [github.com/Red1-Rahman](https://github.com/Red1-Rahman)
