@@ -1,4 +1,24 @@
 # src/nirizan/metrics/statistical_gating.py
+"""Logging-wrapped statistical helpers for the NiriZan metric engine.
+
+This module predates the consolidation of `metrics/stats.py` as the single
+source of truth for statistical primitives. It now provides two things:
+
+1. Verbose, logging-wrapped entry points for callers that want INFO-level
+   traces of every statistical decision (used by the Metric Engine's
+   RuntimeGating step and the LLM-judge calibration path).
+2. A backward-compatible `bootstrap_delta_ci` shim that returns the 2-tuple
+   ``(ci_lower, ci_upper)``. The canonical implementation lives in
+   ``nirizan.metrics.stats.bootstrap_delta_ci``, which returns the 3-tuple
+   ``(delta_hat, ci_lower, ci_upper)``. New code should import from
+   ``nirizan.metrics.stats`` (or ``nirizan.metrics``) directly.
+
+Deprecation note for `bootstrap_delta_ci`: the 2-tuple shape is retained so
+existing callers do not break, but it is considered deprecated. The 3-tuple
+from `stats` is the canonical shape and is what `nirizan.metrics` re-exports
+under the `bootstrap_delta_ci` name at package level.
+"""
+
 from __future__ import annotations
 
 from typing import Mapping
@@ -7,7 +27,7 @@ import numpy as np
 
 from nirizan._logging import get_logger
 from nirizan.metrics.stats import (
-    calculate_bootstrap_ci,
+    bootstrap_delta_ci as stats_bootstrap_delta_ci,
     calculate_sample_size,
     compute_calibration_metrics,
     compute_holm_bonferroni,
@@ -59,17 +79,27 @@ def bootstrap_delta_ci(
     confidence: float = 0.95,
     seed: int = 42,
 ) -> tuple[float, float]:
-    """Compute bootstrap confidence interval for delta mean score."""
-    candidate = validate_scores(np.asarray(candidate, dtype=float))
-    baseline = validate_scores(np.asarray(baseline, dtype=float))
+    """Compute bootstrap confidence interval for delta mean score.
 
+    Backward-compatible wrapper around
+    ``nirizan.metrics.stats.bootstrap_delta_ci``. That canonical function
+    returns ``(delta_hat, ci_lower, ci_upper)``; this wrapper discards
+    ``delta_hat`` and returns only ``(ci_lower, ci_upper)`` so the
+    existing 2-tuple contract is preserved. New code should call the
+    canonical function and unpack all three values.
+    """
     if not 0.0 < confidence < 1.0:
         logger.error(
-            "Bootstrap CI failed: confidence must be between 0 and 1, got %.4f", confidence
+            "Bootstrap CI failed: confidence must be between 0 and 1, got %.4f",
+            confidence,
         )
         raise ValueError("confidence must be between 0 and 1.")
 
-    _, ci_low, ci_high = calculate_bootstrap_ci(
+    # Score validation happens inside stats_bootstrap_delta_ci, so we do not
+    # duplicate it here. The confidence check above is done first so the
+    # caller gets a specific error message rather than the generic one from
+    # inside the stats layer.
+    _, ci_low, ci_high = stats_bootstrap_delta_ci(
         candidate,
         baseline,
         n_bootstrap=n_bootstrap,
@@ -95,7 +125,8 @@ def holm_bonferroni(
     """Apply Holm-Bonferroni correction to p-value mapping."""
     if not 0.0 < alpha < 1.0:
         logger.error(
-            "Invalid alpha for Holm-Bonferroni: alpha=%.4f (must be between 0 and 1).", alpha
+            "Invalid alpha for Holm-Bonferroni: alpha=%.4f (must be between 0 and 1).",
+            alpha,
         )
         raise ValueError("alpha must be between 0 and 1.")
 

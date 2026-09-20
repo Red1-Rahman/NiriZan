@@ -75,3 +75,13 @@ def test_invalid_scores_are_rejected(caplog: pytest.LogCaptureFixture) -> None:
 
     with pytest.raises(ValueError, match="normalized to \\[0, 1\\]"):
         validate_scores(np.array([0.5, 1.2]))
+
+
+def test_mann_whitney_empty_baseline_also_raises() -> None:
+    """The existing test only triggers the empty-check via an empty
+    candidate array. The same ``or`` condition must also fire when it's
+    the baseline side that's empty.
+    """
+    candidate = np.array([0.1, 0.2, 0.3])
+    with pytest.raises(ValueError, match="Both distributions must contain observations"):
+        mann_whitney_regression(candidate, np.array([]))

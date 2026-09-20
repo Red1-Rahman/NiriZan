@@ -157,9 +157,9 @@ governed by it. Report unacceptable behavior as described in
 
 ## Licensing
 
-NiriZan is licensed under the GNU General Public License v3 (or later). By
-contributing, you agree that your contributions are licensed under the
-same terms.
+NiriZan is licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE) for the full text.
+
+Releases 0.1.0 to 0.3.0 were published under GPL-3.0-or-later and remain available under those terms. Version 0.4.0 and later are licensed under Apache-2.0.
 
 ## What This Document Doesn't Cover Yet
 

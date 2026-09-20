@@ -39,7 +39,7 @@ Redwan Rahman
 
 License
 -------
-GPL-3.0-or-later
+Apache-2.0
 
 Citation
 --------
@@ -50,7 +50,7 @@ BibTeX
 ------
 @software{Rahman_NiriZan,
   author = {Rahman, Redwan},
-  license = {GPL-3.0-or-later},
+  license = {Apache-2.0},
   title = {{NiriZan}},
   url = {https://github.com/Red1-Rahman/NiriZan},
   version = {0.2.0}

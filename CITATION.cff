@@ -16,7 +16,7 @@ authors:
     email: "redwanrahman2002@outlook.com"
 repository-code: "https://github.com/Red1-Rahman/NiriZan"
 url: "https://github.com/Red1-Rahman/NiriZan"
-license: "GPL-3.0-or-later"
+license: "Apache-2.0"
 keywords:
   - "AI evaluation"
   - "LLM evaluation"
@@ -28,4 +28,4 @@ keywords:
   - "LLMOps"
   - "continuous evaluation"
   - "software quality"
-version: "0.3.0"
+version: "0.4.0"

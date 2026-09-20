@@ -7,8 +7,8 @@ edit_uri: edit/main/docs/
 
 copyright: >
   © 2026 Redwan Rahman ·
-  <a href="https://www.gnu.org/licenses/gpl-3.0.html">
-  GNU General Public License v3.0 or later
+  <a href="https://www.apache.org/licenses/LICENSE-2.0">
+  Apache License 2.0
   </a>
 
 theme:
