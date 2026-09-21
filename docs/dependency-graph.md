@@ -47,7 +47,7 @@ flowchart TB
 | `nirizan._logging` | `src/nirizan/_logging.py` | _none_ |
 | `nirizan.gate` | `src/nirizan/gate/__init__.py` | `nirizan.gate.verdict` |
 | `nirizan.gate.ci` | `src/nirizan/gate/ci.py` | `nirizan._logging`, `nirizan.gate.verdict` |
-| `nirizan.gate.verdict` | `src/nirizan/gate/verdict.py` | `nirizan._logging`, `nirizan.metrics.stats`, `nirizan.regression.comparator` |
+| `nirizan.gate.verdict` | `src/nirizan/gate/verdict.py` | `nirizan._logging`, `nirizan.metrics.stats`, `nirizan.regression.comparator`, `nirizan.regression.multivariate` |
 | `nirizan.instrumentation` | `src/nirizan/instrumentation/__init__.py` | _none_ |
 | `nirizan.instrumentation.exporters` | `src/nirizan/instrumentation/exporters.py` | `nirizan.instrumentation.spans` |
 | `nirizan.instrumentation.sdk` | `src/nirizan/instrumentation/sdk.py` | `nirizan._logging`, `nirizan.instrumentation.exporters`, `nirizan.instrumentation.spans`, `nirizan.instrumentation.tracer` |
@@ -67,10 +67,11 @@ flowchart TB
 | `nirizan.orchestrator.dispatcher` | `src/nirizan/orchestrator/dispatcher.py` | `nirizan.instrumentation.spans`, `nirizan.metrics.base` |
 | `nirizan.orchestrator.scheduler` | `src/nirizan/orchestrator/scheduler.py` | `nirizan.instrumentation.spans`, `nirizan.orchestrator.dispatcher`, `nirizan.storage.models` |
 | `nirizan.regression` | `src/nirizan/regression/__init__.py` | `nirizan.regression.comparator` |
-| `nirizan.regression.comparator` | `src/nirizan/regression/comparator.py` | `nirizan._logging`, `nirizan.regression.thresholds` |
+| `nirizan.regression.comparator` | `src/nirizan/regression/comparator.py` | `nirizan._logging`, `nirizan.metrics.stats`, `nirizan.regression.thresholds` |
+| `nirizan.regression.multivariate` | `src/nirizan/regression/multivariate.py` | `nirizan._logging`, `nirizan.metrics.base`, `nirizan.metrics.stats`, `nirizan.regression.comparator` |
 | `nirizan.regression.thresholds` | `src/nirizan/regression/thresholds.py` | `nirizan._logging`, `nirizan.metrics.stats` |
 | `nirizan.reporting` | `src/nirizan/reporting/__init__.py` | _none_ |
-| `nirizan.reporting.dashboard` | `src/nirizan/reporting/dashboard.py` | `nirizan._logging`, `nirizan.gate.verdict`, `nirizan.regression.comparator`, `nirizan.reporting.health_score`, `nirizan.reporting.judge_reliability`, `nirizan.trust.attribution` |
+| `nirizan.reporting.dashboard` | `src/nirizan/reporting/dashboard.py` | `nirizan._logging`, `nirizan.gate.verdict`, `nirizan.regression.comparator`, `nirizan.regression.multivariate`, `nirizan.reporting.health_score`, `nirizan.reporting.judge_reliability`, `nirizan.trust.attribution` |
 | `nirizan.reporting.health_score` | `src/nirizan/reporting/health_score.py` | `nirizan.trust.attribution` |
 | `nirizan.reporting.judge_reliability` | `src/nirizan/reporting/judge_reliability.py` | `nirizan._logging`, `nirizan.trust.attribution` |
 | `nirizan.storage` | `src/nirizan/storage/__init__.py` | _none_ |
@@ -118,11 +119,19 @@ flowchart TB
 | `nirizan.metrics` | `calculate_bootstrap_ci` | no (via `from ... import`) |
 | `nirizan.metrics` | `calculate_sample_size` | no (via `from ... import`) |
 | `nirizan.metrics` | `calibrate_gold_set` | no (via `from ... import`) |
+| `nirizan.metrics` | `cohens_d` | no (via `from ... import`) |
 | `nirizan.metrics` | `compute_calibration_metrics` | no (via `from ... import`) |
 | `nirizan.metrics` | `compute_holm_bonferroni` | no (via `from ... import`) |
 | `nirizan.metrics` | `compute_mann_whitney_u` | no (via `from ... import`) |
+| `nirizan.metrics` | `dependence_max_t_statistic` | no (via `from ... import`) |
+| `nirizan.metrics` | `dependence_max_t_test` | no (via `from ... import`) |
 | `nirizan.metrics` | `holm_bonferroni` | no (via `from ... import`) |
 | `nirizan.metrics` | `mann_whitney_regression` | no (via `from ... import`) |
+| `nirizan.metrics` | `permutation_p_value` | no (via `from ... import`) |
+| `nirizan.metrics` | `permutation_test` | no (via `from ... import`) |
+| `nirizan.metrics` | `scale_logvar_statistic` | no (via `from ... import`) |
+| `nirizan.metrics` | `scale_logvar_test` | no (via `from ... import`) |
+| `nirizan.metrics` | `validate_score_matrix` | no (via `from ... import`) |
 | `nirizan.metrics` | `validate_scores` | no (via `from ... import`) |
 | `nirizan.metrics.behavioral_anchor` | `BehavioralAnchorMetric` | no (via `from ... import`) |
 | `nirizan.metrics.lightweight_judge` | `ClassificationModel` | no (via `from ... import`) |
@@ -131,6 +140,7 @@ flowchart TB
 | `nirizan.metrics.llm_judge` | `LLMJudge` | no (via `from ... import`) |
 | `nirizan.metrics.llm_judge` | `LLMJudgeResponse` | no (via `from ... import`) |
 | `nirizan.metrics.rag_triad` | `RAGTriadMetric` | no (via `from ... import`) |
+| `nirizan.metrics.statistical_gating` | `bootstrap_delta_ci` | no (via `from ... import`) |
 | `nirizan.orchestrator.collector` | `CollectorExporter` | no (via `from ... import`) |
 | `nirizan.orchestrator.collector` | `TraceCollector` | no (via `from ... import`) |
 | `nirizan.orchestrator.collector` | `TraceSink` | no (via `from ... import`) |
@@ -143,6 +153,15 @@ flowchart TB
 | `nirizan.regression` | `classify_severity` | no (via `from ... import`) |
 | `nirizan.regression` | `cohens_d` | no (via `from ... import`) |
 | `nirizan.regression` | `mean_delta` | no (via `from ... import`) |
+| `nirizan.regression.multivariate` | `InsufficientDataError` | no (via `from ... import`) |
+| `nirizan.regression.multivariate` | `MultivariateComparator` | no (via `from ... import`) |
+| `nirizan.regression.multivariate` | `MultivariateConfig` | no (via `from ... import`) |
+| `nirizan.regression.multivariate` | `MultivariateMethod` | no (via `from ... import`) |
+| `nirizan.regression.multivariate` | `MultivariateMode` | no (via `from ... import`) |
+| `nirizan.regression.multivariate` | `ScoreMatrix` | no (via `from ... import`) |
+| `nirizan.regression.multivariate` | `apply_mode` | no (via `from ... import`) |
+| `nirizan.regression.multivariate` | `classify_structure_severity` | no (via `from ... import`) |
+| `nirizan.regression.multivariate` | `derive_permutation_seed` | no (via `from ... import`) |
 | `nirizan.reporting.dashboard` | `DashboardSnapshot` | no (via `from ... import`) |
 | `nirizan.reporting.dashboard` | `assemble_dashboard_snapshot` | no (via `from ... import`) |
 | `nirizan.reporting.judge_reliability` | `JudgeReliabilityStatus` | no (via `from ... import`) |
