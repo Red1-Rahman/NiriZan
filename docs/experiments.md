@@ -61,6 +61,8 @@ The experiments broadly follow the development of NiriZan's evaluation infrastru
 07  Evaluation Ablation & Benchmarking
         ↓
 08  External Validation & Scale
+        ↓
+09  Multivariate Regression Detection Ablation
 ```
 
 This progression reflects the broader research methodology behind NiriZan:
@@ -92,7 +94,24 @@ Never hardcode API keys, tokens, or credentials inside notebooks. Use platform-n
   api_key = userdata.get("OPENAI_API_KEY")
   ```
 
-* **Kaggle**: Store credentials using Kaggle's notebook secrets and retrieve them through the platform's supported secret-management interface.
+* **Kaggle**: 
+  ```python
+  from kaggle_secrets import UserSecretsClient
+
+  user_secrets = UserSecretsClient()
+  api_key = user_secrets.get_secret("OPENAI_API_KEY")
+  ```
+
+* **Local PC**:
+  ```python
+  import os
+  from dotenv import load_dotenv
+
+  load_dotenv()
+  api_key = os.getenv("OPENAI_API_KEY")
+  ```
+> Store secrets in a `.env` like `OPENAI_API_KEY=your_api_key_here`   
+> Never commit `.env` files to version control. Add `.env` to `.gitignore`
 
 ### 3. Reproducibility
 
