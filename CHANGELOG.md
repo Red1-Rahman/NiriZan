@@ -10,7 +10,57 @@ While NiriZan is on a `0.x` version, breaking changes are reflected in a
 jump to `1.0.0` is reserved for the point the public contract surface is
 considered stable.
 
-## [0.3.0] - drafted for release
+## [0.4.0] - 2026-09-20
+
+This release adds a second, multivariate track to regression detection. It catches changes in how metrics vary together (variance and correlation shifts) that the per-metric comparator cannot see. It contains two breaking changes and a license change; see **Changed**.
+
+### Added
+
+- **Multivariate structure track** (`nirizan.regression.multivariate`). `MultivariateComparator` compares row-aligned baseline and candidate score matrices with two permutation-calibrated tests and always returns exactly two `MultivariateVerdict` records:
+  - `scale`: variance-only drift, from epsilon-floored log-variance ratios. Invariant to location shifts.
+  - `dependence`: correlation-only drift, from the largest change in within-group rank correlation. Invariant to rank-preserving changes in the individual metrics. Skipped, with a `NONE` verdict, when there is only one metric.
+  - Both p-values use the `(k+1)/(R+1)` convention and are combined with Holm-Bonferroni at `structure_alpha`. Both tests are undirected: they flag that structure changed, not that quality dropped.
+- **Severity modes** via the frozen Pydantic model `MultivariateConfig`. `BALANCED` (default) caps severity at `WARNING`, so an undirected structure change can never block a deploy on its own. `STRICT` allows `BLOCKING` and is intended for callers who have carved the structure alpha out of the univariate comparator's budget. The default effect thresholds (`warning_effect=0.20`, `blocking_effect=0.40`) are provisional pending calibration on real data.
+- **Deterministic by default.** The permutation seed is derived from `(run_id, baseline_id)`, so re-evaluating the same comparison reproduces the same verdicts. Set `MultivariateConfig.seed` to pin it.
+- **Score matrices from raw results.** `ScoreMatrix.from_metric_results` pivots `MetricResult` records into a matrix, keeping complete cases only. `MultivariateComparator.compare_metric_results` wraps the whole flow and returns `INCONCLUSIVE` verdicts, with descriptive metric deltas where complete rows exist, instead of raising when data is insufficient. `compare()` on pre-built matrices raises `InsufficientDataError`.
+- **Gate integration.** `evaluate_gate()` accepts an optional `multivariate_verdicts` argument and fails on `BLOCKING` from either track (reachable only in `STRICT` mode). Decision-metric selection stays univariate-only. `GateVerdict.multivariate_verdicts` is a new field that defaults to an empty list.
+- **CI summary and dashboard.** The GitHub summary renders a structure-track table when multivariate verdicts exist, and omits it otherwise. `DashboardSnapshot.multivariate_verdicts` and `assemble_dashboard_snapshot(multivariate_verdicts=...)` carry the verdicts as informational context; they do not affect `compute_system_health_score`.
+- **Statistical primitives** in `nirizan.metrics.stats`, also exported from `nirizan.metrics`: `scale_logvar_statistic`, `scale_logvar_test`, `dependence_max_t_statistic`, `dependence_max_t_test`, `permutation_test`, `permutation_p_value`, `validate_score_matrix`, and `cohens_d`.
+- Contracts, architecture, and user manual documentation for the structure track (Phase 6).
+
+### Changed
+
+- **Breaking:** `nirizan.metrics.bootstrap_delta_ci` now resolves to the canonical `nirizan.metrics.stats.bootstrap_delta_ci`. It previously resolved to a 2-tuple wrapper. Differences:
+  - It returns `(delta_hat, ci_lower, ci_upper)` instead of `(ci_lower, ci_upper)`.
+  - The `confidence` keyword is now `confidence_level`.
+  - `n_bootstrap` defaults to `10000` (was `5000`).
+  - `seed` defaults to `None` (was `42`), so results vary between calls unless you pass a seed.
+
+```python
+  # 0.3.0
+  ci_lower, ci_upper = bootstrap_delta_ci(candidate, baseline, confidence=0.95)
+
+  # 0.4.0
+  _, ci_lower, ci_upper = bootstrap_delta_ci(
+      candidate, baseline, confidence_level=0.95, seed=42
+  )
+
+  # or keep the old behavior unchanged
+  from nirizan.metrics.statistical_gating import bootstrap_delta_ci
+```
+- **Breaking:** `evaluate_gate()` raises `ValueError` when its verdicts do not all share one `(run_id, baseline_id)` pair. Such input was previously combined silently.
+- `cohens_d` moved to `nirizan.metrics.stats`; `nirizan.regression.comparator.cohens_d` remains as a re-export.
+- **License:** NiriZan is now licensed under Apache-2.0 (previously GPL-3.0-or-later). Releases 0.1.0 to 0.3.0 remain available under GPL-3.0-or-later.
+
+### Deprecated
+
+- The 2-tuple `bootstrap_delta_ci` wrappers in `nirizan.metrics.statistical_gating` and `nirizan.gate.verdict`. They still work and delegate to the canonical implementation, but do not yet emit a `DeprecationWarning`. New code should call the canonical function.
+
+### Fixed
+
+- `nirizan.__version__` reported `0.2.0` in the published 0.3.0 release.
+
+## [0.3.0] - 2026-09-01 (PyPI date)
 
 ### Added
 

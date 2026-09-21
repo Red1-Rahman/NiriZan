@@ -1,7 +1,7 @@
 # NiriZan User Manual
 
 *Continuous evaluation infrastructure for production AI systems.*
-> version: `0.1.0`
+> version: `0.4.0`
 
 ---
 
@@ -118,7 +118,7 @@ The installed version is available as a plain string attribute on the package:
 import nirizan
 
 print(nirizan.__version__)
-# "0.1.0"
+# "0.4.0"
 ```
 
 There is currently no separate version-checking function; read `nirizan.__version__` directly, or use `importlib.metadata.version("nirizan")` from the standard library.
@@ -3265,10 +3265,11 @@ The final release decision produced by the gate layer.
 
 | Field | Type | Required | Default | Meaning |
 |---|---|---|---|---|
-| `passed` | `bool` | Yes | — | `True` if no `BLOCKING`-severity regression was found anywhere in `regression_verdicts`. |
+| `passed` | `bool` | Yes | — | `True` if no `BLOCKING`-severity regression was found anywhere in `regression_verdicts` or `multivariate_verdicts`. |
 | `confidence_interval` | `tuple[float, float]` | Yes | — | `(low, high)` bootstrap confidence interval for the mean-score delta of the single "worst" metric, as selected by `select_decision_metric`. Not a confidence interval for every metric in `regression_verdicts`, only the selected one. |
-| `regression_verdicts` | `list[RegressionVerdict]` | No | `[]` | The full list of regression verdicts this gate decision was based on. |
-| `run_id` | `UUID` | Yes | — | The run this gate decision applies to. When built via `evaluate_gate`, this is taken from the selected decision metric's own `run_id`, not independently verified against the other verdicts' `run_id`s. |
+| `regression_verdicts` | `list[RegressionVerdict]` | No | `[]` | The full list of univariate regression verdicts this gate decision was based on. |
+| `multivariate_verdicts` | `list[MultivariateVerdict]` | No | `[]` | The full list of multivariate regression verdicts this gate decision was based on. |
+| `run_id` | `UUID` | Yes | — | The run this gate decision applies to. `evaluate_gate` verifies that every univariate and multivariate verdict belongs to the same `(run_id, baseline_id)` comparison before constructing it. |
 
 ---
 
@@ -3323,14 +3324,24 @@ Computes a bootstrap confidence interval for `mean(candidate) - mean(baseline)`,
 
 **Synchronous.**
 
-> **Not the same as `nirizan.metrics.statistical_gating.bootstrap_delta_ci`.** Both compute the same statistic with the same default `n_bootstrap`/`confidence`/`seed`, but:
+> **Relationship to `nirizan.metrics.statistical_gating.bootstrap_delta_ci`.** Both `nirizan.gate.verdict.bootstrap_delta_ci` and `nirizan.metrics.statistical_gating.bootstrap_delta_ci` are backward-compatible 2-tuple wrappers around the canonical `nirizan.metrics.stats.bootstrap_delta_ci` implementation.
 >
-> | | `nirizan.metrics.statistical_gating` | `nirizan.gate.verdict` |
-> |---|---|---|
-> | Input validation | Calls `validate_scores` on both arrays: checks non-empty, finite, and every value in `[0.0, 1.0]`. Coerces inputs with `np.asarray(..., dtype=float)`. | Only checks `.size == 0` for both arrays. Does not check finiteness or `[0.0, 1.0]` range. Does not coerce dtype. |
-> | `n_bootstrap` validation | Not checked; a value less than 1 is not explicitly rejected. | Explicitly checked: raises `ValueError` if `n_bootstrap < 1`. |
+> Both wrappers use the historical defaults `n_bootstrap=5000`, `confidence=0.95`, and `seed=42`, and both return `(ci_lower, ci_upper)`. The canonical `nirizan.metrics.stats.bootstrap_delta_ci` returns the full `(delta_hat, ci_lower, ci_upper)` tuple instead. Its tests verify the 3-tuple contract, deterministic results for a fixed seed, and rejection of invalid confidence levels and non-positive bootstrap counts.
 >
-> `evaluate_gate` uses the `nirizan.gate.verdict` version exclusively. Pick the module deliberately if you're calling `bootstrap_delta_ci` outside of `evaluate_gate`.
+> |                          | `nirizan.metrics.statistical_gating.bootstrap_delta_ci`                                      | `nirizan.gate.verdict.bootstrap_delta_ci`                                                            |
+> | ------------------------ | -------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+> | Canonical implementation | Delegates to `nirizan.metrics.stats.bootstrap_delta_ci`                                      | Delegates to `nirizan.metrics.stats.bootstrap_delta_ci`                                              |
+> | Return value             | Historical `(ci_lower, ci_upper)` 2-tuple                                                    | Historical `(ci_lower, ci_upper)` 2-tuple                                                            |
+> | Input coercion           | Delegated to the canonical implementation                                                    | Explicitly coerces with `np.asarray(..., dtype=float)` before validation                             |
+> | Score validation         | Canonical implementation validates non-empty, one-dimensional, finite scores in `[0.0, 1.0]` | Same canonical validation after wrapper-level coercion                                               |
+> | Empty input              | Rejected by the canonical implementation                                                     | Rejected explicitly by the wrapper before delegation, preserving the gate's historical error message |
+> | `n_bootstrap` validation | Ultimately enforced by the canonical implementation                                          | Explicitly rejects values `< 1` before delegation                                                    |
+> | `confidence` validation  | Explicitly rejects values outside `(0, 1)` before delegation                                 | Explicitly rejects values outside `(0, 1)` before delegation                                         |
+>
+> `evaluate_gate` uses `nirizan.gate.verdict.bootstrap_delta_ci` exclusively. This preserves the gate's historical 2-tuple API and its wrapper-specific validation and error-message contract.
+>
+> For new code that does not require the legacy 2-tuple API, prefer `nirizan.metrics.stats.bootstrap_delta_ci`, which is the single canonical implementation and returns `(delta_hat, ci_lower, ci_upper)`.
+
 
 ---
 
@@ -3367,12 +3378,13 @@ def evaluate_gate(
     *,
     verdicts: list[RegressionVerdict],
     scores_by_metric: dict[str, tuple[np.ndarray, np.ndarray]],
+    multivariate_verdicts: list[MultivariateVerdict] | None = None,
 ) -> GateVerdict
 ```
 
 **Purpose**
 
-Produces a `GateVerdict`: selects the worst metric via `select_decision_metric`, computes its bootstrap confidence interval, and decides pass/fail from whether any verdict in the full list is `BLOCKING`.
+Produces a `GateVerdict`: selects the worst univariate metric via `select_decision_metric`, computes its bootstrap confidence interval, and decides pass/fail from whether any univariate or multivariate verdict is `BLOCKING`.
 
 **Parameters**
 
@@ -3380,12 +3392,13 @@ Produces a `GateVerdict`: selects the worst metric via `select_decision_metric`,
 |---|---|---|---|
 | `verdicts` | `list[RegressionVerdict]` | Yes (keyword-only) | Must be non-empty. |
 | `scores_by_metric` | `dict[str, tuple[np.ndarray, np.ndarray]]` | Yes (keyword-only) | Maps each metric name that appears in `verdicts` to its `(candidate_scores, baseline_scores)` arrays. Must contain an entry for whichever metric `select_decision_metric` ends up selecting; since that isn't known in advance, it should generally cover every metric name in `verdicts`. |
+| `multivariate_verdicts` | `list[MultivariateVerdict] \| None` | No (keyword-only) | Optional structure-track verdicts. Every supplied verdict must share the same `(run_id, baseline_id)` as every univariate verdict. |
 
-**Return value:** a `GateVerdict`. `passed` is `True` only if no verdict in `verdicts` has `severity == RegressionSeverity.BLOCKING`; note this is evaluated over the **entire** `verdicts` list, independently of which metric was selected for the confidence interval. `confidence_interval` comes from calling `bootstrap_delta_ci` (this module's version, with its defaults; not configurable through `evaluate_gate`'s own parameters) on the selected metric's score arrays. `regression_verdicts` on the result is the full, unfiltered `verdicts` list you passed in. `run_id` is taken from the selected decision metric's `run_id`.
+**Return value:** a `GateVerdict`. `passed` is `True` only if no univariate or multivariate verdict has `severity == RegressionSeverity.BLOCKING`; the confidence interval and decision metric remain univariate-only. `confidence_interval` comes from calling `bootstrap_delta_ci` (this module's version, with its defaults; not configurable through `evaluate_gate`'s own parameters) on the selected metric's score arrays. `regression_verdicts` and `multivariate_verdicts` preserve the lists supplied by the caller. `run_id` is the validated shared run identity.
 
 **Exceptions:**
 
-- `ValueError` — if `verdicts` is empty.
+- `ValueError` — if `verdicts` is empty, or verdicts do not share one `(run_id, baseline_id)` identity.
 - `KeyError` — if `scores_by_metric` doesn't contain an entry for the metric name `select_decision_metric` selects. This is a plain `KeyError` from the internal dictionary lookup, not a `ValueError` with a descriptive message.
 - Also propagates any `ValueError` raised by the internal `bootstrap_delta_ci` call (empty score arrays for the selected metric, for instance).
 
@@ -4475,5 +4488,5 @@ Closes the underlying SQLite connection. **Synchronous.**
 # End of User Manual
 
 <div align="center">
-Rahman, R. NiriZan (Version 0.1.0) [Computer software]. https://github.com/Red1-Rahman/NiriZan
+Rahman, R. NiriZan (Version 0.4.0) [Computer software]. https://github.com/Red1-Rahman/NiriZan
 </div>

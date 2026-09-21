@@ -1,7 +1,6 @@
 # src/nirizan/regression/comparator.py
 from __future__ import annotations
 
-import math
 from enum import Enum
 from uuid import UUID
 
@@ -9,6 +8,7 @@ import numpy as np
 from pydantic import BaseModel, ConfigDict, Field
 
 from nirizan._logging import get_logger
+from nirizan.metrics.stats import cohens_d  # re-exported here for regression/__init__.py
 from nirizan.regression.thresholds import (
     DEFAULT_ALPHA,
     DEFAULT_BLOCKING_EFFECT,
@@ -38,24 +38,6 @@ class RegressionVerdict(BaseModel):
     baseline_id: UUID
     run_id: UUID
     explanation: str
-
-
-def cohens_d(
-    candidate: np.ndarray,
-    baseline: np.ndarray,
-) -> float:
-    validate_scores(candidate)
-    validate_scores(baseline)
-
-    candidate_std = candidate.std(ddof=1)
-    baseline_std = baseline.std(ddof=1)
-
-    pooled_std = math.sqrt((candidate_std**2 + baseline_std**2) / 2.0)
-
-    if pooled_std == 0.0:
-        return 0.0
-
-    return float((candidate.mean() - baseline.mean()) / pooled_std)
 
 
 def mean_delta(
@@ -258,3 +240,13 @@ class BaselineComparator:
         )
 
         return final
+
+
+__all__ = [
+    "BaselineComparator",
+    "RegressionSeverity",
+    "RegressionVerdict",
+    "classify_severity",
+    "cohens_d",
+    "mean_delta",
+]
