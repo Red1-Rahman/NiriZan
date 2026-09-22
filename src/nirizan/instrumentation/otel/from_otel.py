@@ -113,6 +113,11 @@ def _get_parent_context(span: ReadableSpan) -> SpanContext | None:
     return parent if parent is not None else None
 
 
+def _is_flush_request(item: Any) -> bool:
+    """Return ``True`` if ``item`` is a ``(_FLUSH_SENTINEL, Event)`` tuple."""
+    return isinstance(item, tuple) and len(item) == 2 and item[0] is _FLUSH_SENTINEL
+
+
 # ---------------------------------------------------------------------------
 # Conversion helpers
 # ---------------------------------------------------------------------------
@@ -346,14 +351,25 @@ class NiriZanSpanProcessor:
             logger.warning("NiriZanSpanProcessor consumer thread did not exit within 5s.")
 
     def force_flush(self, timeout_millis: int = 30000) -> bool:
-        """Signal the consumer to flush all open traces, then wait briefly."""
+        """Block until the consumer has flushed all currently-buffered traces.
+
+        Enqueues a flush request carrying a completion event. The consumer
+        sets the event only after ``_flush_all`` has returned, so a caller
+        that observes ``True`` is guaranteed that every trace buffered at
+        request time has been passed to the sink. Spans that arrive *after*
+        this call are not included; ``force_flush`` is a barrier over the
+        current buffer, not a promise about future spans.
+
+        Returns ``True`` if the flush completed before ``timeout_millis``,
+        ``False`` otherwise (including when the processor has already been
+        shut down).
+        """
         if self._shutdown.is_set():
             return True
-        self._queue.put_nowait(_FLUSH_SENTINEL)
-        deadline = time.monotonic() + (timeout_millis / 1000.0)
-        while self._buffers and time.monotonic() < deadline:
-            time.sleep(0.005)
-        return not self._buffers
+
+        done_event = threading.Event()
+        self._queue.put_nowait((_FLUSH_SENTINEL, done_event))
+        return done_event.wait(timeout=timeout_millis / 1000.0)
 
     # -- Consumer thread --------------------------------------------------------
 
@@ -368,8 +384,12 @@ class NiriZanSpanProcessor:
 
             if item is _SHUTDOWN_SENTINEL:
                 break
-            if item is _FLUSH_SENTINEL:
+
+            if _is_flush_request(item):
                 self._flush_all(reason="force_flush")
+                # Set the event only after the flush has completed, so the
+                # caller's force_flush() return value is a real guarantee.
+                item[1].set()
                 continue
 
             self._buffer_span(item)
@@ -377,16 +397,26 @@ class NiriZanSpanProcessor:
                 self._sweep_idle_traces()
                 self._enforce_buffer_cap()
 
+        # Shutdown drain: process any remaining spans, collect pending flush
+        # requests, run the final flush, then unblock the waiters. Setting
+        # the events before _flush_all would let a caller observe an
+        # unflushed sink.
+        pending_flush_events: list[threading.Event] = []
         while True:
             try:
                 item = self._queue.get_nowait()
             except queue.Empty:
                 break
-            if item is _SHUTDOWN_SENTINEL or item is _FLUSH_SENTINEL:
+            if item is _SHUTDOWN_SENTINEL:
+                continue
+            if _is_flush_request(item):
+                pending_flush_events.append(item[1])
                 continue
             self._buffer_span(item)
 
         self._flush_all(reason="shutdown")
+        for event in pending_flush_events:
+            event.set()
 
     def _buffer_span(self, span: ReadableSpan) -> None:
         ctx = _get_span_context(span)
