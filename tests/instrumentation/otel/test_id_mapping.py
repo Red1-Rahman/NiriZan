@@ -208,11 +208,18 @@ def test_otel_span_id_to_uuid_uses_big_endian_byte_serialization() -> None:
     Regression: switching to little-endian byte order would change every
     derived span ID for every OTel span ID ever ingested. This test pins the
     encoding choice to a concrete expected UUID.
-    """
-    # Compute the expected value independently of the module's internals.
-    from uuid import uuid5
 
-    expected = uuid5(_NIRIZAN_SPAN_ID_NAMESPACE, _VALID_SPAN_INT.to_bytes(8, "big"))
+    Computed with ``hashlib`` rather than ``uuid.uuid5`` because Python 3.11's
+    ``uuid5`` rejects ``bytes`` names while Python 3.12's accepts them; the
+    implementation avoids ``uuid.uuid5`` for the same reason, so the test
+    mirrors that choice.
+    """
+    import hashlib
+
+    digest = hashlib.sha1(
+        _NIRIZAN_SPAN_ID_NAMESPACE.bytes + _VALID_SPAN_INT.to_bytes(8, "big")
+    ).digest()
+    expected = UUID(bytes=digest[:16], version=5)
     assert otel_span_id_to_uuid(_VALID_SPAN_INT) == expected
 
 

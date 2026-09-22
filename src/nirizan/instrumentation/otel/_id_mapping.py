@@ -1,4 +1,4 @@
-# src\nirizan\instrumentation\otel\_id_mapping.py
+# src/nirizan/instrumentation/otel/_id_mapping.py
 """Identifier mapping utilities between NiriZan UUIDs and OpenTelemetry IDs.
 
 This module provides stdlib-only, pure-Python conversion functions between
@@ -6,7 +6,8 @@ NiriZan 128-bit UUID identifiers and OpenTelemetry 128-bit Trace IDs / 64-bit Sp
 It contains zero external package dependencies.
 """
 
-from uuid import UUID, uuid5
+import hashlib
+from uuid import UUID
 
 __all__ = [
     "is_valid_otel_span_id",
@@ -85,8 +86,8 @@ def uuid_to_otel_span_id(span_id: UUID) -> int:
 
     Raises:
         ValueError: If the resulting low 64 bits yield zero (an invalid OTel span ID).
-            Downstream callers (e.g., `to_otel.py`) MUST catch this exception and handle
-            it gracefully according to exporter contract rules (e.g., skip + warning log).
+            Downstream callers must catch this exception and handle it gracefully
+            according to exporter contract rules (e.g., skip + warning log).
     """
     otel_span_id = span_id.int & _MAX_SPAN_ID
     if not is_valid_otel_span_id(otel_span_id):
@@ -97,10 +98,17 @@ def uuid_to_otel_span_id(span_id: UUID) -> int:
 
 
 def otel_span_id_to_uuid(otel_span_id: int) -> UUID:
-    """Derive a deterministic 128-bit NiriZan UUID span ID from a 64-bit integer OTel span ID.
+    """Derive a deterministic 128-bit NiriZan UUID span ID from a 64-bit OTel span ID.
 
-    Uses `uuid5` with `_NIRIZAN_SPAN_ID_NAMESPACE` and the big-endian 8-byte binary
-    representation of the 64-bit span ID.
+    Computes a UUIDv5 using ``_NIRIZAN_SPAN_ID_NAMESPACE`` as the namespace and
+    the big-endian 8-byte representation of the 64-bit span ID as the name.
+
+    The derivation is done with ``hashlib.sha1`` directly rather than via
+    ``uuid.uuid5`` because Python 3.11's ``uuid5`` rejects ``bytes`` names
+    (it calls ``bytes(name, "utf-8")`` internally), while Python 3.12's
+    accepts them. Computing the digest here produces the same UUID on both
+    versions, which matters because NiriZan's ``requires-python`` floor is
+    3.11.
 
     Raises:
         ValueError: If otel_span_id is not a valid non-zero 64-bit integer.
@@ -111,4 +119,7 @@ def otel_span_id_to_uuid(otel_span_id: int) -> UUID:
         )
     # Standardized on big-endian 8-byte serialization for cross-platform/cross-process determinism.
     span_bytes = otel_span_id.to_bytes(8, byteorder="big")
-    return uuid5(_NIRIZAN_SPAN_ID_NAMESPACE, span_bytes)
+    # Reproduce uuid.uuid5's hashing without going through uuid.uuid5, whose
+    # handling of `bytes` names differs between Python 3.11 and 3.12.
+    digest = hashlib.sha1(_NIRIZAN_SPAN_ID_NAMESPACE.bytes + span_bytes).digest()
+    return UUID(bytes=digest[:16], version=5)
