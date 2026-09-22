@@ -1,15 +1,24 @@
 # tests/instrumentation/otel/test_from_otel.py
 """Unit tests for OpenTelemetry span processor and trace assembly."""
 
-from datetime import UTC, datetime
-from unittest.mock import MagicMock
-from uuid import UUID
-
 import pytest
-from opentelemetry.trace import TraceFlags
 
-from nirizan.instrumentation.otel._id_mapping import otel_span_id_to_uuid
-from nirizan.instrumentation.otel.from_otel import (
+# ``opentelemetry`` is an optional dependency installed via the ``otel`` extra.
+# Skip this entire module if it is absent, so a contributor working on other
+# parts of NiriZan is never forced to install OpenTelemetry to get a green
+# build. CI installs ``nirizan[otel]`` in the job that actually exercises
+# the bridge.
+pytest.importorskip("opentelemetry")
+pytest.importorskip("opentelemetry.sdk")
+
+from datetime import UTC, datetime  # noqa: E402
+from unittest.mock import MagicMock  # noqa: E402
+from uuid import UUID  # noqa: E402
+
+from opentelemetry.trace import TraceFlags  # noqa: E402
+
+from nirizan.instrumentation.otel._id_mapping import otel_span_id_to_uuid  # noqa: E402
+from nirizan.instrumentation.otel.from_otel import (  # noqa: E402
     _MAX_SPAN_NAME_LENGTH,
     NiriZanSpanProcessor,
     _convert_attributes,
@@ -18,7 +27,7 @@ from nirizan.instrumentation.otel.from_otel import (
     _infer_span_kind,
     _ns_to_datetime,
 )
-from nirizan.instrumentation.otel.semconv import (
+from nirizan.instrumentation.otel.semconv import (  # noqa: E402
     GEN_AI_COMPLETION,
     GEN_AI_PROMPT,
     NIRIZAN_PLANNING_CONTEXT,
@@ -35,7 +44,7 @@ from nirizan.instrumentation.otel.semconv import (
     SPAN_ID_SOURCE_DERIVED,
     SPAN_ID_SOURCE_ROUNDTRIP,
 )
-from nirizan.instrumentation.spans import SpanKind, Trace
+from nirizan.instrumentation.spans import SpanKind, Trace  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
