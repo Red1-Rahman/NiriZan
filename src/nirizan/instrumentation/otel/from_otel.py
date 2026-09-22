@@ -19,11 +19,10 @@ from uuid import UUID
 
 from opentelemetry.context import Context
 from opentelemetry.sdk.trace import ReadableSpan
-from opentelemetry.trace import SpanKind as OTelSpanKind
-from opentelemetry.trace import TraceFlags
+from opentelemetry.trace import SpanContext, TraceFlags
 
 from nirizan._logging import get_logger
-from nirizan.instrumentation.otel.id_mapping import (
+from nirizan.instrumentation.otel._id_mapping import (
     is_valid_otel_span_id,
     is_valid_otel_trace_id,
     otel_span_id_to_uuid,
@@ -65,24 +64,13 @@ __all__ = ["NiriZanSpanProcessor", "TraceSink"]
 # Module-level constants
 # ---------------------------------------------------------------------------
 
-# OTel resource attribute key carrying the service name.
 _SERVICE_NAME_RESOURCE_KEY: str = "service.name"
-
-# NiriZan-side attribute key carrying the originating service name for
-# non-root spans in a distributed trace. Should be promoted to semconv in a
-# follow-up; kept local for now to avoid churning that module on every change.
 _OTEL_SERVICE_NAME: str = "otel.service.name"
 
-# Consumer-queue sentinels. Unique objects so they can never be confused with
-# a ReadableSpan.
 _FLUSH_SENTINEL: object = object()
 _SHUTDOWN_SENTINEL: object = object()
 
-# Bound on the set of recently-flushed OTel trace IDs, used to drop late
-# spans that would otherwise produce duplicate NiriZan Traces.
 _RECENT_FLUSHES_MAX: int = 10_000
-
-# NiriZan Span.name is bounded to 200 chars; OTel does not enforce this.
 _MAX_SPAN_NAME_LENGTH: int = 200
 
 
@@ -109,6 +97,39 @@ class TraceSink(Protocol):
 
 
 # ---------------------------------------------------------------------------
+# Defensive accessors
+#
+# Pylance treats ``ReadableSpan.get_span_context()`` and ``ReadableSpan.parent``
+# as possibly ``None`` in some OTel SDK stub versions. These helpers provide a
+# single place to narrow those types, so the rest of the module can assume the
+# narrowed values without repeating ``is None`` checks everywhere.
+# ---------------------------------------------------------------------------
+
+
+def _get_span_context(span: ReadableSpan) -> SpanContext | None:
+    """Return the span's ``SpanContext``, or ``None`` if unavailable.
+
+    A finished ``ReadableSpan`` should always expose a context, but some SDK
+    stubs type ``get_span_context()`` as returning ``Optional[SpanContext]``.
+    Callers must handle the ``None`` branch by skipping the span.
+    """
+    ctx = span.get_span_context()
+    return ctx if ctx is not None else None
+
+
+def _get_parent_context(span: ReadableSpan) -> SpanContext | None:
+    """Return the span's parent ``SpanContext``, or ``None`` if it has no parent.
+
+    Same rationale as ``_get_span_context``: the OTel SDK types ``parent`` as
+    ``Optional[SpanContext]``, and narrowing through compound boolean
+    expressions is not always reliable in Pylance. Centralizing the access
+    here keeps the rest of the module simple.
+    """
+    parent = span.parent
+    return parent if parent is not None else None
+
+
+# ---------------------------------------------------------------------------
 # Conversion helpers
 # ---------------------------------------------------------------------------
 
@@ -126,7 +147,7 @@ def _ns_to_datetime(ns: int | None) -> datetime:
     return datetime.fromtimestamp(seconds, tz=UTC).replace(microsecond=remainder // 1000)
 
 
-def _extract_nirizan_span_id(span: ReadableSpan) -> tuple[UUID, str]:
+def _extract_nirizan_span_id(span: ReadableSpan, ctx: SpanContext) -> tuple[UUID, str]:
     """Return ``(NiriZan span_id, provenance source)`` for an OTel span.
 
     If the OTel span carries a ``nirizan.span_id`` attribute that parses as a
@@ -135,16 +156,12 @@ def _extract_nirizan_span_id(span: ReadableSpan) -> tuple[UUID, str]:
     via ``otel_span_id_to_uuid`` and the source is marked
     ``SPAN_ID_SOURCE_DERIVED``.
     """
-    ctx = span.get_span_context()
     attrs = getattr(span, "attributes", None) or {}
     stashed = attrs.get(NIRIZAN_SPAN_ID)
     if isinstance(stashed, str):
         try:
             return UUID(stashed), SPAN_ID_SOURCE_ROUNDTRIP
         except (ValueError, AttributeError):
-            # Attribute present but not a valid UUID; fall through to
-            # derivation and log at debug level, since this can happen if a
-            # user manually set a non-UUID value under the reserved key.
             logger.debug(
                 "Ignoring invalid nirizan.span_id attribute '%s' on OTel span '%s'",
                 stashed,
@@ -154,18 +171,7 @@ def _extract_nirizan_span_id(span: ReadableSpan) -> tuple[UUID, str]:
 
 
 def _infer_span_kind(attrs: Mapping[str, Any]) -> SpanKind:
-    """Determine NiriZan ``SpanKind`` from an OTel span's attributes.
-
-    Priority order:
-
-    1. ``nirizan.span.kind`` if present and recognizable. This is the
-       lossless value written by ``to_otel.py`` for NiriZan-exported spans.
-    2. Attribute-based heuristics for OTel-native spans produced by
-       third-party auto-instrumentation, which will not have set the
-       NiriZan kind.
-    3. Default to ``SpanKind.GENERATION``, since user-facing OTel spans
-       without any of the other hints are overwhelmingly LLM calls.
-    """
+    """Determine NiriZan ``SpanKind`` from an OTel span's attributes."""
     raw = attrs.get(NIRIZAN_SPAN_KIND)
     if isinstance(raw, str):
         normalized = raw.upper().split(".")[-1]
@@ -194,13 +200,7 @@ def _to_str_or_none(value: Any) -> str | None:
 
 
 def _extract_payloads(kind: SpanKind, attrs: Mapping[str, Any]) -> tuple[str | None, str | None]:
-    """Extract ``(input_payload, output_payload)`` for a given span kind.
-
-    This is the inverse of ``to_otel.py``'s per-kind payload mapping. The
-    payload attributes are left in the resulting ``Span.attributes`` as well,
-    so that OTel-native consumers who do not know about NiriZan can still
-    read them.
-    """
+    """Extract ``(input_payload, output_payload)`` for a given span kind."""
     if kind is SpanKind.GENERATION:
         return (
             _to_str_or_none(attrs.get(GEN_AI_PROMPT)),
@@ -235,22 +235,13 @@ def _convert_attributes(
     status_code: str | None,
     status_description: str | None,
 ) -> dict[str, str | int | float | bool]:
-    """Convert OTel attributes plus captured metadata into NiriZan form.
-
-    NiriZan's ``Span.attributes`` is restricted to primitives. OTel's
-    attribute value type is a superset that adds homogeneous sequences; those
-    are JSON-encoded into a string under a ``nirizan.seq.``-prefixed key, per
-    the plan's conversion rule. All other values are coerced to strings, and
-    truncated to ``MAX_ATTR_VALUE_LENGTH`` where applicable.
-    """
+    """Convert OTel attributes plus captured metadata into NiriZan form."""
     result: dict[str, str | int | float | bool] = {}
 
     for key, value in otel_attrs.items():
         if value is None:
             continue
         if isinstance(value, (str, int, float, bool)):
-            # bool is a subclass of int in Python; both are valid NiriZan
-            # attribute values, so no special handling is required.
             result[key] = value
         elif isinstance(value, (list, tuple)):
             encoded_key = key if is_sequence_key(key) else encode_sequence_key(key)
@@ -261,7 +252,6 @@ def _convert_attributes(
         else:
             result[key] = truncate_attribute_value(str(value))
 
-    # Bridge-specific metadata.
     if service_name:
         result[_OTEL_SERVICE_NAME] = service_name
     if span_id_hex:
@@ -299,7 +289,10 @@ class _TraceBuffer:
         self.last_seen = now
 
     def add(self, span: ReadableSpan, now: float) -> None:
-        ctx = span.get_span_context()
+        ctx = _get_span_context(span)
+        if ctx is None:
+            # Caller is expected to have checked this already; guard anyway.
+            return
         self.spans[ctx.span_id] = span
         self.last_seen = now
 
@@ -347,11 +340,6 @@ class NiriZanSpanProcessor:
 
         self._queue: queue.Queue[Any] = queue.Queue()
         self._buffers: dict[int, _TraceBuffer] = {}
-        # Bounded set of OTel trace IDs that have already been flushed, so
-        # that late-arriving spans can be dropped rather than producing a
-        # duplicate Trace with the same trace_id. Plain dict preserves
-        # insertion order on Python 3.7+, so the oldest key can be evicted
-        # with `next(iter(...))`.
         self._recent_flushes: dict[int, None] = {}
         self._shutdown = threading.Event()
 
@@ -391,27 +379,18 @@ class NiriZanSpanProcessor:
         try:
             self._queue.put_nowait(span)
         except Exception:
-            # The queue is unbounded, so this should be unreachable. Log
-            # rather than raise, to honour the SpanProcessor contract.
             logger.exception("Failed to enqueue OTel span in NiriZanSpanProcessor")
 
     def shutdown(self) -> None:
         """Stop the consumer thread, flush all open traces, and join."""
         self._shutdown.set()
-        # Wake the consumer if it is blocked on queue.get().
         self._queue.put_nowait(_SHUTDOWN_SENTINEL)
         self._consumer.join(timeout=5.0)
         if self._consumer.is_alive():
             logger.warning("NiriZanSpanProcessor consumer thread did not exit within 5s.")
 
     def force_flush(self, timeout_millis: int = 30000) -> bool:
-        """Signal the consumer to flush all open traces, then wait briefly.
-
-        Returns ``True`` if the buffer drained before the timeout, ``False``
-        otherwise. The check is best-effort: a trace arriving concurrently
-        may cause the return value to be ``False`` even though the flush
-        succeeded for every trace that existed at signal time.
-        """
+        """Signal the consumer to flush all open traces, then wait briefly."""
         if self._shutdown.is_set():
             return True
         self._queue.put_nowait(_FLUSH_SENTINEL)
@@ -438,13 +417,10 @@ class NiriZanSpanProcessor:
                 continue
 
             self._buffer_span(item)
-            # Only sweep when the queue is drained, to avoid O(n) work per
-            # span during a burst.
             if self._queue.empty():
                 self._sweep_idle_traces()
                 self._enforce_buffer_cap()
 
-        # Drain any remaining items, then flush everything.
         while True:
             try:
                 item = self._queue.get_nowait()
@@ -457,19 +433,32 @@ class NiriZanSpanProcessor:
         self._flush_all(reason="shutdown")
 
     def _buffer_span(self, span: ReadableSpan) -> None:
-        ctx = span.get_span_context()
+        ctx = _get_span_context(span)
+        if ctx is None:
+            logger.warning(
+                "Skipping OTel span '%s': get_span_context() returned None",
+                getattr(span, "name", "<unnamed>"),
+            )
+            return
 
         if not is_valid_otel_trace_id(ctx.trace_id):
-            logger.warning("Skipping OTel span '%s': invalid all-zeros trace_id", span.name)
+            logger.warning(
+                "Skipping OTel span '%s': invalid all-zeros trace_id",
+                getattr(span, "name", "<unnamed>"),
+            )
             return
+
         if not is_valid_otel_span_id(ctx.span_id):
-            logger.warning("Skipping OTel span '%s': invalid all-zeros span_id", span.name)
+            logger.warning(
+                "Skipping OTel span '%s': invalid all-zeros span_id",
+                getattr(span, "name", "<unnamed>"),
+            )
             return
 
         if ctx.trace_id in self._recent_flushes:
             logger.warning(
                 "Dropping late-arriving span '%s' for already-flushed OTel trace_id=%d",
-                span.name,
+                getattr(span, "name", "<unnamed>"),
                 ctx.trace_id,
             )
             return
@@ -514,8 +503,6 @@ class NiriZanSpanProcessor:
         if buf is None:
             return
 
-        # Record the flush before assembling, so a concurrent late span for
-        # this trace is dropped rather than creating a second buffer.
         self._recent_flushes[otel_trace_id] = None
         if len(self._recent_flushes) > _RECENT_FLUSHES_MAX:
             oldest = next(iter(self._recent_flushes))
@@ -556,19 +543,23 @@ class NiriZanSpanProcessor:
         id_map: dict[int, UUID] = {}
         source_map: dict[int, str] = {}
         for otel_span_id, span in buf.spans.items():
-            nirizan_id, source = _extract_nirizan_span_id(span)
+            ctx = _get_span_context(span)
+            if ctx is None:
+                # Should not happen: _buffer_span already filtered these.
+                continue
+            nirizan_id, source = _extract_nirizan_span_id(span, ctx)
             id_map[otel_span_id] = nirizan_id
             source_map[otel_span_id] = source
 
-        # Identify the root span (parent is absent or invalid).
         root_span = self._find_root_span(buf)
-
         application_name = self._resolve_application_name(buf, root_span)
         session_id = self._find_session_id(buf.spans)
 
         # Pass 2: convert each ReadableSpan to a NiriZan Span.
         nirizan_spans: list[Span] = []
         for otel_span_id, span in buf.spans.items():
+            if otel_span_id not in id_map:
+                continue
             converted = self._convert_span(
                 span=span,
                 nirizan_trace_id=nirizan_trace_id,
@@ -593,8 +584,10 @@ class NiriZanSpanProcessor:
     @staticmethod
     def _find_root_span(buf: _TraceBuffer) -> ReadableSpan | None:
         for span in buf.spans.values():
-            parent = span.parent
-            if parent is None or not is_valid_otel_span_id(parent.span_id):
+            parent = _get_parent_context(span)
+            if parent is None:
+                return span
+            if not is_valid_otel_span_id(parent.span_id):
                 return span
         return None
 
@@ -614,7 +607,6 @@ class NiriZanSpanProcessor:
             name = self._get_service_name(root_span)
             if name:
                 return name
-        # Fallback: first span that declares a service name.
         for span in buf.spans.values():
             name = self._get_service_name(span)
             if name:
@@ -633,6 +625,37 @@ class NiriZanSpanProcessor:
                     continue
         return None
 
+    def _resolve_parent_nirizan_id(
+        self,
+        span: ReadableSpan,
+        otel_id_map: Mapping[int, UUID],
+    ) -> tuple[UUID | None, bool]:
+        """Return ``(parent_nirizan_id, should_drop)``.
+
+        ``parent_nirizan_id`` is ``None`` when the span has no parent or when
+        the parent cannot be resolved. ``should_drop`` is ``True`` only when
+        the orphan policy is ``"drop"`` and a declared parent could not be
+        resolved; in that case the caller should skip the span entirely.
+        """
+        parent = _get_parent_context(span)
+        if parent is None:
+            return None, False
+        if not is_valid_otel_span_id(parent.span_id):
+            return None, False
+
+        mapped = otel_id_map.get(parent.span_id)
+        if mapped is not None:
+            return mapped, False
+
+        try:
+            derived = otel_span_id_to_uuid(parent.span_id)
+        except ValueError:
+            derived = None
+
+        if derived is None and self._orphan_policy == "drop":
+            return None, True
+        return derived, False
+
     def _convert_span(
         self,
         *,
@@ -642,30 +665,21 @@ class NiriZanSpanProcessor:
         span_id_source: str,
         otel_id_map: Mapping[int, UUID],
     ) -> Span | None:
-        ctx = span.get_span_context()
-        otel_attrs = getattr(span, "attributes", None) or {}
+        ctx = _get_span_context(span)
+        if ctx is None:
+            return None
 
+        otel_attrs = getattr(span, "attributes", None) or {}
         kind = _infer_span_kind(otel_attrs)
         input_payload, output_payload = _extract_payloads(kind, otel_attrs)
 
-        # Resolve parent ID, preferring the in-trace map (so an original
-        # stashed UUID is preserved) and falling back to uuid5 derivation for
-        # parents outside this trace.
-        parent_nirizan_id: UUID | None = None
-        parent = span.parent
-        if parent is not None and is_valid_otel_span_id(parent.span_id):
-            parent_nirizan_id = otel_id_map.get(parent.span_id)
-            if parent_nirizan_id is None:
-                try:
-                    parent_nirizan_id = otel_span_id_to_uuid(parent.span_id)
-                except ValueError:
-                    parent_nirizan_id = None
-            if parent_nirizan_id is None and self._orphan_policy == "drop":
-                logger.debug(
-                    "Dropping orphan span '%s' (parent not resolvable)",
-                    span.name,
-                )
-                return None
+        parent_nirizan_id, should_drop = self._resolve_parent_nirizan_id(span, otel_id_map)
+        if should_drop:
+            logger.debug(
+                "Dropping orphan span '%s' (parent not resolvable)",
+                getattr(span, "name", "<unnamed>"),
+            )
+            return None
 
         started_at = _ns_to_datetime(span.start_time)
         ended_at = _ns_to_datetime(span.end_time)
@@ -674,14 +688,14 @@ class NiriZanSpanProcessor:
         if not name:
             name = "unnamed"
 
-        # Trace flags: the sampled bit is defined by OTel as 0x01.
-        trace_flags = ctx.trace_flags
         sampled: bool | None = None
+        trace_flags = getattr(ctx, "trace_flags", None)
         if trace_flags is not None:
-            sampled = bool(trace_flags & TraceFlags.SAMPLED)
+            try:
+                sampled = bool(trace_flags & TraceFlags.SAMPLED)
+            except TypeError:
+                sampled = None
 
-        # Trace state is a vendor-specific key/value map. Serialize as a
-        # string for storage in NiriZan's primitive-only attributes dict.
         trace_state_str: str | None = None
         trace_state = getattr(ctx, "trace_state", None)
         if trace_state:
@@ -690,14 +704,13 @@ class NiriZanSpanProcessor:
             except Exception:
                 trace_state_str = None
 
-        # Status is `(StatusCode, description)`; store as two primitive
-        # attributes rather than a nested object, per the plan's decision to
-        # defer a first-class Span.status field.
         status_code_str: str | None = None
         status_description: str | None = None
         status = getattr(span, "status", None)
         if status is not None:
             code = getattr(status, "status_code", None)
+            if code is None:
+                code = getattr(status, "code", None)
             if code is not None:
                 status_code_str = getattr(code, "name", str(code)).lower()
             desc = getattr(status, "description", None)
