@@ -10,7 +10,6 @@ from __future__ import annotations
 from collections.abc import Sequence
 from datetime import UTC, datetime
 import json
-import logging
 from typing import TYPE_CHECKING, Any
 
 from opentelemetry import trace
@@ -23,6 +22,8 @@ from opentelemetry.trace import (
 )
 from opentelemetry.trace.status import Status, StatusCode
 
+import nirizan
+from nirizan._logging import get_logger
 from nirizan.instrumentation.otel._id_mapping import (
     uuid_to_otel_span_id,
     uuid_to_otel_trace_id,
@@ -55,23 +56,49 @@ from nirizan.instrumentation.otel.semconv import (
     truncate_attribute_value,
 )
 
-if TYPE_CHECKING:
-    from nirizan.instrumentation.spans import Trace
+try:
+    from nirizan.exporters.base import BaseExporter
+except ImportError:
+    try:
+        from nirizan.exporters import BaseExporter  # type: ignore[no-redef]
+    except ImportError:
 
-logger = logging.getLogger(__name__)
+        class BaseExporter:  # type: ignore[no-redef]
+            """Fallback BaseExporter ABC if dynamic import fails."""
+
+            async def export(self, trace: Any) -> None:
+                raise NotImplementedError
+
+
+if TYPE_CHECKING:
+    from nirizan.instrumentation.spans import Span, Trace
+
+logger = get_logger(__name__)
 
 __all__ = [
-    "NiriZanOTelExporter",
+    "NiriZanToOTelExporter",
     "convert_span_to_otel_attributes",
     "export_span_to_otel",
     "export_trace_to_otel",
 ]
 
 
-def _to_nanoseconds(ts: Any) -> int | None:
+def _get_default_tracer() -> Tracer:
+    """Retrieve default OpenTelemetry Tracer with NiriZan instrumentation scope."""
+    version = getattr(nirizan, "__version__", "0.1.0")
+    return trace.get_tracer("nirizan", version=version)
+
+
+def _to_nanoseconds(ts: datetime | float | int | None) -> int | None:
     """Convert datetime, float seconds, or integer timestamps to nanoseconds."""
     if ts is None:
         return None
+    if isinstance(ts, datetime):
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=UTC)
+        return int(ts.timestamp() * 1_000_000_000)
+    if isinstance(ts, float):
+        return int(ts * 1_000_000_000)
     if isinstance(ts, int):
         if ts > 1_000_000_000_000_000_000:
             return ts
@@ -80,17 +107,7 @@ def _to_nanoseconds(ts: Any) -> int | None:
         if ts > 1_000_000_000_000:
             return ts * 1_000_000
         return ts * 1_000_000_000
-    if isinstance(ts, float):
-        return int(ts * 1_000_000_000)
-    if isinstance(ts, datetime):
-        if ts.tzinfo is None:
-            ts = ts.replace(tzinfo=UTC)
-        return int(ts.timestamp() * 1_000_000_000)
-    try:
-        val = float(ts)
-        return int(val * 1_000_000_000)
-    except (ValueError, TypeError):
-        return None
+    return None
 
 
 def _format_payload_value(payload: Any) -> str | None:
@@ -107,12 +124,14 @@ def _format_payload_value(payload: Any) -> str | None:
     return truncate_attribute_value(str(payload))
 
 
-def convert_span_to_otel_attributes(span: Any) -> dict[str, Any]:
+def convert_span_to_otel_attributes(
+    span: Span | Any, session_id: str | None = None
+) -> dict[str, Any]:
     """Extract and map NiriZan Span properties into OpenTelemetry span attributes."""
     attributes: dict[str, Any] = {}
 
-    # Span Identity & Context Attributes
-    span_id_str = str(getattr(span, "span_id", getattr(span, "id", "")))
+    # Core Identifiers
+    span_id_str = str(getattr(span, "span_id", ""))
     trace_id_str = str(getattr(span, "trace_id", ""))
     if span_id_str:
         attributes[NIRIZAN_SPAN_ID] = span_id_str
@@ -121,54 +140,72 @@ def convert_span_to_otel_attributes(span: Any) -> dict[str, Any]:
 
     attributes[NIRIZAN_SPAN_ID_SOURCE] = getattr(span, "span_id_source", SPAN_ID_SOURCE_ROUNDTRIP)
 
-    kind_raw = str(getattr(span, "kind", "SPAN")).upper()
-    attributes[NIRIZAN_SPAN_KIND] = kind_raw.lower()
+    # Span Kind
+    raw_kind = getattr(span, "kind", "SPAN")
+    kind_val = raw_kind.value if hasattr(raw_kind, "value") else str(raw_kind)
+    kind_upper = kind_val.split(".")[-1].upper()
+    attributes[NIRIZAN_SPAN_KIND] = kind_upper.lower()
 
-    session_id = getattr(span, "session_id", None)
-    if session_id:
-        attributes[NIRIZAN_SESSION_ID] = str(session_id)
+    # Session Propagation
+    effective_session = session_id or getattr(span, "session_id", None)
+    if effective_session:
+        attributes[NIRIZAN_SESSION_ID] = str(effective_session)
 
-    # Domain Payload Mapping according to Plan §3.1
+    # Custom Attributes & Domain Sourcing
+    custom_attrs = getattr(span, "attributes", {}) or {}
+
     input_payload = getattr(span, "input_payload", None)
     output_payload = getattr(span, "output_payload", None)
 
-    if kind_raw in ("GENERATION", "LLM", "CHAT"):
+    if kind_upper in ("GENERATION", "LLM", "CHAT"):
         if input_payload is not None:
             attributes[GEN_AI_PROMPT] = _format_payload_value(input_payload)
         if output_payload is not None:
             attributes[GEN_AI_COMPLETION] = _format_payload_value(output_payload)
 
-        provider = getattr(span, "provider", None)
+        provider = custom_attrs.get("provider") or custom_attrs.get(GEN_AI_SYSTEM)
         if provider:
             attributes[GEN_AI_SYSTEM] = str(provider)
 
-        model_name = getattr(span, "model_name", getattr(span, "model", None))
+        model_name = (
+            custom_attrs.get("model_name")
+            or custom_attrs.get("model")
+            or custom_attrs.get(GEN_AI_REQUEST_MODEL)
+        )
         if model_name:
             attributes[GEN_AI_REQUEST_MODEL] = str(model_name)
             attributes[GEN_AI_RESPONSE_MODEL] = str(model_name)
 
-        prompt_tokens = getattr(span, "prompt_tokens", None)
+        prompt_tokens = custom_attrs.get("prompt_tokens") or custom_attrs.get(
+            GEN_AI_USAGE_PROMPT_TOKENS
+        )
         if isinstance(prompt_tokens, int):
             attributes[GEN_AI_USAGE_PROMPT_TOKENS] = prompt_tokens
 
-        completion_tokens = getattr(span, "completion_tokens", None)
+        completion_tokens = custom_attrs.get("completion_tokens") or custom_attrs.get(
+            GEN_AI_USAGE_COMPLETION_TOKENS
+        )
         if isinstance(completion_tokens, int):
             attributes[GEN_AI_USAGE_COMPLETION_TOKENS] = completion_tokens
 
         attributes[GEN_AI_OPERATION_NAME] = "chat"
 
-    elif kind_raw == "RETRIEVAL":
+    elif kind_upper == "RETRIEVAL":
         if input_payload is not None:
             attributes[NIRIZAN_RETRIEVAL_QUERY] = _format_payload_value(input_payload)
         if output_payload is not None:
             attributes[NIRIZAN_RETRIEVAL_RESULTS] = _format_payload_value(output_payload)
 
-        top_k = getattr(span, "top_k", None)
+        top_k = custom_attrs.get("top_k") or custom_attrs.get(NIRIZAN_RETRIEVAL_TOP_K)
         if isinstance(top_k, int):
             attributes[NIRIZAN_RETRIEVAL_TOP_K] = top_k
 
-    elif kind_raw in ("TOOL_USE", "TOOL"):
-        tool_name = getattr(span, "tool_name", getattr(span, "name", None))
+    elif kind_upper in ("TOOL_USE", "TOOL"):
+        tool_name = (
+            custom_attrs.get("tool_name")
+            or custom_attrs.get("name")
+            or custom_attrs.get(NIRIZAN_TOOL_NAME)
+        )
         if tool_name:
             attributes[NIRIZAN_TOOL_NAME] = str(tool_name)
         if input_payload is not None:
@@ -176,7 +213,7 @@ def convert_span_to_otel_attributes(span: Any) -> dict[str, Any]:
         if output_payload is not None:
             attributes[NIRIZAN_TOOL_RESULT] = _format_payload_value(output_payload)
 
-    elif kind_raw == "PLANNING":
+    elif kind_upper == "PLANNING":
         if input_payload is not None:
             attributes[NIRIZAN_PLANNING_CONTEXT] = _format_payload_value(input_payload)
         if output_payload is not None:
@@ -188,11 +225,10 @@ def convert_span_to_otel_attributes(span: Any) -> dict[str, Any]:
         if output_payload is not None:
             attributes["nirizan.output"] = _format_payload_value(output_payload)
 
-    # Custom Attributes
-    custom_attributes = getattr(span, "attributes", {}) or {}
-    if isinstance(custom_attributes, dict):
-        for k, v in custom_attributes.items():
-            if v is None:
+    # Encode Remaining Custom Attributes
+    if isinstance(custom_attrs, dict):
+        for k, v in custom_attrs.items():
+            if v is None or k in attributes:
                 continue
             if isinstance(v, (int, float, bool)):
                 attributes[k] = v
@@ -219,53 +255,46 @@ def convert_span_to_otel_attributes(span: Any) -> dict[str, Any]:
     return attributes
 
 
-def _convert_status(span: Any) -> Status:
-    """Map NiriZan status representations to OpenTelemetry Status."""
-    raw_status = getattr(span, "status", None)
-    status_msg = getattr(span, "status_message", None) or getattr(span, "error_message", None)
-
-    if raw_status is None:
-        return Status(StatusCode.UNSET)
-
-    status_str = str(getattr(raw_status, "value", raw_status)).upper()
-
-    if status_str in ("OK", "SUCCESS", "STATUSCODE.OK"):
-        return Status(StatusCode.OK)
-    if status_str in ("ERROR", "FAIL", "FAILURE", "EXCEPTION", "STATUSCODE.ERROR"):
-        return Status(StatusCode.ERROR, description=str(status_msg or ""))
-
-    return Status(StatusCode.UNSET)
-
-
 def export_span_to_otel(
-    span: Any,
+    span: Span | Any,
     tracer: Tracer | None = None,
+    parent_context: SpanContext | None = None,
+    session_id: str | None = None,
 ) -> trace.Span:
     """Convert and export a single NiriZan Span into an OpenTelemetry Span."""
     if tracer is None:
-        tracer = trace.get_tracer("nirizan.instrumentation.otel")
+        tracer = _get_default_tracer()
 
     span_name = str(getattr(span, "name", "nirizan_span"))
-    attributes = convert_span_to_otel_attributes(span)
-    start_ns = _to_nanoseconds(getattr(span, "start_time", None))
-    end_ns = _to_nanoseconds(getattr(span, "end_time", None))
+    attributes = convert_span_to_otel_attributes(span, session_id=session_id)
+    start_ns = _to_nanoseconds(getattr(span, "started_at", None))
+    end_ns = _to_nanoseconds(getattr(span, "ended_at", None))
 
-    # Construct Parent Trace Context if parent_span_id is available
+    # Construct Parent Context
     context = None
-    trace_id_str = getattr(span, "trace_id", None)
-    parent_span_id_str = getattr(span, "parent_span_id", None)
-
-    if trace_id_str:
-        otel_trace_id = uuid_to_otel_trace_id(trace_id_str)
-        if parent_span_id_str:
-            otel_parent_id = uuid_to_otel_span_id(parent_span_id_str)
-            parent_ctx = SpanContext(
-                trace_id=otel_trace_id,
-                span_id=otel_parent_id,
-                is_remote=True,
-                trace_flags=TraceFlags(TraceFlags.SAMPLED),
-            )
-            context = set_span_in_context(NonRecordingSpan(parent_ctx))
+    if parent_context is not None:
+        context = set_span_in_context(NonRecordingSpan(parent_context))
+    else:
+        trace_id_str = getattr(span, "trace_id", None)
+        parent_span_id_str = getattr(span, "parent_span_id", None)
+        if trace_id_str and parent_span_id_str:
+            try:
+                otel_trace_id = uuid_to_otel_trace_id(trace_id_str)
+                otel_parent_id = uuid_to_otel_span_id(parent_span_id_str)
+                remote_ctx = SpanContext(
+                    trace_id=otel_trace_id,
+                    span_id=otel_parent_id,
+                    is_remote=True,
+                    trace_flags=TraceFlags(TraceFlags.SAMPLED),
+                )
+                context = set_span_in_context(NonRecordingSpan(remote_ctx))
+            except ValueError as err:
+                logger.warning(
+                    "Skipping remote parent context linkage for span '%s' (%s): %s",
+                    span_name,
+                    getattr(span, "span_id", "unknown"),
+                    err,
+                )
 
     otel_span = tracer.start_span(
         name=span_name,
@@ -274,51 +303,85 @@ def export_span_to_otel(
         start_time=start_ns,
     )
 
-    otel_span.set_status(_convert_status(span))
+    # Optional / Future Field Guarding
+    if hasattr(span, "status"):
+        raw_status = getattr(span, "status")
+        status_msg = getattr(span, "status_message", "")
+        status_str = str(getattr(raw_status, "value", raw_status)).upper()
+        if status_str in ("OK", "SUCCESS"):
+            otel_span.set_status(Status(StatusCode.OK))
+        elif status_str in ("ERROR", "FAIL", "FAILURE"):
+            otel_span.set_status(Status(StatusCode.ERROR, description=str(status_msg)))
 
-    events = getattr(span, "events", []) or []
-    for evt in events:
-        evt_name = str(getattr(evt, "name", "event"))
-        evt_ts = _to_nanoseconds(getattr(evt, "timestamp", None))
-        evt_attrs = getattr(evt, "attributes", None)
-        otel_span.add_event(name=evt_name, attributes=evt_attrs, timestamp=evt_ts)
+    if hasattr(span, "events"):
+        for evt in getattr(span, "events", []) or []:
+            evt_name = str(getattr(evt, "name", "event"))
+            evt_ts = _to_nanoseconds(getattr(evt, "timestamp", None))
+            evt_attrs = getattr(evt, "attributes", None)
+            otel_span.add_event(name=evt_name, attributes=evt_attrs, timestamp=evt_ts)
 
-    exc = getattr(span, "exception", None)
-    if exc is not None:
-        if isinstance(exc, BaseException):
-            otel_span.record_exception(exc)
-        else:
-            otel_span.add_event("exception", attributes={"exception.message": str(exc)})
+    if hasattr(span, "exception"):
+        exc = getattr(span, "exception")
+        if exc is not None:
+            if isinstance(exc, BaseException):
+                otel_span.record_exception(exc)
+            else:
+                otel_span.add_event("exception", attributes={"exception.message": str(exc)})
 
     otel_span.end(end_time=end_ns)
     return otel_span
 
 
 def export_trace_to_otel(
-    trace_obj: Trace | Sequence[Any],
+    trace_obj: Trace | Sequence[Span] | Any,
     tracer: Tracer | None = None,
 ) -> list[trace.Span]:
-    """Convert and export a full NiriZan trace (sequence of spans) to OpenTelemetry."""
+    """Convert and export an entire trace/sequence of spans maintaining context tree order."""
+    if tracer is None:
+        tracer = _get_default_tracer()
+
     spans = getattr(trace_obj, "spans", trace_obj)
+    session_id = getattr(trace_obj, "session_id", None)
     exported_spans: list[trace.Span] = []
+    span_context_map: dict[str, SpanContext] = {}
 
     for span in spans:
-        exported = export_span_to_otel(span, tracer=tracer)
+        span_id = str(getattr(span, "span_id", ""))
+        parent_span_id = getattr(span, "parent_span_id", None)
+
+        parent_ctx = None
+        if parent_span_id and str(parent_span_id) in span_context_map:
+            parent_ctx = span_context_map[str(parent_span_id)]
+
+        exported = export_span_to_otel(
+            span,
+            tracer=tracer,
+            parent_context=parent_ctx,
+            session_id=session_id,
+        )
+
+        if span_id:
+            span_context_map[span_id] = exported.get_span_context()
+
         exported_spans.append(exported)
 
     return exported_spans
 
 
-class NiriZanOTelExporter:
+class NiriZanToOTelExporter(BaseExporter):
     """Trace exporter bridging NiriZan traces and spans into OpenTelemetry."""
 
     def __init__(self, tracer: Tracer | None = None) -> None:
-        self._tracer = tracer or trace.get_tracer("nirizan.instrumentation.otel")
+        self._tracer = tracer or _get_default_tracer()
 
-    def export_span(self, span: Any) -> trace.Span:
+    async def export(self, trace: Trace) -> None:
+        """Export a NiriZan Trace to OpenTelemetry satisfying BaseExporter interface."""
+        export_trace_to_otel(trace, tracer=self._tracer)
+
+    def export_span(self, span: Span | Any) -> trace.Span:
         """Export a single NiriZan span to OpenTelemetry."""
         return export_span_to_otel(span, tracer=self._tracer)
 
-    def export_trace(self, trace_obj: Trace | Sequence[Any]) -> list[trace.Span]:
-        """Export an entire NiriZan trace to OpenTelemetry."""
+    def export_trace(self, trace_obj: Trace | Sequence[Span] | Any) -> list[trace.Span]:
+        """Export a full NiriZan trace structure to OpenTelemetry."""
         return export_trace_to_otel(trace_obj, tracer=self._tracer)
