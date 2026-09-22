@@ -218,11 +218,24 @@ def test_encode_sequence_attribute_value_truncation_preserves_prefix_items() -> 
 
 
 def test_encode_sequence_attribute_value_sentinel_only_when_needed() -> None:
-    """When no items fit but the sentinel does, the result is sentinel-only."""
-    # The sentinel-only form is ``["...[truncated]"]``; compute its length
-    # from the constants rather than hard-coding 19.
+    """When no items fit but the sentinel does, the result is sentinel-only.
+
+    The item must be long enough that neither the item-alone form nor the
+    item-plus-sentinel form fits, while the sentinel alone does fit. A short
+    item such as ``"a"`` always fits inside the sentinel-only envelope, so it
+    cannot exercise this branch.
+    """
+    long_item = "x" * 100
     sentinel_only_len = len(json.dumps([TRUNCATION_SUFFIX]))
-    result = encode_sequence_attribute_value(["a"], max_length=sentinel_only_len)
+
+    # Preconditions that must hold for the sentinel-only branch to be reached:
+    # - the item alone exceeds the budget
+    # - the item plus sentinel also exceeds the budget
+    # - the sentinel alone fits
+    assert len(json.dumps([long_item])) > sentinel_only_len
+    assert len(json.dumps([long_item, TRUNCATION_SUFFIX])) > sentinel_only_len
+
+    result = encode_sequence_attribute_value([long_item], max_length=sentinel_only_len)
 
     assert json.loads(result) == [TRUNCATION_SUFFIX]
 
