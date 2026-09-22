@@ -69,7 +69,7 @@ __all__ = [
 
 def _get_default_tracer() -> Tracer:
     """Retrieve default OpenTelemetry Tracer with NiriZan instrumentation scope."""
-    version = getattr(nirizan, "__version__", None) or "0.1.0"
+    version = getattr(nirizan, "__version__", None) or "0.5.0"
     return trace.get_tracer("nirizan", version)
 
 
