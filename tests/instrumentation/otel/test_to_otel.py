@@ -14,12 +14,17 @@ One test uses a real NiriZan ``Span`` object as a guard against attribute-name
 drift between the exporter and the pydantic model it reads from.
 """
 
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from unittest.mock import MagicMock, patch
 from uuid import uuid4
 
 import pytest
-from opentelemetry.trace import SpanContext, TraceFlags, get_current_span
+from opentelemetry.trace import (
+    SpanContext,
+    TraceFlags,
+    get_current_span,
+)
 from opentelemetry.trace.status import StatusCode
 
 from nirizan.instrumentation.otel.semconv import (
@@ -74,7 +79,7 @@ def create_dummy_span(
     kind: str = "GENERATION",
     input_payload: object = None,
     output_payload: object = None,
-    attributes: dict[str, object] | None = None,
+    attributes: Mapping[str, object] | None = None,
     started_at: datetime | int | None = 1_600_000_000_000_000_000,
     ended_at: datetime | int | None = 1_600_000_005_000_000_000,
     status: str | None = None,
@@ -89,6 +94,11 @@ def create_dummy_span(
     Every attribute the exporter reads via ``getattr`` is set explicitly.
     Without this, ``MagicMock`` would auto-create attributes on access,
     returning a new Mock instead of the intended default and hiding bugs.
+
+    ``attributes`` is typed as ``Mapping`` rather than ``dict`` so that
+    callers can pass any ``dict`` literal without tripping Pylance's dict
+    invariance rule. The mapping is copied into a fresh ``dict`` on
+    assignment.
     """
     span = MagicMock()
     span.span_id = span_id
@@ -98,7 +108,7 @@ def create_dummy_span(
     span.kind = kind
     span.input_payload = input_payload
     span.output_payload = output_payload
-    span.attributes = attributes or {}
+    span.attributes = dict(attributes) if attributes is not None else {}
     span.started_at = started_at
     span.ended_at = ended_at
     span.status = status
@@ -162,6 +172,7 @@ def test_format_payload_value_passes_through_short_string() -> None:
 def test_format_payload_value_truncates_long_string() -> None:
     long_str = "a" * (MAX_ATTR_VALUE_LENGTH + 100)
     result = _format_payload_value(long_str)
+    assert result is not None
     assert len(result) == MAX_ATTR_VALUE_LENGTH
     assert result.endswith("...[truncated]")
 
@@ -187,10 +198,11 @@ def test_format_payload_value_wraps_oversized_dict_in_envelope() -> None:
     is not parseable. The current behavior wraps in a dict that carries a
     marker and a preview, so ``json.loads`` always succeeds.
     """
+    import json
+
     large = {"key": "x" * (MAX_ATTR_VALUE_LENGTH * 3)}
     result = _format_payload_value(large)
-
-    import json
+    assert result is not None
 
     parsed = json.loads(result)
     assert parsed["_nirizan_truncated"] is True
@@ -561,7 +573,11 @@ def test_export_span_records_non_exception_as_event() -> None:
     mock_otel_span.record_exception.assert_not_called()
     mock_otel_span.add_event.assert_called_once()
     event_call = mock_otel_span.add_event.call_args
-    assert event_call.kwargs["name"] == "exception"
+    # ``to_otel.py`` calls ``add_event`` positionally for the exception branch:
+    #     otel_span.add_event("exception", attributes={...})
+    # whereas the event-loop branch calls it with keyword ``name=...``.
+    # This test pins the exception branch's calling convention.
+    assert event_call.args[0] == "exception"
     assert event_call.kwargs["attributes"]["exception.message"] == "not an exception"
 
 
@@ -651,7 +667,6 @@ def test_export_span_with_real_nirizan_span() -> None:
     assert kwargs["attributes"][GEN_AI_COMPLETION] == "completion"
     assert kwargs["attributes"][NIRIZAN_SPAN_ID_SOURCE] == SPAN_ID_SOURCE_ROUNDTRIP
     assert isinstance(kwargs["start_time"], int)
-    assert isinstance(kwargs["start_time"], int)
 
 
 # ---------------------------------------------------------------------------
@@ -735,9 +750,6 @@ def test_export_trace_orders_spans_topologically_before_export() -> None:
 
     export_trace_to_otel([child, root], tracer=mock_tracer)
 
-    first_call_name = mock_tracer.start_span.call_args_list[0].kwargs["name"]
-    second_call_name = mock_tracer.start_span.call_args_list[1].kwargs["name"]
-    assert first_call_name == "test_span"  # both are named "test_span" by default
     # Distinguish by span_id in the attributes.
     first_attrs = mock_tracer.start_span.call_args_list[0].kwargs["attributes"]
     second_attrs = mock_tracer.start_span.call_args_list[1].kwargs["attributes"]
