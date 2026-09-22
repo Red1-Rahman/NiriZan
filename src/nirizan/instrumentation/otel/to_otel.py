@@ -7,10 +7,10 @@ mapping span kinds, GenAI attributes, sequence attributes, and span context IDs.
 
 from __future__ import annotations
 
-import json
-import logging
 from collections.abc import Sequence
 from datetime import UTC, datetime
+import json
+import logging
 from typing import TYPE_CHECKING, Any
 
 from opentelemetry import trace
@@ -23,19 +23,10 @@ from opentelemetry.trace import (
 )
 from opentelemetry.trace.status import Status, StatusCode
 
-try:
-    from nirizan.instrumentation.otel.id_mapping import (
-        SPAN_ID_SOURCE_ROUNDTRIP,
-        uuid_to_otel_span_id,
-        uuid_to_otel_trace_id,
-    )
-except ImportError:
-    from nirizan.instrumentation.otel._id_mapping import (  # type: ignore[import-not-found, no-redef]
-        SPAN_ID_SOURCE_ROUNDTRIP,
-        uuid_to_otel_span_id,
-        uuid_to_otel_trace_id,
-    )
-
+from nirizan.instrumentation.otel._id_mapping import (
+    uuid_to_otel_span_id,
+    uuid_to_otel_trace_id,
+)
 from nirizan.instrumentation.otel.semconv import (
     GEN_AI_COMPLETION,
     GEN_AI_OPERATION_NAME,
@@ -58,6 +49,7 @@ from nirizan.instrumentation.otel.semconv import (
     NIRIZAN_TOOL_NAME,
     NIRIZAN_TOOL_RESULT,
     NIRIZAN_TRACE_ID,
+    SPAN_ID_SOURCE_ROUNDTRIP,
     encode_sequence_attribute_value,
     encode_sequence_key,
     truncate_attribute_value,
@@ -264,9 +256,9 @@ def export_span_to_otel(
     parent_span_id_str = getattr(span, "parent_span_id", None)
 
     if trace_id_str:
-        otel_trace_id, _ = uuid_to_otel_trace_id(trace_id_str)
+        otel_trace_id = uuid_to_otel_trace_id(trace_id_str)
         if parent_span_id_str:
-            otel_parent_id, _ = uuid_to_otel_span_id(parent_span_id_str)
+            otel_parent_id = uuid_to_otel_span_id(parent_span_id_str)
             parent_ctx = SpanContext(
                 trace_id=otel_trace_id,
                 span_id=otel_parent_id,
