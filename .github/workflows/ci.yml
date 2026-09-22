@@ -22,7 +22,7 @@ jobs:
           python-version: "3.11"
 
       - name: Install project with dev dependencies
-        run: pip install -e ".[dev]"
+        run: pip install -e ".[dev,otel]"
 
       - name: Run pytest
         run: pytest
