@@ -8,6 +8,7 @@ mapping span kinds, GenAI attributes, sequence attributes, and span context IDs.
 from __future__ import annotations
 
 import json
+from collections import deque
 from collections.abc import Sequence
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
@@ -16,7 +17,6 @@ from opentelemetry import trace
 from opentelemetry.trace import (
     NonRecordingSpan,
     SpanContext,
-    TraceFlags,
     Tracer,
     set_span_in_context,
 )
@@ -25,10 +25,6 @@ from opentelemetry.trace.status import Status, StatusCode
 import nirizan
 from nirizan._logging import get_logger
 from nirizan.instrumentation.exporters import BaseExporter
-from nirizan.instrumentation.otel._id_mapping import (
-    uuid_to_otel_span_id,
-    uuid_to_otel_trace_id,
-)
 from nirizan.instrumentation.otel.semconv import (
     GEN_AI_COMPLETION,
     GEN_AI_OPERATION_NAME,
@@ -38,6 +34,7 @@ from nirizan.instrumentation.otel.semconv import (
     GEN_AI_SYSTEM,
     GEN_AI_USAGE_COMPLETION_TOKENS,
     GEN_AI_USAGE_PROMPT_TOKENS,
+    MAX_ATTR_VALUE_LENGTH,
     NIRIZAN_PLANNING_CONTEXT,
     NIRIZAN_PLANNING_OUTPUT,
     NIRIZAN_RETRIEVAL_QUERY,
@@ -72,33 +69,42 @@ __all__ = [
 
 def _get_default_tracer() -> Tracer:
     """Retrieve default OpenTelemetry Tracer with NiriZan instrumentation scope."""
-    version = getattr(nirizan, "__version__", "0.1.0")
+    version = getattr(nirizan, "__version__", None) or "0.1.0"
     return trace.get_tracer("nirizan", version)
 
 
-def _to_nanoseconds(ts: datetime | float | int | None) -> int | None:
-    """Convert datetime, float seconds, or integer timestamps to nanoseconds."""
+def _to_nanoseconds(ts: datetime | int | None) -> int | None:
+    """Convert datetime or nanoseconds-since-epoch integer to nanoseconds."""
     if ts is None:
         return None
     if isinstance(ts, datetime):
         if ts.tzinfo is None:
             ts = ts.replace(tzinfo=UTC)
         return int(ts.timestamp() * 1_000_000_000)
-    if isinstance(ts, (int, float)):
-        return int(ts)
+    if isinstance(ts, int):
+        return ts
     return None
 
 
 def _format_payload_value(payload: Any) -> str | None:
-    """Format payload objects into truncated attribute strings."""
+    """Format payload objects into truncated attribute strings while preserving JSON validity."""
     if payload is None:
         return None
     if isinstance(payload, str):
         return truncate_attribute_value(payload)
     if isinstance(payload, (dict, list, tuple)):
         try:
-            return truncate_attribute_value(json.dumps(payload, default=str))
-        except TypeError:
+            dump_str = json.dumps(payload, default=str)
+            if len(dump_str) <= MAX_ATTR_VALUE_LENGTH:
+                return dump_str
+            preview = str(payload)
+            truncated_dict = {
+                "_nirizan_truncated": True,
+                "type": type(payload).__name__,
+                "preview": truncate_attribute_value(preview),
+            }
+            return json.dumps(truncated_dict, default=str)
+        except Exception:
             return truncate_attribute_value(str(payload))
     return truncate_attribute_value(str(payload))
 
@@ -125,7 +131,7 @@ def convert_span_to_otel_attributes(
     kind_upper = kind_val.split(".")[-1].upper()
     attributes[NIRIZAN_SPAN_KIND] = kind_upper.lower()
 
-    # Session Propagation
+    # Session ID Attribute
     effective_session = session_id or getattr(span, "session_id", None)
     if effective_session:
         attributes[NIRIZAN_SESSION_ID] = str(effective_session)
@@ -224,10 +230,7 @@ def convert_span_to_otel_attributes(
                         err,
                     )
             elif isinstance(v, dict):
-                try:
-                    attributes[k] = truncate_attribute_value(json.dumps(v, default=str))
-                except TypeError:
-                    attributes[k] = truncate_attribute_value(str(v))
+                attributes[k] = _format_payload_value(v)
             else:
                 attributes[k] = truncate_attribute_value(str(v))
 
@@ -249,31 +252,19 @@ def export_span_to_otel(
     start_ns = _to_nanoseconds(getattr(span, "started_at", None))
     end_ns = _to_nanoseconds(getattr(span, "ended_at", None))
 
-    # Construct Parent Context
+    # Parent Context Linkage
     context = None
     if parent_context is not None:
         context = set_span_in_context(NonRecordingSpan(parent_context))
     else:
-        trace_id_str = getattr(span, "trace_id", None)
-        parent_span_id_str = getattr(span, "parent_span_id", None)
-        if trace_id_str and parent_span_id_str:
-            try:
-                otel_trace_id = uuid_to_otel_trace_id(trace_id_str)
-                otel_parent_id = uuid_to_otel_span_id(parent_span_id_str)
-                remote_ctx = SpanContext(
-                    trace_id=otel_trace_id,
-                    span_id=otel_parent_id,
-                    is_remote=True,
-                    trace_flags=TraceFlags(TraceFlags.SAMPLED),
-                )
-                context = set_span_in_context(NonRecordingSpan(remote_ctx))
-            except ValueError as err:
-                logger.warning(
-                    "Skipping remote parent context linkage for span '%s' (%s): %s",
-                    span_name,
-                    getattr(span, "span_id", "unknown"),
-                    err,
-                )
+        raw_parent_id = getattr(span, "parent_span_id", None)
+        if raw_parent_id is not None:
+            logger.warning(
+                "Parent span '%s' for span '%s' not found in exported parent context map. "
+                "Exporting span as root span.",
+                raw_parent_id,
+                getattr(span, "span_id", "unknown"),
+            )
 
     otel_span = tracer.start_span(
         name=span_name,
@@ -282,7 +273,7 @@ def export_span_to_otel(
         start_time=start_ns,
     )
 
-    # Optional / Future Field Extraction
+    # Status Handling
     raw_status = getattr(span, "status", None)
     if raw_status is not None:
         status_msg = getattr(span, "status_message", "")
@@ -292,6 +283,7 @@ def export_span_to_otel(
         elif status_str in ("ERROR", "FAIL", "FAILURE"):
             otel_span.set_status(Status(StatusCode.ERROR, description=str(status_msg)))
 
+    # Events
     raw_events = getattr(span, "events", None)
     if raw_events:
         for evt in raw_events:
@@ -300,6 +292,7 @@ def export_span_to_otel(
             evt_attrs = getattr(evt, "attributes", None)
             otel_span.add_event(name=evt_name, attributes=evt_attrs, timestamp=evt_ts)
 
+    # Exceptions
     exc = getattr(span, "exception", None)
     if exc is not None:
         if isinstance(exc, BaseException):
@@ -331,11 +324,11 @@ def _topological_sort_spans(spans: Sequence[Span | Any]) -> list[Span | Any]:
         children_map.setdefault(pid_str, []).append(s)
 
     sorted_spans: list[Span | Any] = []
-    queue: list[Span | Any] = list(children_map.get(None, []))
+    queue: deque[Span | Any] = deque(children_map.get(None, []))
     visited_ids: set[str] = set()
 
     while queue:
-        current = queue.pop(0)
+        current = queue.popleft()
         sorted_spans.append(current)
         cid = str(getattr(current, "span_id", ""))
         if cid:
