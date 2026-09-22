@@ -98,33 +98,17 @@ class TraceSink(Protocol):
 
 # ---------------------------------------------------------------------------
 # Defensive accessors
-#
-# Pylance treats ``ReadableSpan.get_span_context()`` and ``ReadableSpan.parent``
-# as possibly ``None`` in some OTel SDK stub versions. These helpers provide a
-# single place to narrow those types, so the rest of the module can assume the
-# narrowed values without repeating ``is None`` checks everywhere.
 # ---------------------------------------------------------------------------
 
 
 def _get_span_context(span: ReadableSpan) -> SpanContext | None:
-    """Return the span's ``SpanContext``, or ``None`` if unavailable.
-
-    A finished ``ReadableSpan`` should always expose a context, but some SDK
-    stubs type ``get_span_context()`` as returning ``Optional[SpanContext]``.
-    Callers must handle the ``None`` branch by skipping the span.
-    """
+    """Return the span's ``SpanContext``, or ``None`` if unavailable."""
     ctx = span.get_span_context()
     return ctx if ctx is not None else None
 
 
 def _get_parent_context(span: ReadableSpan) -> SpanContext | None:
-    """Return the span's parent ``SpanContext``, or ``None`` if it has no parent.
-
-    Same rationale as ``_get_span_context``: the OTel SDK types ``parent`` as
-    ``Optional[SpanContext]``, and narrowing through compound boolean
-    expressions is not always reliable in Pylance. Centralizing the access
-    here keeps the rest of the module simple.
-    """
+    """Return the span's parent ``SpanContext``, or ``None`` if it has no parent."""
     parent = span.parent
     return parent if parent is not None else None
 
@@ -135,12 +119,7 @@ def _get_parent_context(span: ReadableSpan) -> SpanContext | None:
 
 
 def _ns_to_datetime(ns: int | None) -> datetime:
-    """Convert nanoseconds-since-epoch to a timezone-aware UTC ``datetime``.
-
-    ``None`` is interpreted as "no timestamp available"; the current time is
-    returned in that case rather than raising, since a missing timestamp on an
-    ended span is a data-quality issue, not a reason to drop the span.
-    """
+    """Convert nanoseconds-since-epoch to a timezone-aware UTC ``datetime``."""
     if ns is None:
         return datetime.now(UTC)
     seconds, remainder = divmod(int(ns), 1_000_000_000)
@@ -148,14 +127,7 @@ def _ns_to_datetime(ns: int | None) -> datetime:
 
 
 def _extract_nirizan_span_id(span: ReadableSpan, ctx: SpanContext) -> tuple[UUID, str]:
-    """Return ``(NiriZan span_id, provenance source)`` for an OTel span.
-
-    If the OTel span carries a ``nirizan.span_id`` attribute that parses as a
-    UUID, that value is used verbatim and the source is marked as
-    ``SPAN_ID_SOURCE_ROUNDTRIP``. Otherwise a deterministic UUID is derived
-    via ``otel_span_id_to_uuid`` and the source is marked
-    ``SPAN_ID_SOURCE_DERIVED``.
-    """
+    """Return ``(NiriZan span_id, provenance source)`` for an OTel span."""
     attrs = getattr(span, "attributes", None) or {}
     stashed = attrs.get(NIRIZAN_SPAN_ID)
     if isinstance(stashed, str):
@@ -275,10 +247,7 @@ def _convert_attributes(
 
 
 class _TraceBuffer:
-    """Per-trace buffer of ``ReadableSpan`` objects awaiting assembly.
-
-    Owned exclusively by the consumer thread; no locking required.
-    """
+    """Per-trace buffer of ``ReadableSpan`` objects awaiting assembly."""
 
     __slots__ = ("otel_trace_id", "spans", "first_seen", "last_seen")
 
@@ -291,7 +260,6 @@ class _TraceBuffer:
     def add(self, span: ReadableSpan, now: float) -> None:
         ctx = _get_span_context(span)
         if ctx is None:
-            # Caller is expected to have checked this already; guard anyway.
             return
         self.spans[ctx.span_id] = span
         self.last_seen = now
@@ -303,14 +271,7 @@ class _TraceBuffer:
 
 
 class NiriZanSpanProcessor:
-    """OTel ``SpanProcessor`` that assembles NiriZan ``Trace`` objects.
-
-    See the module docstring for the design rationale. The processor owns one
-    background consumer thread; the thread starts in ``__init__`` and is
-    stopped by ``shutdown``. Callers who construct a processor and never call
-    ``shutdown`` will leak the thread; use a try/finally or a context manager
-    in production code.
-    """
+    """OTel ``SpanProcessor`` that assembles NiriZan ``Trace`` objects."""
 
     def __init__(
         self,
@@ -368,12 +329,7 @@ class NiriZanSpanProcessor:
         """No-op: span start is not needed for trace assembly."""
 
     def on_end(self, span: ReadableSpan) -> None:
-        """Push a completed OTel span to the consumer thread.
-
-        This is the hot path. It must not raise (the OTel SDK calls it from
-        the instrumented application's threads) and must not block. The
-        queue is unbounded, so ``put_nowait`` never blocks.
-        """
+        """Push a completed OTel span to the consumer thread."""
         if self._shutdown.is_set():
             return
         try:
@@ -545,7 +501,6 @@ class NiriZanSpanProcessor:
         for otel_span_id, span in buf.spans.items():
             ctx = _get_span_context(span)
             if ctx is None:
-                # Should not happen: _buffer_span already filtered these.
                 continue
             nirizan_id, source = _extract_nirizan_span_id(span, ctx)
             id_map[otel_span_id] = nirizan_id
@@ -630,13 +585,7 @@ class NiriZanSpanProcessor:
         span: ReadableSpan,
         otel_id_map: Mapping[int, UUID],
     ) -> tuple[UUID | None, bool]:
-        """Return ``(parent_nirizan_id, should_drop)``.
-
-        ``parent_nirizan_id`` is ``None`` when the span has no parent or when
-        the parent cannot be resolved. ``should_drop`` is ``True`` only when
-        the orphan policy is ``"drop"`` and a declared parent could not be
-        resolved; in that case the caller should skip the span entirely.
-        """
+        """Return ``(parent_nirizan_id, should_drop)``."""
         parent = _get_parent_context(span)
         if parent is None:
             return None, False
@@ -647,14 +596,10 @@ class NiriZanSpanProcessor:
         if mapped is not None:
             return mapped, False
 
-        try:
-            derived = otel_span_id_to_uuid(parent.span_id)
-        except ValueError:
-            derived = None
-
-        if derived is None and self._orphan_policy == "drop":
+        if self._orphan_policy == "drop":
             return None, True
-        return derived, False
+
+        return otel_span_id_to_uuid(parent.span_id), False
 
     def _convert_span(
         self,
