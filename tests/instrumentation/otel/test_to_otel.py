@@ -14,20 +14,29 @@ One test uses a real NiriZan ``Span`` object as a guard against attribute-name
 drift between the exporter and the pydantic model it reads from.
 """
 
-from collections.abc import Mapping
-from datetime import UTC, datetime
-from unittest.mock import MagicMock, patch
-from uuid import uuid4
-
 import pytest
-from opentelemetry.trace import (
+
+# ``opentelemetry`` is an optional dependency installed via the ``otel`` extra.
+# Skip this entire module if it is absent, so a contributor working on other
+# parts of NiriZan is never forced to install OpenTelemetry to get a green
+# build. CI installs ``nirizan[otel]`` in the job that actually exercises
+# the bridge.
+pytest.importorskip("opentelemetry")
+pytest.importorskip("opentelemetry.sdk")
+
+from collections.abc import Mapping  # noqa: E402
+from datetime import UTC, datetime  # noqa: E402
+from unittest.mock import MagicMock, patch  # noqa: E402
+from uuid import uuid4  # noqa: E402
+
+from opentelemetry.trace import (  # noqa: E402
     SpanContext,
     TraceFlags,
     get_current_span,
 )
-from opentelemetry.trace.status import StatusCode
+from opentelemetry.trace.status import StatusCode  # noqa: E402
 
-from nirizan.instrumentation.otel.semconv import (
+from nirizan.instrumentation.otel.semconv import (  # noqa: E402
     GEN_AI_COMPLETION,
     GEN_AI_OPERATION_NAME,
     GEN_AI_PROMPT,
@@ -54,7 +63,7 @@ from nirizan.instrumentation.otel.semconv import (
     SPAN_ID_SOURCE_DERIVED,
     SPAN_ID_SOURCE_ROUNDTRIP,
 )
-from nirizan.instrumentation.otel.to_otel import (
+from nirizan.instrumentation.otel.to_otel import (  # noqa: E402
     NiriZanToOTelExporter,
     _format_payload_value,
     _to_nanoseconds,
