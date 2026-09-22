@@ -1,14 +1,25 @@
 # src\nirizan\instrumentation\otel\_id_mapping.py
 """Identifier mapping utilities between NiriZan UUIDs and OpenTelemetry IDs.
 
-This module provides pure-Python, zero-dependency conversion functions between
-NiriZan 128-bit UUID identifiers and OpenTelemetry 128-bit Trace IDs / 64-bit Span IDs[cite: 11].
+This module provides stdlib-only, pure-Python conversion functions between
+NiriZan 128-bit UUID identifiers and OpenTelemetry 128-bit Trace IDs / 64-bit Span IDs.
+It contains zero external package dependencies.
 """
 
 from uuid import UUID, uuid5
 
+__all__ = [
+    "is_valid_otel_span_id",
+    "is_valid_otel_trace_id",
+    "otel_span_id_to_uuid",
+    "otel_trace_id_to_uuid",
+    "uuid_to_otel_span_id",
+    "uuid_to_otel_trace_id",
+]
+
+# Private module constants; not part of the bridge's public API.
 # Fixed UUID namespace for deterministic derivation of 128-bit UUIDs
-# from 64-bit OTel Span IDs when the 'nirizan.span_id' attribute is absent[cite: 11].
+# from 64-bit OTel Span IDs when the 'nirizan.span_id' attribute is absent.
 _NIRIZAN_SPAN_ID_NAMESPACE: UUID = UUID("a921d782-2615-4428-b0e6-5c56d78703a1")
 
 _MAX_TRACE_ID: int = (1 << 128) - 1
@@ -16,24 +27,36 @@ _MAX_SPAN_ID: int = (1 << 64) - 1
 
 
 def is_valid_otel_trace_id(otel_trace_id: int) -> bool:
-    """Check if an OTel trace ID is a valid, non-zero 128-bit integer[cite: 11]."""
+    """Check if an OTel trace ID is a valid, non-zero 128-bit integer.
+
+    Note:
+        Accepts standard Python `int` instances. Strictly excludes `bool`
+        (a subclass of `int` in Python) and non-standard integer types
+        such as NumPy integers.
+    """
     if not isinstance(otel_trace_id, int) or isinstance(otel_trace_id, bool):
         return False
     return 0 < otel_trace_id <= _MAX_TRACE_ID
 
 
 def is_valid_otel_span_id(otel_span_id: int) -> bool:
-    """Check if an OTel span ID is a valid, non-zero 64-bit integer[cite: 11]."""
+    """Check if an OTel span ID is a valid, non-zero 64-bit integer.
+
+    Note:
+        Accepts standard Python `int` instances. Strictly excludes `bool`
+        (a subclass of `int` in Python) and non-standard integer types
+        such as NumPy integers.
+    """
     if not isinstance(otel_span_id, int) or isinstance(otel_span_id, bool):
         return False
     return 0 < otel_span_id <= _MAX_SPAN_ID
 
 
 def uuid_to_otel_trace_id(trace_id: UUID) -> int:
-    """Convert a 128-bit NiriZan UUID trace ID to a 128-bit integer OTel trace ID[cite: 11].
+    """Convert a 128-bit NiriZan UUID trace ID to a 128-bit integer OTel trace ID.
 
     Raises:
-        ValueError: If trace_id resolves to an invalid (all-zeros) trace ID[cite: 11].
+        ValueError: If trace_id resolves to an invalid (all-zeros) trace ID.
     """
     otel_trace_id = trace_id.int
     if not is_valid_otel_trace_id(otel_trace_id):
@@ -42,10 +65,10 @@ def uuid_to_otel_trace_id(trace_id: UUID) -> int:
 
 
 def otel_trace_id_to_uuid(otel_trace_id: int) -> UUID:
-    """Convert a 128-bit integer OTel trace ID to a 128-bit NiriZan UUID trace ID[cite: 11].
+    """Convert a 128-bit integer OTel trace ID to a 128-bit NiriZan UUID trace ID.
 
     Raises:
-        ValueError: If otel_trace_id is not a valid non-zero 128-bit integer[cite: 11].
+        ValueError: If otel_trace_id is not a valid non-zero 128-bit integer.
     """
     if not is_valid_otel_trace_id(otel_trace_id):
         raise ValueError(
@@ -55,12 +78,15 @@ def otel_trace_id_to_uuid(otel_trace_id: int) -> UUID:
 
 
 def uuid_to_otel_span_id(span_id: UUID) -> int:
-    """Convert a 128-bit NiriZan UUID span ID to a 64-bit integer OTel span ID[cite: 11].
+    """Convert a 128-bit NiriZan UUID span ID to a 64-bit integer OTel span ID.
 
-    Takes the low 8 bytes (64 bits) of the UUID integer representation[cite: 11].
+    Takes the lower 64 bits (low 8 bytes in big-endian order) of the UUID integer
+    representation via bitwise AND with `_MAX_SPAN_ID`.
 
     Raises:
-        ValueError: If the resulting 64-bit integer is zero[cite: 11].
+        ValueError: If the resulting low 64 bits yield zero (an invalid OTel span ID).
+            Downstream callers (e.g., `to_otel.py`) MUST catch this exception and handle
+            it gracefully according to exporter contract rules (e.g., skip + warning log).
     """
     otel_span_id = span_id.int & _MAX_SPAN_ID
     if not is_valid_otel_span_id(otel_span_id):
@@ -71,16 +97,18 @@ def uuid_to_otel_span_id(span_id: UUID) -> int:
 
 
 def otel_span_id_to_uuid(otel_span_id: int) -> UUID:
-    """Derive a deterministic 128-bit NiriZan UUID span ID from a 64-bit integer OTel span ID[cite: 11].
+    """Derive a deterministic 128-bit NiriZan UUID span ID from a 64-bit integer OTel span ID.
 
-    Uses uuid5 with the fixed _NIRIZAN_SPAN_ID_NAMESPACE[cite: 11].
+    Uses `uuid5` with `_NIRIZAN_SPAN_ID_NAMESPACE` and the big-endian 8-byte binary
+    representation of the 64-bit span ID.
 
     Raises:
-        ValueError: If otel_span_id is not a valid non-zero 64-bit integer[cite: 11].
+        ValueError: If otel_span_id is not a valid non-zero 64-bit integer.
     """
     if not is_valid_otel_span_id(otel_span_id):
         raise ValueError(
             f"Invalid OTel span ID: {otel_span_id}. Must be a non-zero 64-bit integer."
         )
+    # Standardized on big-endian 8-byte serialization for cross-platform/cross-process determinism.
     span_bytes = otel_span_id.to_bytes(8, byteorder="big")
     return uuid5(_NIRIZAN_SPAN_ID_NAMESPACE, span_bytes)
