@@ -7,9 +7,9 @@ mapping span kinds, GenAI attributes, sequence attributes, and span context IDs.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Sequence
 from datetime import UTC, datetime
-import json
 from typing import TYPE_CHECKING, Any
 
 from opentelemetry import trace
@@ -359,7 +359,13 @@ def export_trace_to_otel(
     if tracer is None:
         tracer = _get_default_tracer()
 
-    raw_spans = getattr(trace_obj, "spans", trace_obj) or []
+    if hasattr(trace_obj, "spans"):
+        raw_spans: Sequence[Span | Any] = getattr(trace_obj, "spans") or []
+    elif isinstance(trace_obj, Sequence):
+        raw_spans = trace_obj
+    else:
+        raw_spans = []
+
     spans = _topological_sort_spans(raw_spans)
     session_id = getattr(trace_obj, "session_id", None)
     exported_spans: list[trace.Span] = []
