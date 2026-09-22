@@ -41,6 +41,8 @@ from nirizan.instrumentation.otel.semconv import (
     NIRIZAN_SPAN_KIND,
     NIRIZAN_TOOL_ARGUMENTS,
     NIRIZAN_TOOL_RESULT,
+    NIRIZAN_TRACE_ID,
+    NIRIZAN_TRACE_ID_SOURCE,
     OTEL_SAMPLED,
     OTEL_SPAN_ID,
     OTEL_STATUS_CODE,
@@ -93,7 +95,9 @@ class TraceSink(Protocol):
     event loop from the calling thread.
     """
 
-    def enqueue_trace(self, trace: Trace) -> None: ...
+    def enqueue_trace(self, trace: Trace) -> None:
+        """Hand a completed ``Trace`` to the sink's consumer."""
+        ...
 
 
 # ---------------------------------------------------------------------------
@@ -147,8 +151,44 @@ def _extract_nirizan_span_id(span: ReadableSpan, ctx: SpanContext) -> tuple[UUID
     return otel_span_id_to_uuid(ctx.span_id), SPAN_ID_SOURCE_DERIVED
 
 
-def _infer_span_kind(attrs: Mapping[str, Any]) -> SpanKind:
-    """Determine NiriZan ``SpanKind`` from an OTel span's attributes."""
+def _extract_nirizan_trace_id(
+    spans: Mapping[int, ReadableSpan], otel_trace_id: int
+) -> tuple[UUID, str]:
+    """Return ``(NiriZan trace_id, provenance source)`` for a buffered OTel trace.
+
+    Mirrors ``_extract_nirizan_span_id``: if any span in the buffer carries a
+    stashed ``nirizan.trace_id`` attribute (written by ``to_otel.py`` on every
+    span it exports), that value is recovered verbatim so a NiriZan trace that
+    is exported to OTel and later re-ingested keeps its original identity,
+    instead of silently receiving a new, unrelated trace_id derived from the
+    freshly-generated OTel trace id. Falls back to the derived mapping for
+    traces with no such attribute, which is the normal, correct case for a
+    trace that originated in a genuinely external OTel-instrumented app.
+    """
+    for span in spans.values():
+        attrs = getattr(span, "attributes", None) or {}
+        stashed = attrs.get(NIRIZAN_TRACE_ID)
+        if isinstance(stashed, str):
+            try:
+                return UUID(stashed), SPAN_ID_SOURCE_ROUNDTRIP
+            except (ValueError, AttributeError):
+                logger.debug(
+                    "Ignoring invalid nirizan.trace_id attribute '%s' found on span '%s'",
+                    stashed,
+                    getattr(span, "name", "<unnamed>"),
+                )
+    return otel_trace_id_to_uuid(otel_trace_id), SPAN_ID_SOURCE_DERIVED
+
+
+def _infer_span_kind(attrs: Mapping[str, Any]) -> SpanKind | None:
+    """Determine NiriZan ``SpanKind`` from an OTel span's attributes.
+
+    Returns ``None`` when the span carries no recognizable NiriZan or
+    ``gen_ai.*`` signal at all, rather than guessing. Callers decide what to
+    do with an unrecognized span via ``unrecognized_span_policy``; silently
+    defaulting every unrecognized span to ``GENERATION`` would pollute the
+    one kind NiriZan's trust and safety metrics read from.
+    """
     raw = attrs.get(NIRIZAN_SPAN_KIND)
     if isinstance(raw, str):
         normalized = raw.upper().split(".")[-1]
@@ -164,7 +204,7 @@ def _infer_span_kind(attrs: Mapping[str, Any]) -> SpanKind:
     if NIRIZAN_PLANNING_CONTEXT in attrs or NIRIZAN_PLANNING_OUTPUT in attrs:
         return SpanKind.PLANNING
 
-    return SpanKind.GENERATION
+    return None
 
 
 def _to_str_or_none(value: Any) -> str | None:
@@ -331,7 +371,12 @@ class NiriZanSpanProcessor:
         span: ReadableSpan,
         parent_context: Context | None = None,
     ) -> None:
-        """No-op: span start is not needed for trace assembly."""
+        """No-op: span start is not needed for trace assembly.
+
+        The buffer is populated in ``on_end`` because a span is only complete
+        once it has ended; there is no useful work to do on start.
+        """
+        pass
 
     def on_end(self, span: ReadableSpan) -> None:
         """Push a completed OTel span to the consumer thread."""
