@@ -1,4 +1,4 @@
-# src\nirizan\instrumentation\otel\semconv.py
+# src/nirizan/instrumentation/otel/semconv.py
 """Semantic conventions and attribute helpers for OpenTelemetry integration.
 
 This module defines standardized OpenTelemetry GenAI semantic conventions,
@@ -7,7 +7,7 @@ attribute sanitization / truncation helpers. It contains zero external package d
 """
 
 import json
-from typing import Sequence
+from collections.abc import Sequence
 
 __all__ = [
     "GEN_AI_COMPLETION",
@@ -50,7 +50,8 @@ __all__ = [
 ]
 
 # Upstream OpenTelemetry Semantic Conventions version standard.
-# Refers to OpenTelemetry Semantic Conventions v1.27.0 (GenAI conventions upstream are experimental).
+# Refers to OpenTelemetry Semantic Conventions v1.27.0
+# (GenAI conventions upstream are experimental).
 # Provenance: https://github.com/open-telemetry/semantic-conventions/releases/tag/v1.27.0
 SEMCONV_VERSION: str = "1.27.0"
 
@@ -74,9 +75,7 @@ NIRIZAN_SPAN_ID: str = "nirizan.span_id"
 NIRIZAN_SPAN_ID_SOURCE: str = "nirizan.span_id.source"
 NIRIZAN_TRACE_ID: str = "nirizan.trace_id"
 NIRIZAN_SPAN_KIND: str = "nirizan.span.kind"  # Dot-separated per Plan §3.1
-
-# OpenTelemetry Baggage Keys
-NIRIZAN_SESSION_ID: str = "nirizan.session_id"  # Propagated via OTel Baggage context
+NIRIZAN_SESSION_ID: str = "nirizan.session_id"  # Session identifier span attribute
 
 # Planning Span Attributes
 NIRIZAN_PLANNING_CONTEXT: str = "nirizan.planning.context"
