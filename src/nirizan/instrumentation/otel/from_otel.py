@@ -97,7 +97,7 @@ class TraceSink(Protocol):
 
     def enqueue_trace(self, trace: Trace) -> None:
         """Hand a completed ``Trace`` to the sink's consumer."""
-        ...
+        pass
 
 
 # ---------------------------------------------------------------------------
