@@ -9,8 +9,9 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any, Sequence
+from collections.abc import Sequence
+from datetime import UTC, datetime
+from typing import TYPE_CHECKING, Any
 
 from opentelemetry import trace
 from opentelemetry.trace import (
@@ -22,12 +23,19 @@ from opentelemetry.trace import (
 )
 from opentelemetry.trace.status import Status, StatusCode
 
-from nirizan.instrumentation.otel.id_mapping import (
-    SPAN_ID_SOURCE_DERIVED,
-    SPAN_ID_SOURCE_ROUNDTRIP,
-    uuid_to_otel_span_id,
-    uuid_to_otel_trace_id,
-)
+try:
+    from nirizan.instrumentation.otel.id_mapping import (
+        SPAN_ID_SOURCE_ROUNDTRIP,
+        uuid_to_otel_span_id,
+        uuid_to_otel_trace_id,
+    )
+except ImportError:
+    from nirizan.instrumentation.otel._id_mapping import (  # type: ignore[import-not-found, no-redef]
+        SPAN_ID_SOURCE_ROUNDTRIP,
+        uuid_to_otel_span_id,
+        uuid_to_otel_trace_id,
+    )
+
 from nirizan.instrumentation.otel.semconv import (
     GEN_AI_COMPLETION,
     GEN_AI_OPERATION_NAME,
@@ -56,7 +64,7 @@ from nirizan.instrumentation.otel.semconv import (
 )
 
 if TYPE_CHECKING:
-    from nirizan.instrumentation.spans import Span, Trace
+    from nirizan.instrumentation.spans import Trace
 
 logger = logging.getLogger(__name__)
 
@@ -84,7 +92,7 @@ def _to_nanoseconds(ts: Any) -> int | None:
         return int(ts * 1_000_000_000)
     if isinstance(ts, datetime):
         if ts.tzinfo is None:
-            ts = ts.replace(tzinfo=timezone.utc)
+            ts = ts.replace(tzinfo=UTC)
         return int(ts.timestamp() * 1_000_000_000)
     try:
         val = float(ts)
