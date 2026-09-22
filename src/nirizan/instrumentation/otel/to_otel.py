@@ -359,8 +359,9 @@ def export_trace_to_otel(
     if tracer is None:
         tracer = _get_default_tracer()
 
-    if hasattr(trace_obj, "spans"):
-        raw_spans: Sequence[Span | Any] = getattr(trace_obj, "spans") or []
+    spans_attr = getattr(trace_obj, "spans", None)
+    if spans_attr is not None:
+        raw_spans: Sequence[Span | Any] = spans_attr
     elif isinstance(trace_obj, Sequence):
         raw_spans = trace_obj
     else:
