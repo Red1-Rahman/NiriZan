@@ -50,7 +50,8 @@ __all__ = [
 ]
 
 # Upstream OpenTelemetry Semantic Conventions version standard.
-# Refers to OpenTelemetry Semantic Conventions v1.27.0 which stabilized initial GenAI conventions.
+# Refers to OpenTelemetry Semantic Conventions v1.27.0 (GenAI conventions upstream are experimental).
+# Provenance: https://github.com/open-telemetry/semantic-conventions/releases/tag/v1.27.0
 SEMCONV_VERSION: str = "1.27.0"
 
 # Attribute value limits and formatting defaults
@@ -68,12 +69,14 @@ GEN_AI_USAGE_COMPLETION_TOKENS: str = "gen_ai.usage.completion_tokens"
 GEN_AI_PROMPT: str = "gen_ai.prompt"
 GEN_AI_COMPLETION: str = "gen_ai.completion"
 
-# Custom NiriZan Domain Attributes (aligned with Plan §3.1)
+# Custom NiriZan Domain Attributes
 NIRIZAN_SPAN_ID: str = "nirizan.span_id"
 NIRIZAN_SPAN_ID_SOURCE: str = "nirizan.span_id.source"
 NIRIZAN_TRACE_ID: str = "nirizan.trace_id"
-NIRIZAN_SESSION_ID: str = "nirizan.session_id"  # Used as Baggage key or span attribute
 NIRIZAN_SPAN_KIND: str = "nirizan.span.kind"  # Dot-separated per Plan §3.1
+
+# OpenTelemetry Baggage Keys
+NIRIZAN_SESSION_ID: str = "nirizan.session_id"  # Propagated via OTel Baggage context
 
 # Planning Span Attributes
 NIRIZAN_PLANNING_CONTEXT: str = "nirizan.planning.context"
@@ -136,7 +139,13 @@ def truncate_attribute_value(
 
 
 def encode_sequence_key(key: str) -> str:
-    """Prefix an attribute key to identify it as a JSON-encoded sequence attribute."""
+    """Prefix an attribute key to identify it as a JSON-encoded sequence attribute.
+
+    Raises:
+        ValueError: If key is empty or whitespace-only.
+    """
+    if not key or not key.strip():
+        raise ValueError("Sequence key cannot be empty or whitespace-only.")
     if is_sequence_key(key):
         return key
     return f"{SEQ_ATTR_PREFIX}{key}"
@@ -158,10 +167,10 @@ def encode_sequence_attribute_value(
     sequence: Sequence[object],
     max_length: int = MAX_ATTR_VALUE_LENGTH,
 ) -> str:
-    """Serialize a sequence to a JSON string, keeping valid JSON structure if truncated.
+    """Serialize a sequence to a JSON string, strictly preserving valid JSON structure.
 
-    Attempts to trim tail items from the list before serializing to ensure the
-    resulting string remains valid JSON ending with a truncation marker element.
+    Attempts to trim tail items from the sequence until the serialized array fits
+    within `max_length` while ending with a `TRUNCATION_SUFFIX` element.
 
     Args:
         sequence: A sequence of values (e.g., list, tuple) to encode.
@@ -169,11 +178,19 @@ def encode_sequence_attribute_value(
 
     Returns:
         A JSON-formatted string representation of the sequence.
+
+    Raises:
+        ValueError: If max_length is too small to fit even a sentinel-only array as valid JSON.
+
+    Note:
+        `TRUNCATION_SUFFIX` is appended as a list item to mark truncation. If a real
+        sequence item equals `TRUNCATION_SUFFIX` exactly, consumers should check
+        total string length against limits if disambiguation is required.
     """
     items = list(sequence)
     try:
         raw_json = json.dumps(items, default=str)
-    except Exception:
+    except TypeError:
         items = [str(item) for item in items]
         raw_json = json.dumps(items)
 
@@ -189,5 +206,12 @@ def encode_sequence_attribute_value(
             return candidate_json
         trimmed.pop()
 
-    # Fallback if even a single item + sentinel cannot fit into max_length
-    return truncate_attribute_value(raw_json, max_length=max_length)
+    # Try sentinel-only array
+    sentinel_only = json.dumps([TRUNCATION_SUFFIX], default=str)
+    if len(sentinel_only) <= max_length:
+        return sentinel_only
+
+    raise ValueError(
+        f"Cannot encode sequence as valid JSON within max_length={max_length}; "
+        f"sentinel-only form requires {len(sentinel_only)} characters."
+    )
