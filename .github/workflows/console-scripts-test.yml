@@ -1,0 +1,247 @@
+name: Console Scripts Test
+
+# Manual trigger only, same policy as dependency-graph.yml: this never runs
+# as a side effect of a push or merge, only when someone starts it from the
+# Actions tab (or `gh workflow run console-scripts-test.yml`).
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux
+            os: ubuntu-latest
+            dir: console/linux
+            ext: sh
+            script: console/linux/generate-dependency-graph.sh
+          - name: macos
+            os: macos-latest
+            dir: console/macOS
+            ext: sh
+            script: console/macOS/generate-dependency-graph.sh
+          - name: windows
+            os: windows-latest
+            dir: console/windows
+            ext: ps1
+            script: console/windows/generate-dependency-graph.ps1
+    env:
+      OS_DIR: ${{ matrix.dir }}
+      EXT: ${{ matrix.ext }}
+      SCRIPT: ${{ matrix.script }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+
+      # ---------------------------------------------------------------
+      # Static checks: every script tracked in this OS's directory. The
+      # list comes from `git ls-files`, so new scripts are picked up
+      # automatically. Unix jobs also cover the shared top-level
+      # console/*.sh (chmod-all.sh).
+      # ---------------------------------------------------------------
+      - name: Hygiene of every script in the OS directory
+        shell: bash
+        run: |
+          list_scripts() {
+            git ls-files -- "$OS_DIR/*.$EXT"
+            if [ "$EXT" = "sh" ]; then
+              git ls-files -- ':(glob)console/*.sh'
+            fi
+          }
+
+          # An empty list means a wrong directory name (paths are
+          # case-sensitive on Linux), not a pass.
+          if [ -z "$(git ls-files -- "$OS_DIR/*.$EXT")" ]; then
+            echo "::error::No tracked *.$EXT files under $OS_DIR"
+            exit 1
+          fi
+
+          # The generated file must be committed, otherwise the diff checks
+          # further down would pass vacuously.
+          git ls-files --error-unmatch docs/dependency-graph.md
+
+          fail=0
+          while IFS= read -r f; do
+            [ -n "$f" ] || continue
+            echo "checking $f"
+            case "$f" in
+              *.sh)
+                mode="$(git ls-files --stage -- "$f" | cut -d' ' -f1)"
+                if [ "$mode" != "100755" ]; then
+                  echo "::error file=$f::executable bit missing in the Git index (mode $mode)"
+                  fail=1
+                fi
+                if ! head -n 1 "$f" | grep -q '^#!'; then
+                  echo "::error file=$f::missing shebang line"
+                  fail=1
+                fi
+                if git ls-files --eol -- "$f" | grep -q 'w/crlf'; then
+                  echo "::error file=$f::CRLF line endings (a shebang with CRLF fails to run)"
+                  fail=1
+                fi
+                ;;
+              *.ps1)
+                # Windows PowerShell 5.1 reads BOM-less files as ANSI, so
+                # keep these scripts ASCII-only.
+                if LC_ALL=C grep -q '[^[:print:][:space:]]' "$f"; then
+                  echo "::error file=$f::non-ASCII characters (breaks Windows PowerShell 5.1)"
+                  fail=1
+                fi
+                ;;
+            esac
+          done < <(list_scripts)
+
+          if git ls-files --eol -- docs/dependency-graph.md | grep -q 'w/crlf'; then
+            echo "::error::docs/dependency-graph.md checked out with CRLF (check .gitattributes)"
+            fail=1
+          fi
+          exit "$fail"
+
+      - name: Syntax check every .sh (Linux, macOS)
+        if: runner.os != 'Windows'
+        run: |
+          fail=0
+          while IFS= read -r f; do
+            [ -n "$f" ] || continue
+            echo "bash -n $f"
+            bash -n "$f" || fail=1
+            # Stock macOS ships bash 3.2; parse with it as well.
+            if [ "$RUNNER_OS" = "macOS" ]; then
+              /bin/bash -n "$f" || fail=1
+            fi
+          done < <(git ls-files -- "$OS_DIR/*.sh" ':(glob)console/*.sh')
+          exit "$fail"
+
+      - name: shellcheck every .sh in console/ (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          command -v shellcheck >/dev/null || sudo apt-get install -y shellcheck
+          git ls-files -z -- 'console/*.sh' | xargs -0 shellcheck
+
+      - name: Parse every .ps1 in Windows PowerShell 5.1 (Windows)
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          $Failed = $false
+          foreach ($File in (git ls-files -- "$env:OS_DIR/*.ps1")) {
+              $Tokens = $null
+              $Errors = $null
+              [void][System.Management.Automation.Language.Parser]::ParseFile(
+                  (Resolve-Path $File).Path, [ref]$Tokens, [ref]$Errors)
+              if ($Errors.Count -gt 0) {
+                  foreach ($Err in $Errors) {
+                      Write-Host "::error file=$File,line=$($Err.Extent.StartLineNumber)::$($Err.Message)"
+                  }
+                  $Failed = $true
+              }
+              else {
+                  Write-Host "parsed ok: $File"
+              }
+          }
+          if ($Failed) { exit 1 }
+
+      - name: Parse every .ps1 in PowerShell 7 (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $Failed = $false
+          foreach ($File in (git ls-files -- "$env:OS_DIR/*.ps1")) {
+              $Tokens = $null
+              $Errors = $null
+              [void][System.Management.Automation.Language.Parser]::ParseFile(
+                  (Resolve-Path $File).Path, [ref]$Tokens, [ref]$Errors)
+              if ($Errors.Count -gt 0) {
+                  foreach ($Err in $Errors) {
+                      Write-Host "::error file=$File,line=$($Err.Extent.StartLineNumber)::$($Err.Message)"
+                  }
+                  $Failed = $true
+              }
+              else {
+                  Write-Host "parsed ok: $File"
+              }
+          }
+          if ($Failed) { exit 1 }
+
+      # ---------------------------------------------------------------
+      # Functional checks for the two scripts whose behavior is known.
+      # Each run deletes the generated file first, so the wrapper has to
+      # recreate it, then requires a byte-identical match with the
+      # committed version. That proves local output equals CI output.
+      # ---------------------------------------------------------------
+      - name: Run wrapper (Linux, macOS)
+        if: runner.os != 'Windows'
+        run: |
+          rm -f docs/dependency-graph.md
+          "./$SCRIPT"
+          git diff --exit-code -- docs/dependency-graph.md
+
+      - name: Run wrapper from another directory (Linux, macOS)
+        if: runner.os != 'Windows'
+        run: |
+          rm -f docs/dependency-graph.md
+          cd "$RUNNER_TEMP"
+          "$GITHUB_WORKSPACE/$SCRIPT"
+          cd "$GITHUB_WORKSPACE"
+          git diff --exit-code -- docs/dependency-graph.md
+
+      # Runners put a newer bash first on PATH, so call the system bash 3.2
+      # explicitly to cover what a stock Mac actually runs.
+      - name: Run wrapper and chmod-all under system bash 3.2 (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          /bin/bash --version | head -n 1
+          rm -f docs/dependency-graph.md
+          /bin/bash "$SCRIPT"
+          git diff --exit-code -- docs/dependency-graph.md
+          /bin/bash console/chmod-all.sh
+
+      - name: Test chmod-all.sh (Linux, macOS)
+        if: runner.os != 'Windows'
+        run: |
+          git ls-files -z -- "$OS_DIR/*.sh" | xargs -0 chmod -x
+          ./console/chmod-all.sh
+          while IFS= read -r f; do
+            [ -x "$f" ] || { echo "::error file=$f::still not executable"; exit 1; }
+          done < <(git ls-files -- "$OS_DIR/*.sh")
+          second="$(./console/chmod-all.sh)"
+          echo "$second"
+          echo "$second" | grep -q ' 0 change(s)'
+          git diff --exit-code
+
+      - name: Run wrapper in Windows PowerShell 5.1 (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Remove-Item docs/dependency-graph.md -Force -ErrorAction SilentlyContinue
+          powershell -NoProfile -ExecutionPolicy Bypass -File $env:SCRIPT
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          git diff --exit-code -- docs/dependency-graph.md
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Run wrapper in PowerShell 7 from another directory (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Remove-Item docs/dependency-graph.md -Force -ErrorAction SilentlyContinue
+          $Script = Join-Path $env:GITHUB_WORKSPACE $env:SCRIPT
+          Push-Location $env:RUNNER_TEMP
+          pwsh -NoProfile -ExecutionPolicy Bypass -File $Script
+          $Code = $LASTEXITCODE
+          Pop-Location
+          if ($Code -ne 0) { exit $Code }
+          git diff --exit-code -- docs/dependency-graph.md
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
