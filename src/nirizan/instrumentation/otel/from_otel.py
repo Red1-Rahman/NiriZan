@@ -27,6 +27,11 @@ Trace assembly proceeds in passes over a buffered trace's spans:
    from the already-resolved kind and parent, so every field required by
    the ``Span`` model is non-optional and the model's strict validation is
    an assertion of correctness rather than an incidental drop mechanism.
+
+Span ordering and root selection within a trace are made deterministic by
+sorting kept spans on ``(start_time, otel_span_id)`` before Pass 4 and
+before root/``application_name`` resolution, rather than relying on
+``set`` iteration order (see ``_assemble_trace``).
 """
 
 from __future__ import annotations
@@ -34,7 +39,7 @@ from __future__ import annotations
 import queue
 import threading
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, datetime
 from typing import Any, Literal, Protocol
 from uuid import UUID
@@ -96,6 +101,19 @@ _SHUTDOWN_SENTINEL: object = object()
 
 _RECENT_FLUSHES_MAX: int = 10_000
 _MAX_SPAN_NAME_LENGTH: int = 200
+
+# Default cap on the internal span queue. Bounds worst-case memory when a
+# sink is slow or producers sustain a high span rate; on_end() degrades to
+# dropping spans (counted via the "queue_full" stat) rather than growing
+# without limit. Callers with a known higher sustained throughput can raise
+# this via NiriZanSpanProcessor's max_queue_size parameter.
+_DEFAULT_MAX_QUEUE_SIZE: int = 50_000
+
+# Minimum interval, in seconds, between "queue full" warning log lines.
+# Under sustained overload this event can fire on every single on_end()
+# call; without rate limiting that would itself become a logging-volume
+# problem on top of the span loss it is reporting.
+_QUEUE_FULL_WARNING_INTERVAL_SECONDS: float = 5.0
 
 # Internal signal tags used by _resolve_parents' upward walk. Not part of
 # the module's public surface; module-level only so _resolve_parents' inner
@@ -527,6 +545,7 @@ class NiriZanSpanProcessor:
         idle_timeout_seconds: float = 5.0,
         max_trace_age_seconds: float = 300.0,
         max_buffered_traces: int = 1000,
+        max_queue_size: int = _DEFAULT_MAX_QUEUE_SIZE,
         orphan_policy: Literal["emit", "drop"] = "emit",
         unrecognized_span_policy: Literal["drop", "generation"] = "drop",
         clock: Callable[[], float] = time.monotonic,
@@ -537,6 +556,8 @@ class NiriZanSpanProcessor:
             raise ValueError("max_trace_age_seconds must be greater than idle_timeout_seconds.")
         if max_buffered_traces < 1:
             raise ValueError("max_buffered_traces must be at least 1.")
+        if max_queue_size < 1:
+            raise ValueError("max_queue_size must be at least 1.")
         if orphan_policy not in ("emit", "drop"):
             raise ValueError("orphan_policy must be 'emit' or 'drop'.")
         if unrecognized_span_policy not in ("drop", "generation"):
@@ -546,16 +567,30 @@ class NiriZanSpanProcessor:
         self._idle_timeout = idle_timeout_seconds
         self._max_age = max_trace_age_seconds
         self._max_buffered = max_buffered_traces
+        self._max_queue_size = max_queue_size
         self._orphan_policy = orphan_policy
         self._unrecognized_span_policy = unrecognized_span_policy
         self._clock = clock
 
-        self._queue: queue.Queue[Any] = queue.Queue()
+        # Bounded so a slow sink or a sustained high span rate degrades to
+        # counted span loss (see on_end's queue.Full handling) instead of
+        # unbounded memory growth. See _consume_loop / _buffer_span for the
+        # periodic-sweep logic that keeps _buffers bounded even while this
+        # queue never goes empty.
+        self._queue: queue.Queue[Any] = queue.Queue(maxsize=max_queue_size)
         self._buffers: dict[int, _TraceBuffer] = {}
         self._recent_flushes: dict[int, None] = {}
         self._stats: dict[str, int] = {}
         self._stats_lock = threading.Lock()
         self._shutdown = threading.Event()
+
+        # Timestamp of the last idle/age sweep, used to force a periodic
+        # sweep even when the queue never empties (see _consume_loop).
+        self._last_sweep: float = self._clock()
+
+        # Timestamp of the last "queue full" warning log, used to rate-limit
+        # that warning under sustained overload (see on_end).
+        self._last_queue_full_warning: float = 0.0
 
         self._consumer = threading.Thread(
             target=self._consume_loop,
@@ -576,10 +611,12 @@ class NiriZanSpanProcessor:
 
         logger.debug(
             "NiriZanSpanProcessor started (idle=%.1fs, max_age=%.1fs, "
-            "max_buffered=%d, orphan_policy=%s, unrecognized_span_policy=%s)",
+            "max_buffered=%d, max_queue_size=%d, orphan_policy=%s, "
+            "unrecognized_span_policy=%s)",
             idle_timeout_seconds,
             max_trace_age_seconds,
             max_buffered_traces,
+            max_queue_size,
             orphan_policy,
             unrecognized_span_policy,
         )
@@ -599,11 +636,34 @@ class NiriZanSpanProcessor:
         pass
 
     def on_end(self, span: ReadableSpan) -> None:
-        """Push a completed OTel span to the consumer thread."""
+        """Push a completed OTel span to the consumer thread.
+
+        The queue is bounded (see ``max_queue_size``). If the consumer
+        cannot keep up -- a slow sink, or a sustained span rate above what
+        the consumer thread can buffer and assemble -- ``put_nowait`` raises
+        ``queue.Full`` and the span is dropped rather than the queue growing
+        without limit. The drop is counted under the ``"queue_full"`` stat
+        (see ``get_stats``) and logged at a rate-limited interval so a
+        sustained overload does not itself become a logging-volume problem.
+        """
         if self._shutdown.is_set():
             return
         try:
             self._queue.put_nowait(span)
+        except queue.Full:
+            self._record_stat("queue_full")
+            now = self._clock()
+            if now - self._last_queue_full_warning >= _QUEUE_FULL_WARNING_INTERVAL_SECONDS:
+                self._last_queue_full_warning = now
+                logger.warning(
+                    "NiriZanSpanProcessor queue is full (max_queue_size=%d); "
+                    "dropping OTel span '%s'. This warning is rate-limited "
+                    "to once per %.0fs; see get_stats()['queue_full'] for "
+                    "the total count.",
+                    self._max_queue_size,
+                    getattr(span, "name", "<unnamed>"),
+                    _QUEUE_FULL_WARNING_INTERVAL_SECONDS,
+                )
         except Exception:
             logger.exception("Failed to enqueue OTel span in NiriZanSpanProcessor")
 
@@ -625,12 +685,15 @@ class NiriZanSpanProcessor:
         this call are not included; ``force_flush`` is a barrier over the
         current buffer, not a promise about future spans.
 
-        Returns ``True`` if the flush completed before ``timeout_millis``,
-        ``False`` otherwise (including when the processor has already been
-        shut down).
+        Returns ``True`` if the flush completed before ``timeout_millis``.
+        Returns ``False`` otherwise, including when the processor has
+        already been shut down: once shutdown has run, there is no
+        consumer thread left to service a new flush request, so no flush
+        guarantee can be made and the safe answer is ``False`` rather than
+        a ``True`` the caller cannot actually rely on.
         """
         if self._shutdown.is_set():
-            return True
+            return False
 
         done_event = threading.Event()
         self._queue.put_nowait((_FLUSH_SENTINEL, done_event))
@@ -642,8 +705,8 @@ class NiriZanSpanProcessor:
         Safe to call from any thread. Current reasons: ``invalid_span_context``,
         ``invalid_trace_id``, ``invalid_span_id``, ``late_arrival``,
         ``duplicate_span_id``, ``unrecognized_kind``, ``orphan_parent_missing``,
-        ``conversion_error``. Absence of a key means that reason has not
-        occurred yet, not that it is impossible.
+        ``conversion_error``, ``queue_full``. Absence of a key means that
+        reason has not occurred yet, not that it is impossible.
         """
         with self._stats_lock:
             return dict(self._stats)
@@ -655,12 +718,23 @@ class NiriZanSpanProcessor:
     # -- Consumer thread --------------------------------------------------------
 
     def _consume_loop(self) -> None:
-        """Drain the queue, buffer spans, flush traces on idle or age."""
+        """Drain the queue, buffer spans, flush traces on idle or age.
+
+        Sweeping and buffer-cap enforcement must not depend solely on the
+        queue becoming empty: under a sustained span rate, or when the sink
+        is slow enough that each flush delays the consumer, the queue may
+        never empty. So in addition to the empty-queue check, a sweep is
+        forced whenever at least half the idle timeout has elapsed since
+        the last sweep, and the buffer cap is enforced after every single
+        insert (cheap when already under the cap) rather than only when
+        the queue drains.
+        """
         while not self._shutdown.is_set():
             try:
                 item = self._queue.get(timeout=self._idle_timeout / 2.0)
             except queue.Empty:
                 self._sweep_idle_traces()
+                self._last_sweep = self._clock()
                 continue
 
             if item is _SHUTDOWN_SENTINEL:
@@ -674,9 +748,16 @@ class NiriZanSpanProcessor:
                 continue
 
             self._buffer_span(item)
-            if self._queue.empty():
+
+            # Buffer-cap enforcement is O(1) when already under the cap, so
+            # it is safe (and necessary, under sustained load) to run this
+            # after every insert rather than only when the queue drains.
+            self._enforce_buffer_cap()
+
+            now = self._clock()
+            if self._queue.empty() or (now - self._last_sweep) >= self._idle_timeout / 2.0:
+                self._last_sweep = now
                 self._sweep_idle_traces()
-                self._enforce_buffer_cap()
 
         # Shutdown drain: process any remaining spans, collect pending flush
         # requests, run the final flush, then unblock the waiters. Setting
@@ -865,7 +946,14 @@ class NiriZanSpanProcessor:
         resolution = _resolve_parents(buf, kind_map, self._orphan_policy)
 
         parent_map: dict[int, UUID | None] = {}
-        kept_ids: set[int] = set()
+        # kept_ids is a list, not a set: Trace.spans is documented as an
+        # *ordered* collection, and when a trace has more than one
+        # effective root (a promoted orphan alongside a true root, or two
+        # halves of a severed cycle), the iteration order used below to
+        # pick the emitted root and application_name must be deterministic
+        # rather than dependent on set/hash iteration order. The list is
+        # sorted by (start_time, otel_span_id) right after this loop.
+        kept_ids: list[int] = []
         for otel_span_id in kind_map:
             if otel_span_id not in id_map:
                 continue
@@ -892,19 +980,30 @@ class NiriZanSpanProcessor:
                 )
             else:
                 parent_map[otel_span_id] = id_map[ancestor_id]
-            kept_ids.add(otel_span_id)
+            kept_ids.append(otel_span_id)
 
         if not kept_ids:
             return None
 
-        # Root resolution runs on the filtered set only, so application_name
-        # can't degrade to "unknown" just because the original root was
-        # dropped while a perfectly good service.name exists one level down.
+        # Deterministic ordering: sort by (start_time, otel_span_id) so the
+        # emitted Trace.spans order, the chosen root, and application_name
+        # are all reproducible across runs and independent of hash/insertion
+        # order. start_time can be None on a malformed ReadableSpan (hence
+        # the `or 0` fallback); otel_span_id is the tiebreaker for spans
+        # that share a start_time.
+        kept_ids.sort(key=lambda oid: (buf.spans[oid].start_time or 0, oid))
+
+        # Root resolution runs on the filtered, ordered set only, so
+        # application_name can't degrade to "unknown" just because the
+        # original root was dropped while a perfectly good service.name
+        # exists one level down, and can't vary run-to-run when more than
+        # one effective root is present.
         root_span = self._find_root_span(buf, kept_ids, parent_map)
         application_name = self._resolve_application_name(buf, kept_ids, root_span)
         session_id = self._find_session_id({oid: buf.spans[oid] for oid in kept_ids})
 
-        # Pass 4: build the final NiriZan Span objects from fully-resolved data.
+        # Pass 4: build the final NiriZan Span objects from fully-resolved
+        # data, in the same deterministic order as kept_ids.
         nirizan_spans: list[Span] = []
         for otel_span_id in kept_ids:
             converted = self._convert_span(
@@ -933,7 +1032,7 @@ class NiriZanSpanProcessor:
     @staticmethod
     def _find_root_span(
         buf: _TraceBuffer,
-        kept_ids: set[int],
+        kept_ids: Sequence[int],
         parent_map: Mapping[int, UUID | None],
     ) -> ReadableSpan | None:
         """Return the first surviving span with no effective parent.
@@ -942,6 +1041,13 @@ class NiriZanSpanProcessor:
         filtering and re-parenting. If the original root was dropped, the
         promoted orphan that inherits its position (``parent_map[...] is
         None``) is returned instead.
+
+        ``kept_ids`` must already be in a deterministic order (see
+        ``_assemble_trace``'s sort by ``(start_time, otel_span_id)``), so
+        that when more than one effective root exists -- a promoted orphan
+        alongside a true root, or either half of a severed cycle -- the
+        choice made here is reproducible rather than dependent on
+        set/hash iteration order.
         """
         for otel_span_id in kept_ids:
             if parent_map.get(otel_span_id) is None:
@@ -962,9 +1068,16 @@ class NiriZanSpanProcessor:
     def _resolve_application_name(
         self,
         buf: _TraceBuffer,
-        kept_ids: set[int],
+        kept_ids: Sequence[int],
         root_span: ReadableSpan | None,
     ) -> str:
+        """Resolve the trace's ``application_name`` from ``service.name``.
+
+        ``kept_ids`` must already be in the same deterministic order used
+        by ``_find_root_span``, so the fallback scan below picks the same
+        span on every run when more than one candidate carries a
+        ``service.name`` resource attribute.
+        """
         if root_span is not None:
             name = self._get_service_name(root_span)
             if name:
