@@ -1,4 +1,4 @@
-# src\nirizan\instrumentation\tracer.py
+# src/nirizan/instrumentation/tracer.py
 from contextlib import asynccontextmanager
 import contextvars
 from dataclasses import dataclass
@@ -60,11 +60,14 @@ class Tracer:
         input_payload: str | None = None,
     ) -> AsyncGenerator[SpanHandle, None]:
         """Open, track, and close an execution span; yields a SpanHandle for setting output_payload before the block exits."""
-        trace_id = _CURRENT_TRACE_ID.get()
-        is_root = trace_id is None
+        existing_trace_id = _CURRENT_TRACE_ID.get()
+        is_root = existing_trace_id is None
+        # A ternary narrows cleanly for mypy: trace_id is UUID whichever
+        # branch is taken, so the Span(...) constructor below needs no
+        # `# type: ignore` to accept it.
+        trace_id: UUID = existing_trace_id if existing_trace_id is not None else uuid4()
 
         if is_root:
-            trace_id = uuid4()
             _CURRENT_TRACE_ID.set(trace_id)
 
         parent_span_id = _CURRENT_SPAN_ID.get()
@@ -91,7 +94,7 @@ class Tracer:
 
             completed_span = Span(
                 span_id=span_id,
-                trace_id=trace_id,  # type: ignore[arg-type]
+                trace_id=trace_id,
                 parent_span_id=parent_span_id,
                 kind=kind,
                 name=name,
