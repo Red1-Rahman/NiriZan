@@ -497,7 +497,8 @@ class NiriZanSpanProcessor(SpanProcessor):
         try:
             self._queue.put_nowait((_START_MARKER, ctx.trace_id, self._clock()))
         except queue.Full:
-            pass
+            # Drop start marker non-blocking on queue saturation to avoid stalling app execution
+            self._record_stat("queue_full")
 
     def on_end(self, span: ReadableSpan) -> None:
         """Push a completed OTel span to the consumer thread."""
@@ -526,7 +527,7 @@ class NiriZanSpanProcessor(SpanProcessor):
             self._queue.put_nowait(_SHUTDOWN_SENTINEL)
         except queue.Full:
             # Saturated queue; consumer thread will observe self._shutdown on next timeout
-            pass
+            self._record_stat("queue_full")
 
         self._consumer.join(timeout=5.0)
         if self._consumer.is_alive():
