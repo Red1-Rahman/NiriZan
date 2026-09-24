@@ -33,6 +33,8 @@ from nirizan.instrumentation.otel.semconv import (
     GEN_AI_RESPONSE_MODEL,
     GEN_AI_SYSTEM,
     GEN_AI_USAGE_COMPLETION_TOKENS,
+    GEN_AI_USAGE_INPUT_TOKENS,
+    GEN_AI_USAGE_OUTPUT_TOKENS,
     GEN_AI_USAGE_PROMPT_TOKENS,
     MAX_ATTR_VALUE_LENGTH,
     NIRIZAN_PLANNING_CONTEXT,
@@ -123,7 +125,31 @@ def convert_span_to_otel_attributes(
     if trace_id_str:
         attributes[NIRIZAN_TRACE_ID] = trace_id_str
 
-    attributes[NIRIZAN_SPAN_ID_SOURCE] = getattr(span, "span_id_source", SPAN_ID_SOURCE_ROUNDTRIP)
+    # Span ID provenance ("roundtrip" vs "derived").
+    #
+    # The real NiriZan `Span` pydantic model has no `span_id_source` field:
+    # from_otel.py's ingestion path stashes this value in
+    # span.attributes[NIRIZAN_SPAN_ID_SOURCE] (see _convert_attributes in
+    # from_otel.py), not as a top-level model attribute. Reading only
+    # getattr(span, "span_id_source", ...) therefore always misses on a real
+    # Span and silently falls back to "roundtrip" even for a span whose ID
+    # was derived at ingestion, re-exporting it with the wrong provenance.
+    #
+    # Precedence, most authoritative first:
+    #   1. span.attributes[NIRIZAN_SPAN_ID_SOURCE] -- where ingestion
+    #      actually records it.
+    #   2. getattr(span, "span_id_source", None) -- kept for forward
+    #      compatibility, in case a future Span variant (or a caller's
+    #      duck-typed object) does carry this as a real attribute.
+    #   3. SPAN_ID_SOURCE_ROUNDTRIP -- the correct default for a span that
+    #      originated natively in NiriZan and was never round-tripped
+    #      through OTel at all.
+    span_attrs = getattr(span, "attributes", None) or {}
+    attributes[NIRIZAN_SPAN_ID_SOURCE] = (
+        span_attrs.get(NIRIZAN_SPAN_ID_SOURCE)
+        or getattr(span, "span_id_source", None)
+        or SPAN_ID_SOURCE_ROUNDTRIP
+    )
 
     # Span Kind
     raw_kind = getattr(span, "kind", "SPAN")
@@ -161,16 +187,28 @@ def convert_span_to_otel_attributes(
             attributes[GEN_AI_REQUEST_MODEL] = str(model_name)
             attributes[GEN_AI_RESPONSE_MODEL] = str(model_name)
 
+        # Token usage attributes.
+        #
+        # Upstream semantic conventions v1.27.0 (SEMCONV_VERSION) renamed
+        # gen_ai.usage.prompt_tokens/completion_tokens to
+        # gen_ai.usage.input_tokens/output_tokens. Both the new (canonical)
+        # and old (pre-rename) keys are emitted for one release so that any
+        # existing consumer still reading the old names is not silently
+        # broken by this change; the old keys and this dual-emit should be
+        # removed together once consumers have migrated. See semconv.py's
+        # comment on GEN_AI_USAGE_INPUT_TOKENS for the full rationale.
         prompt_tokens = custom_attrs.get("prompt_tokens") or custom_attrs.get(
             GEN_AI_USAGE_PROMPT_TOKENS
         )
         if isinstance(prompt_tokens, int):
+            attributes[GEN_AI_USAGE_INPUT_TOKENS] = prompt_tokens
             attributes[GEN_AI_USAGE_PROMPT_TOKENS] = prompt_tokens
 
         completion_tokens = custom_attrs.get("completion_tokens") or custom_attrs.get(
             GEN_AI_USAGE_COMPLETION_TOKENS
         )
         if isinstance(completion_tokens, int):
+            attributes[GEN_AI_USAGE_OUTPUT_TOKENS] = completion_tokens
             attributes[GEN_AI_USAGE_COMPLETION_TOKENS] = completion_tokens
 
         attributes[GEN_AI_OPERATION_NAME] = "chat"
