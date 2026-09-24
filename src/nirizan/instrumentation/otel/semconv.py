@@ -17,6 +17,8 @@ __all__ = [
     "GEN_AI_RESPONSE_MODEL",
     "GEN_AI_SYSTEM",
     "GEN_AI_USAGE_COMPLETION_TOKENS",
+    "GEN_AI_USAGE_INPUT_TOKENS",
+    "GEN_AI_USAGE_OUTPUT_TOKENS",
     "GEN_AI_USAGE_PROMPT_TOKENS",
     "MAX_ATTR_VALUE_LENGTH",
     "NIRIZAN_PLANNING_CONTEXT",
@@ -66,8 +68,29 @@ GEN_AI_SYSTEM: str = "gen_ai.system"
 GEN_AI_OPERATION_NAME: str = "gen_ai.operation.name"
 GEN_AI_REQUEST_MODEL: str = "gen_ai.request.model"
 GEN_AI_RESPONSE_MODEL: str = "gen_ai.response.model"
+
+# Token usage attributes.
+#
+# v1.27.0 of the upstream semantic conventions (the version SEMCONV_VERSION
+# pins above) renamed these from gen_ai.usage.prompt_tokens /
+# gen_ai.usage.completion_tokens to gen_ai.usage.input_tokens /
+# gen_ai.usage.output_tokens, "to align terminology between spans and
+# metrics". See:
+# https://github.com/open-telemetry/semantic-conventions/releases/tag/v1.27.0
+#
+# GEN_AI_USAGE_INPUT_TOKENS / GEN_AI_USAGE_OUTPUT_TOKENS are the current
+# (v1.27.0+) names and are what to_otel.py's exporter treats as canonical.
+# GEN_AI_USAGE_PROMPT_TOKENS / GEN_AI_USAGE_COMPLETION_TOKENS are kept as
+# the pre-rename names: to_otel.py emits both old and new keys for one
+# release so that any existing consumer still reading the old names is not
+# silently broken by this change. The old constants and the dual-emit
+# should be removed together in a follow-up release once consumers have
+# had time to move to the new names.
+GEN_AI_USAGE_INPUT_TOKENS: str = "gen_ai.usage.input_tokens"
+GEN_AI_USAGE_OUTPUT_TOKENS: str = "gen_ai.usage.output_tokens"
 GEN_AI_USAGE_PROMPT_TOKENS: str = "gen_ai.usage.prompt_tokens"
 GEN_AI_USAGE_COMPLETION_TOKENS: str = "gen_ai.usage.completion_tokens"
+
 GEN_AI_PROMPT: str = "gen_ai.prompt"
 GEN_AI_COMPLETION: str = "gen_ai.completion"
 
