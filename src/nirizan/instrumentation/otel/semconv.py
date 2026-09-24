@@ -32,6 +32,7 @@ __all__ = [
     "NIRIZAN_TOOL_NAME",
     "NIRIZAN_TOOL_RESULT",
     "NIRIZAN_TRACE_ID",
+    "NIRIZAN_TRACE_ID_SOURCE",
     "OTEL_SAMPLED",
     "OTEL_SPAN_ID",
     "OTEL_STATUS_CODE",
@@ -74,6 +75,7 @@ GEN_AI_COMPLETION: str = "gen_ai.completion"
 NIRIZAN_SPAN_ID: str = "nirizan.span_id"
 NIRIZAN_SPAN_ID_SOURCE: str = "nirizan.span_id.source"
 NIRIZAN_TRACE_ID: str = "nirizan.trace_id"
+NIRIZAN_TRACE_ID_SOURCE: str = "nirizan.trace_id.source"
 NIRIZAN_SPAN_KIND: str = "nirizan.span.kind"  # Dot-separated per Plan §3.1
 NIRIZAN_SESSION_ID: str = "nirizan.session_id"  # Session identifier span attribute
 
@@ -91,7 +93,18 @@ NIRIZAN_TOOL_NAME: str = "nirizan.tool.name"
 NIRIZAN_TOOL_ARGUMENTS: str = "nirizan.tool.arguments"
 NIRIZAN_TOOL_RESULT: str = "nirizan.tool.result"
 
-# Span ID Provenance Identifiers
+# Span/Trace ID Provenance Identifiers
+#
+# These two values are reused as the value for both NIRIZAN_SPAN_ID_SOURCE
+# and NIRIZAN_TRACE_ID_SOURCE. The two questions they answer -- "was this id
+# recovered from a stashed nirizan.* attribute, or freshly derived from the
+# OTel id?" -- are identical in kind; only the id being described differs.
+# Span-level and trace-level provenance are still tracked as two separate
+# *attributes* (NIRIZAN_SPAN_ID_SOURCE vs NIRIZAN_TRACE_ID_SOURCE) because
+# they can genuinely disagree: a trace re-ingested from a stashed
+# nirizan.trace_id can still contain one child span that arrived from a
+# genuinely external system and had no stashed nirizan.span_id, so its
+# span_id must be derived even though the trace_id round-tripped.
 SPAN_ID_SOURCE_ROUNDTRIP: str = "roundtrip"
 SPAN_ID_SOURCE_DERIVED: str = "derived"
 
