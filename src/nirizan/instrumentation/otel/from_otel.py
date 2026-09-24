@@ -5,6 +5,21 @@ This module implements the OTel -> NiriZan direction of the bridge. It hooks
 into the OpenTelemetry SDK through the ``SpanProcessor`` interface and
 produces plain NiriZan ``Trace`` objects, indistinguishable at the type level
 from traces assembled by NiriZan's own ``Tracer``.
+
+Trace assembly proceeds in three passes over a buffered trace's spans:
+
+1. Kind classification (``_infer_span_kind`` plus ``unrecognized_span_policy``)
+   decides which spans are candidates for emission at all.
+2. Parent resolution (``_ParentResolver``) walks each candidate's OTel parent
+   chain, transparently skipping any ancestor that will not be emitted --
+   whether because its kind was unrecognized, or because it is itself an
+   orphan under ``orphan_policy="drop"`` -- so a span is re-parented onto the
+   nearest surviving ancestor, or promoted to root if every ancestor was
+   skipped.
+3. Conversion (``_convert_span``) builds the final NiriZan ``Span`` objects
+   from the already-resolved kind and parent, so every value handed to the
+   ``Span`` constructor is non-optional and the model never fails validation
+   on data this module itself derived.
 """
 
 from __future__ import annotations
@@ -14,7 +29,7 @@ import threading
 import time
 from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
-from typing import Any, Literal, Protocol
+from typing import Any, Literal, NamedTuple, Protocol
 from uuid import UUID
 
 from opentelemetry.context import Context
@@ -247,6 +262,7 @@ def _convert_attributes(
     service_name: str | None,
     span_id_hex: str | None,
     span_id_source: str,
+    trace_id_source: str,
     sampled: bool | None,
     trace_state: str | None,
     status_code: str | None,
@@ -274,6 +290,7 @@ def _convert_attributes(
     if span_id_hex:
         result[OTEL_SPAN_ID] = span_id_hex
     result[NIRIZAN_SPAN_ID_SOURCE] = span_id_source
+    result[NIRIZAN_TRACE_ID_SOURCE] = trace_id_source
     if sampled is not None:
         result[OTEL_SAMPLED] = sampled
     if trace_state:
@@ -302,12 +319,138 @@ class _TraceBuffer:
         self.first_seen = now
         self.last_seen = now
 
-    def add(self, span: ReadableSpan, now: float) -> None:
+    def add(self, span: ReadableSpan, now: float) -> bool:
+        """Add a span to the buffer, keyed by its OTel span_id.
+
+        Policy: last-write-wins. If a span with the same OTel span_id has
+        already been buffered for this trace, it is silently replaced.
+
+        Returns:
+            ``True`` if this call overwrote an existing entry for the same
+            span_id (a duplicate span_id within one trace), ``False``
+            otherwise. This method does not itself log or record metrics for
+            a duplicate; callers that care (e.g. to warn or increment a
+            stats counter) should act on the return value, keeping this
+            class a plain data structure with no logging side effects.
+        """
         ctx = _get_span_context(span)
         if ctx is None:
-            return
+            return False
+        is_duplicate = ctx.span_id in self.spans
         self.spans[ctx.span_id] = span
         self.last_seen = now
+        return is_duplicate
+
+
+# ---------------------------------------------------------------------------
+# Parent resolution
+# ---------------------------------------------------------------------------
+
+
+class _ParentResolution(NamedTuple):
+    """Where a span's effective OTel parent chain bottoms out.
+
+    - ``"root"``: no parent at all; ``ref`` is ``None``.
+    - ``"real"``: the nearest ancestor that will itself be emitted as a
+      NiriZan ``Span``; ``ref`` is that ancestor's OTel span_id.
+    - ``"synthetic"``: the chain runs into a parent reference that never
+      arrived in this buffer; ``ref`` is that missing parent's OTel span_id.
+    """
+
+    status: Literal["root", "real", "synthetic"]
+    ref: int | None
+
+
+class _ParentResolver:
+    """Resolves each span's effective parent for one buffered OTel trace.
+
+    Walks each span's raw OTel parent pointer upward, transparently skipping
+    over any ancestor that will not itself be emitted -- either because its
+    kind could not be recognized (``unrecognized_span_policy="drop"``), or
+    because it is itself an orphan under ``orphan_policy="drop"``. This
+    implements "re-parent orphans whose parent was dropped" and "an orphaned
+    root becomes the new root": a span whose immediate parent is skipped is
+    attributed to the nearest surviving ancestor, or promoted to root if
+    every ancestor in its chain was skipped.
+
+    Every span's chain shares exactly one physical parent pointer per node
+    (a tree, not a DAG), so results are memoized per OTel span_id for the
+    lifetime of one ``_assemble_trace`` call and each chain is walked once.
+    """
+
+    __slots__ = ("_buf", "_kind_map", "_orphan_policy", "_cache", "_visiting")
+
+    def __init__(
+        self,
+        buf: _TraceBuffer,
+        kind_map: Mapping[int, SpanKind],
+        orphan_policy: Literal["emit", "drop"],
+    ) -> None:
+        self._buf = buf
+        self._kind_map = kind_map
+        self._orphan_policy = orphan_policy
+        self._cache: dict[int, _ParentResolution] = {}
+        self._visiting: set[int] = set()
+
+    def is_orphan_dropped(self, otel_span_id: int) -> bool:
+        """Whether a kind-recognized span must still be dropped as an orphan.
+
+        Only meaningful for ``otel_span_id in kind_map``. Under
+        ``orphan_policy="emit"`` this is always ``False``: nothing is ever
+        dropped for being an orphan, it is just given a synthetic parent id.
+        """
+        if self._orphan_policy != "drop":
+            return False
+        return self.resolve(otel_span_id).status == "synthetic"
+
+    def resolve(self, otel_span_id: int) -> _ParentResolution:
+        """Return where ``otel_span_id``'s effective parent chain bottoms out."""
+        cached = self._cache.get(otel_span_id)
+        if cached is not None:
+            return cached
+
+        if otel_span_id in self._visiting:
+            # A cyclic parent chain from a misbehaving exporter. Treat as
+            # root rather than recursing forever. Deliberately not cached:
+            # if this id is reached again via a different (non-cyclic) path,
+            # that resolution should not be poisoned by the cycle break.
+            logger.warning(
+                "Cyclic OTel parent chain detected at span_id=%016x; treating as root.",
+                otel_span_id,
+            )
+            return _ParentResolution("root", None)
+
+        self._visiting.add(otel_span_id)
+        try:
+            result = self._resolve_uncached(otel_span_id)
+        finally:
+            self._visiting.discard(otel_span_id)
+
+        self._cache[otel_span_id] = result
+        return result
+
+    def _resolve_uncached(self, otel_span_id: int) -> _ParentResolution:
+        span = self._buf.spans.get(otel_span_id)
+        if span is None:
+            # Only reachable if called with an id outside this buffer.
+            return _ParentResolution("root", None)
+
+        parent_ctx = _get_parent_context(span)
+        if parent_ctx is None or not is_valid_otel_span_id(parent_ctx.span_id):
+            return _ParentResolution("root", None)
+
+        parent_id = parent_ctx.span_id
+        if parent_id not in self._buf.spans:
+            return _ParentResolution("synthetic", parent_id)
+
+        if parent_id in self._kind_map and not self.is_orphan_dropped(parent_id):
+            return _ParentResolution("real", parent_id)
+
+        # The parent exists physically in the buffer but will not be
+        # emitted (unrecognized kind, or itself an orphan): transparently
+        # inherit its own resolution so this span attaches to the same
+        # eventual ancestor its parent would have.
+        return self.resolve(parent_id)
 
 
 # ---------------------------------------------------------------------------
@@ -326,6 +469,7 @@ class NiriZanSpanProcessor:
         max_trace_age_seconds: float = 300.0,
         max_buffered_traces: int = 1000,
         orphan_policy: Literal["emit", "drop"] = "emit",
+        unrecognized_span_policy: Literal["drop", "generation"] = "drop",
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         if idle_timeout_seconds <= 0:
@@ -336,17 +480,22 @@ class NiriZanSpanProcessor:
             raise ValueError("max_buffered_traces must be at least 1.")
         if orphan_policy not in ("emit", "drop"):
             raise ValueError("orphan_policy must be 'emit' or 'drop'.")
+        if unrecognized_span_policy not in ("drop", "generation"):
+            raise ValueError("unrecognized_span_policy must be 'drop' or 'generation'.")
 
         self._sink = sink
         self._idle_timeout = idle_timeout_seconds
         self._max_age = max_trace_age_seconds
         self._max_buffered = max_buffered_traces
         self._orphan_policy = orphan_policy
+        self._unrecognized_span_policy = unrecognized_span_policy
         self._clock = clock
 
         self._queue: queue.Queue[Any] = queue.Queue()
         self._buffers: dict[int, _TraceBuffer] = {}
         self._recent_flushes: dict[int, None] = {}
+        self._stats: dict[str, int] = {}
+        self._stats_lock = threading.Lock()
         self._shutdown = threading.Event()
 
         self._consumer = threading.Thread(
@@ -355,13 +504,25 @@ class NiriZanSpanProcessor:
             daemon=True,
         )
         self._consumer.start()
+
+        if unrecognized_span_policy == "generation":
+            logger.warning(
+                "NiriZanSpanProcessor started with unrecognized_span_policy="
+                "'generation': every span with no recognizable NiriZan or "
+                "gen_ai.* attribute will be labeled GENERATION. This can "
+                "dilute NiriZan's trust and safety metrics, which read from "
+                "that one kind; prefer 'drop' unless every OTel span must "
+                "be represented in the resulting trace."
+            )
+
         logger.debug(
             "NiriZanSpanProcessor started (idle=%.1fs, max_age=%.1fs, "
-            "max_buffered=%d, orphan_policy=%s)",
+            "max_buffered=%d, orphan_policy=%s, unrecognized_span_policy=%s)",
             idle_timeout_seconds,
             max_trace_age_seconds,
             max_buffered_traces,
             orphan_policy,
+            unrecognized_span_policy,
         )
 
     # -- SpanProcessor interface ------------------------------------------------
@@ -415,6 +576,22 @@ class NiriZanSpanProcessor:
         done_event = threading.Event()
         self._queue.put_nowait((_FLUSH_SENTINEL, done_event))
         return done_event.wait(timeout=timeout_millis / 1000.0)
+
+    def get_stats(self) -> dict[str, int]:
+        """Return a snapshot of drop/duplicate counters, keyed by reason.
+
+        Safe to call from any thread. Current reasons: ``invalid_span_context``,
+        ``invalid_trace_id``, ``invalid_span_id``, ``late_arrival``,
+        ``duplicate_span_id``, ``unrecognized_kind``, ``orphan_parent_missing``,
+        ``conversion_error``. Absence of a key means that reason has not
+        occurred yet, not that it is impossible.
+        """
+        with self._stats_lock:
+            return dict(self._stats)
+
+    def _record_stat(self, reason: str) -> None:
+        with self._stats_lock:
+            self._stats[reason] = self._stats.get(reason, 0) + 1
 
     # -- Consumer thread --------------------------------------------------------
 
@@ -470,6 +647,7 @@ class NiriZanSpanProcessor:
                 "Skipping OTel span '%s': get_span_context() returned None",
                 getattr(span, "name", "<unnamed>"),
             )
+            self._record_stat("invalid_span_context")
             return
 
         if not is_valid_otel_trace_id(ctx.trace_id):
@@ -477,6 +655,7 @@ class NiriZanSpanProcessor:
                 "Skipping OTel span '%s': invalid all-zeros trace_id",
                 getattr(span, "name", "<unnamed>"),
             )
+            self._record_stat("invalid_trace_id")
             return
 
         if not is_valid_otel_span_id(ctx.span_id):
@@ -484,6 +663,7 @@ class NiriZanSpanProcessor:
                 "Skipping OTel span '%s': invalid all-zeros span_id",
                 getattr(span, "name", "<unnamed>"),
             )
+            self._record_stat("invalid_span_id")
             return
 
         if ctx.trace_id in self._recent_flushes:
@@ -492,6 +672,7 @@ class NiriZanSpanProcessor:
                 getattr(span, "name", "<unnamed>"),
                 ctx.trace_id,
             )
+            self._record_stat("late_arrival")
             return
 
         now = self._clock()
@@ -499,7 +680,16 @@ class NiriZanSpanProcessor:
         if buf is None:
             buf = _TraceBuffer(ctx.trace_id, now)
             self._buffers[ctx.trace_id] = buf
-        buf.add(span, now)
+
+        was_duplicate = buf.add(span, now)
+        if was_duplicate:
+            logger.warning(
+                "Duplicate OTel span_id=%016x within trace_id=%d: overwriting "
+                "the previous span for this id (last-write-wins).",
+                ctx.span_id,
+                ctx.trace_id,
+            )
+            self._record_stat("duplicate_span_id")
 
     def _sweep_idle_traces(self) -> None:
         now = self._clock()
@@ -568,12 +758,41 @@ class NiriZanSpanProcessor:
         if not buf.spans:
             return None
 
-        nirizan_trace_id = otel_trace_id_to_uuid(buf.otel_trace_id)
+        nirizan_trace_id, trace_id_source = _extract_nirizan_trace_id(
+            buf.spans, buf.otel_trace_id
+        )
 
-        # Pass 1: compute NiriZan span IDs and provenance for every span.
+        # Pass 1: classify every span's kind. A span with no recognizable
+        # kind is dropped up front unless unrecognized_span_policy is
+        # "generation", in which case it is labeled GENERATION explicitly
+        # (see the constructor's warning about the metric-pollution risk).
+        kind_map: dict[int, SpanKind] = {}
+        for otel_span_id, span in buf.spans.items():
+            otel_attrs = getattr(span, "attributes", None) or {}
+            inferred_kind = _infer_span_kind(otel_attrs)
+            if inferred_kind is not None:
+                kind_map[otel_span_id] = inferred_kind
+            elif self._unrecognized_span_policy == "generation":
+                kind_map[otel_span_id] = SpanKind.GENERATION
+            else:
+                self._record_stat("unrecognized_kind")
+                logger.debug(
+                    "Dropping span '%s' (otel_span_id=%016x): no recognizable "
+                    "NiriZan or gen_ai.* signal and unrecognized_span_policy='drop'.",
+                    getattr(span, "name", "<unnamed>"),
+                    otel_span_id,
+                )
+
+        if not kind_map:
+            return None
+
+        # Pass 2: NiriZan span id and provenance for every kind-recognized
+        # candidate. Computed for all candidates up front (independent of
+        # parent resolution) so Pass 3 can look up any ancestor's id freely.
         id_map: dict[int, UUID] = {}
         source_map: dict[int, str] = {}
-        for otel_span_id, span in buf.spans.items():
+        for otel_span_id in kind_map:
+            span = buf.spans[otel_span_id]
             ctx = _get_span_context(span)
             if ctx is None:
                 continue
@@ -581,21 +800,64 @@ class NiriZanSpanProcessor:
             id_map[otel_span_id] = nirizan_id
             source_map[otel_span_id] = source
 
-        root_span = self._find_root_span(buf)
-        application_name = self._resolve_application_name(buf, root_span)
-        session_id = self._find_session_id(buf.spans)
-
-        # Pass 2: convert each ReadableSpan to a NiriZan Span.
-        nirizan_spans: list[Span] = []
-        for otel_span_id, span in buf.spans.items():
+        # Pass 3: resolve each candidate's effective parent, dropping
+        # orphans per orphan_policy and re-parenting past any skipped
+        # ancestor (including ancestors dropped for being orphans
+        # themselves, handled transparently by _ParentResolver).
+        resolver = _ParentResolver(buf, kind_map, self._orphan_policy)
+        parent_map: dict[int, UUID | None] = {}
+        kept_ids: set[int] = set()
+        for otel_span_id in kind_map:
             if otel_span_id not in id_map:
                 continue
+
+            if resolver.is_orphan_dropped(otel_span_id):
+                self._record_stat("orphan_parent_missing")
+                logger.debug(
+                    "Dropping orphan span (otel_span_id=%016x): no ancestor "
+                    "path back to a real parent or root, and orphan_policy='drop'.",
+                    otel_span_id,
+                )
+                continue
+
+            resolution = resolver.resolve(otel_span_id)
+            if resolution.status == "root":
+                parent_map[otel_span_id] = None
+            elif resolution.status == "real":
+                assert resolution.ref is not None
+                parent_map[otel_span_id] = id_map[resolution.ref]
+            else:  # "synthetic" -- only reachable when orphan_policy == "emit"
+                assert resolution.ref is not None
+                parent_map[otel_span_id] = otel_span_id_to_uuid(resolution.ref)
+                logger.debug(
+                    "Span (otel_span_id=%016x) has a parent that never arrived "
+                    "in this buffer; emitting with a synthetic parent id "
+                    "(orphan_policy='emit').",
+                    otel_span_id,
+                )
+            kept_ids.add(otel_span_id)
+
+        if not kept_ids:
+            return None
+
+        # Root resolution runs on the filtered set only, so application_name
+        # can't degrade to "unknown" just because the original root was
+        # dropped while a perfectly good service.name exists one level down.
+        root_span = self._find_root_span(buf, kept_ids, parent_map)
+        application_name = self._resolve_application_name(buf, kept_ids, root_span)
+        session_id = self._find_session_id({oid: buf.spans[oid] for oid in kept_ids})
+
+        # Pass 4: build the final NiriZan Span objects from fully-resolved data.
+        nirizan_spans: list[Span] = []
+        for otel_span_id in kept_ids:
             converted = self._convert_span(
-                span=span,
+                span=buf.spans[otel_span_id],
                 nirizan_trace_id=nirizan_trace_id,
                 nirizan_span_id=id_map[otel_span_id],
+                parent_nirizan_id=parent_map[otel_span_id],
+                kind=kind_map[otel_span_id],
                 span_id_source=source_map[otel_span_id],
-                otel_id_map=id_map,
+                trace_id_source=trace_id_source,
             )
             if converted is not None:
                 nirizan_spans.append(converted)
@@ -612,13 +874,21 @@ class NiriZanSpanProcessor:
         )
 
     @staticmethod
-    def _find_root_span(buf: _TraceBuffer) -> ReadableSpan | None:
-        for span in buf.spans.values():
-            parent = _get_parent_context(span)
-            if parent is None:
-                return span
-            if not is_valid_otel_span_id(parent.span_id):
-                return span
+    def _find_root_span(
+        buf: _TraceBuffer,
+        kept_ids: set[int],
+        parent_map: Mapping[int, UUID | None],
+    ) -> ReadableSpan | None:
+        """Return the first surviving span with no effective parent.
+
+        This is the structural root of the trace *after* unrecognized-kind
+        filtering and re-parenting. If the original root was dropped, the
+        promoted orphan that inherits its position (``parent_map[...] is
+        None``) is returned instead.
+        """
+        for otel_span_id in kept_ids:
+            if parent_map.get(otel_span_id) is None:
+                return buf.spans[otel_span_id]
         return None
 
     @staticmethod
@@ -632,13 +902,18 @@ class NiriZanSpanProcessor:
         value = attrs.get(_SERVICE_NAME_RESOURCE_KEY)
         return value if isinstance(value, str) else None
 
-    def _resolve_application_name(self, buf: _TraceBuffer, root_span: ReadableSpan | None) -> str:
+    def _resolve_application_name(
+        self,
+        buf: _TraceBuffer,
+        kept_ids: set[int],
+        root_span: ReadableSpan | None,
+    ) -> str:
         if root_span is not None:
             name = self._get_service_name(root_span)
             if name:
                 return name
-        for span in buf.spans.values():
-            name = self._get_service_name(span)
+        for otel_span_id in kept_ids:
+            name = self._get_service_name(buf.spans[otel_span_id])
             if name:
                 return name
         return "unknown"
@@ -655,51 +930,31 @@ class NiriZanSpanProcessor:
                     continue
         return None
 
-    def _resolve_parent_nirizan_id(
-        self,
-        span: ReadableSpan,
-        otel_id_map: Mapping[int, UUID],
-    ) -> tuple[UUID | None, bool]:
-        """Return ``(parent_nirizan_id, should_drop)``."""
-        parent = _get_parent_context(span)
-        if parent is None:
-            return None, False
-        if not is_valid_otel_span_id(parent.span_id):
-            return None, False
-
-        mapped = otel_id_map.get(parent.span_id)
-        if mapped is not None:
-            return mapped, False
-
-        if self._orphan_policy == "drop":
-            return None, True
-
-        return otel_span_id_to_uuid(parent.span_id), False
-
     def _convert_span(
         self,
         *,
         span: ReadableSpan,
         nirizan_trace_id: UUID,
         nirizan_span_id: UUID,
+        parent_nirizan_id: UUID | None,
+        kind: SpanKind,
         span_id_source: str,
-        otel_id_map: Mapping[int, UUID],
+        trace_id_source: str,
     ) -> Span | None:
+        """Build the final NiriZan ``Span`` from already-resolved values.
+
+        By the time this is called, kind and parent have already been
+        resolved by ``_assemble_trace`` (Passes 1-3), so every field handed
+        to the ``Span`` constructor below is non-optional. This keeps
+        pydantic's strict validation an assertion of correctness rather than
+        an incidental drop mechanism.
+        """
         ctx = _get_span_context(span)
         if ctx is None:
             return None
 
         otel_attrs = getattr(span, "attributes", None) or {}
-        kind = _infer_span_kind(otel_attrs)
         input_payload, output_payload = _extract_payloads(kind, otel_attrs)
-
-        parent_nirizan_id, should_drop = self._resolve_parent_nirizan_id(span, otel_id_map)
-        if should_drop:
-            logger.debug(
-                "Dropping orphan span '%s' (parent not resolvable)",
-                getattr(span, "name", "<unnamed>"),
-            )
-            return None
 
         started_at = _ns_to_datetime(span.start_time)
         ended_at = _ns_to_datetime(span.end_time)
@@ -742,6 +997,7 @@ class NiriZanSpanProcessor:
             service_name=self._get_service_name(span),
             span_id_hex=format(ctx.span_id, "016x"),
             span_id_source=span_id_source,
+            trace_id_source=trace_id_source,
             sampled=sampled,
             trace_state=trace_state_str,
             status_code=status_code_str,
@@ -762,6 +1018,7 @@ class NiriZanSpanProcessor:
                 output_payload=output_payload,
             )
         except Exception as err:
+            self._record_stat("conversion_error")
             logger.warning(
                 "Failed to convert OTel span '%s' (otel_span_id=%016x): %s",
                 span.name,
