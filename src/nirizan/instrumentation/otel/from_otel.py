@@ -6,20 +6,27 @@ into the OpenTelemetry SDK through the ``SpanProcessor`` interface and
 produces plain NiriZan ``Trace`` objects, indistinguishable at the type level
 from traces assembled by NiriZan's own ``Tracer``.
 
-Trace assembly proceeds in three passes over a buffered trace's spans:
+Trace assembly proceeds in passes over a buffered trace's spans:
 
 1. Kind classification (``_infer_span_kind`` plus ``unrecognized_span_policy``)
    decides which spans are candidates for emission at all.
-2. Parent resolution (``_ParentResolver``) walks each candidate's OTel parent
-   chain, transparently skipping any ancestor that will not be emitted --
-   whether because its kind was unrecognized, or because it is itself an
-   orphan under ``orphan_policy="drop"`` -- so a span is re-parented onto the
-   nearest surviving ancestor, or promoted to root if every ancestor was
-   skipped.
-3. Conversion (``_convert_span``) builds the final NiriZan ``Span`` objects
-   from the already-resolved kind and parent, so every value handed to the
-   ``Span`` constructor is non-optional and the model never fails validation
-   on data this module itself derived.
+2. NiriZan id + provenance assignment for every candidate.
+3. Parent resolution (``_resolve_parents``) walks each candidate's OTel
+   parent chain, transparently skipping any ancestor that will not be
+   emitted -- whether because its kind was unrecognized, or because it is
+   itself an orphan under ``orphan_policy="drop"`` -- so a span is
+   re-parented onto the nearest surviving ancestor, or promoted to root if
+   every ancestor was skipped. This is a single memoized pass, and it is
+   deliberately traversal-order-independent: a cyclic parent chain (only
+   reachable via a pathological exporter, since a conformant OTel SDK fixes
+   a span's parent at start time, before the span exists as a completed
+   ``ReadableSpan``) is neutralized once, in the call frame that first
+   discovers it, and that decision is never later overwritten regardless of
+   which candidate's resolution happened to trigger the walk.
+4. Conversion (``_convert_span``) builds the final NiriZan ``Span`` objects
+   from the already-resolved kind and parent, so every field required by
+   the ``Span`` model is non-optional and the model's strict validation is
+   an assertion of correctness rather than an incidental drop mechanism.
 """
 
 from __future__ import annotations
@@ -29,7 +36,7 @@ import threading
 import time
 from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
-from typing import Any, Literal, NamedTuple, Protocol
+from typing import Any, Literal, Protocol
 from uuid import UUID
 
 from opentelemetry.context import Context
@@ -89,6 +96,14 @@ _SHUTDOWN_SENTINEL: object = object()
 
 _RECENT_FLUSHES_MAX: int = 10_000
 _MAX_SPAN_NAME_LENGTH: int = 200
+
+# Internal signal tags used by _resolve_parents' upward walk. Not part of
+# the module's public surface; module-level only so _resolve_parents' inner
+# closures don't re-allocate them per call.
+_SIG_ROOT: str = "root"
+_SIG_ATTACH: str = "attach_to"
+_SIG_MISSING: str = "missing"
+_SIG_CYCLE: str = "cycle"
 
 
 # ---------------------------------------------------------------------------
@@ -347,110 +362,154 @@ class _TraceBuffer:
 # ---------------------------------------------------------------------------
 
 
-class _ParentResolution(NamedTuple):
-    """Where a span's effective OTel parent chain bottoms out.
+class _ParentResolution:
+    """Output of ``_resolve_parents``: per-candidate effective parent linkage.
 
-    - ``"root"``: no parent at all; ``ref`` is ``None``.
-    - ``"real"``: the nearest ancestor that will itself be emitted as a
-      NiriZan ``Span``; ``ref`` is that ancestor's OTel span_id.
-    - ``"synthetic"``: the chain runs into a parent reference that never
-      arrived in this buffer; ``ref`` is that missing parent's OTel span_id.
+    ``parent_of[x]`` is the OTel span_id of ``x``'s effective ancestor, or
+    ``None`` if ``x`` is an effective root (a true root, or an orphan
+    promoted to root because every ancestor above it was skipped). Populated
+    for every kind-recognized candidate that is not in ``dropped``.
+
+    ``synthetic_origin`` holds the subset of ``parent_of`` keys whose value
+    is the id of a genuinely missing ancestor rather than another emitted
+    candidate's id (only populated when ``orphan_policy == "emit"``); the
+    caller must map these through ``otel_span_id_to_uuid`` directly, not
+    through the trace's ``id_map``, since no ``Span`` will ever exist for
+    that id.
+
+    ``dropped`` holds every kind-recognized candidate that must not be
+    emitted at all (only populated when ``orphan_policy == "drop"``, for a
+    candidate whose chain runs off the buffer).
     """
 
-    status: Literal["root", "real", "synthetic"]
-    ref: int | None
+    __slots__ = ("parent_of", "synthetic_origin", "dropped")
+
+    def __init__(self) -> None:
+        self.parent_of: dict[int, int | None] = {}
+        self.synthetic_origin: dict[int, int] = {}
+        self.dropped: set[int] = set()
 
 
-class _ParentResolver:
-    """Resolves each span's effective parent for one buffered OTel trace.
+def _resolve_parents(
+    buf: _TraceBuffer,
+    kind_map: Mapping[int, SpanKind],
+    orphan_policy: Literal["emit", "drop"],
+) -> _ParentResolution:
+    """Resolve every kind-recognized candidate's effective parent, in one pass.
 
-    Walks each span's raw OTel parent pointer upward, transparently skipping
-    over any ancestor that will not itself be emitted -- either because its
-    kind could not be recognized (``unrecognized_span_policy="drop"``), or
-    because it is itself an orphan under ``orphan_policy="drop"``. This
-    implements "re-parent orphans whose parent was dropped" and "an orphaned
-    root becomes the new root": a span whose immediate parent is skipped is
-    attributed to the nearest surviving ancestor, or promoted to root if
-    every ancestor in its chain was skipped.
+    Each candidate's physical OTel parent chain is walked upward, skipping
+    transparently over any node that will not itself be emitted --
+    unrecognized kind, or (cascading) itself unresolvable -- until the walk
+    lands on a real kept ancestor, a true root, or a parent reference that
+    never arrived in this buffer.
 
-    Every span's chain shares exactly one physical parent pointer per node
-    (a tree, not a DAG), so results are memoized per OTel span_id for the
-    lifetime of one ``_assemble_trace`` call and each chain is walked once.
+    Implementation note on correctness under cycles: the walk is memoized
+    per OTel span_id via a single dict populated as a side effect of one
+    depth-first traversal, with an ``in_progress`` set as a recursion guard.
+    A conformant OTel SDK cannot produce a cyclic parent chain -- a span's
+    parent context is fixed when the span starts, strictly before that span
+    can appear as another span's completed ``ReadableSpan`` ancestor -- so a
+    cycle here only reaches this code via a pathological exporter or a
+    hand-constructed ``ReadableSpan`` in a test. When the walk revisits a
+    node still ``in_progress``, that is reported as a ``"cycle"`` signal to
+    the *caller* (the node's descendant in the walk), and it is that
+    descendant's own resolution that is committed as a root, once, in the
+    same stack frame that discovered the cycle. No later frame -- including
+    the frame for the node that was being revisited -- ever overwrites that
+    commitment, because each node's final signal is written to ``memo``
+    exactly once, at the end of its own (and only its own) call. This makes
+    the result independent of which candidate's resolution happens to start
+    the walk: every participant in a cycle is treated the same way no
+    matter the traversal order.
     """
+    result = _ParentResolution()
+    memo: dict[int, tuple[str, int | None]] = {}
+    in_progress: set[int] = set()
 
-    __slots__ = ("_buf", "_kind_map", "_orphan_policy", "_cache", "_visiting")
+    def physical_parent(otel_span_id: int) -> int | None:
+        span = buf.spans.get(otel_span_id)
+        if span is None:
+            return None
+        parent_ctx = _get_parent_context(span)
+        if parent_ctx is None or not is_valid_otel_span_id(parent_ctx.span_id):
+            return None
+        return parent_ctx.span_id
 
-    def __init__(
-        self,
-        buf: _TraceBuffer,
-        kind_map: Mapping[int, SpanKind],
-        orphan_policy: Literal["emit", "drop"],
-    ) -> None:
-        self._buf = buf
-        self._kind_map = kind_map
-        self._orphan_policy = orphan_policy
-        self._cache: dict[int, _ParentResolution] = {}
-        self._visiting: set[int] = set()
+    def upward(x: int) -> tuple[str, int | None]:
+        """What should a descendant do when its chain reaches node ``x``?
 
-    def is_orphan_dropped(self, otel_span_id: int) -> bool:
-        """Whether a kind-recognized span must still be dropped as an orphan.
-
-        Only meaningful for ``otel_span_id in kind_map``. Under
-        ``orphan_policy="emit"`` this is always ``False``: nothing is ever
-        dropped for being an orphan, it is just given a synthetic parent id.
+        Returns one of:
+          - ``(_SIG_ROOT, None)``
+          - ``(_SIG_ATTACH, x)`` -- attach to ``x`` itself (x is kept)
+          - ``(_SIG_MISSING, origin)`` -- the chain ran off the buffer at
+            OTel span_id ``origin``
+          - ``(_SIG_CYCLE, None)`` -- ``x`` is still being resolved further
+            down this same call stack; the caller must neutralize this
+            into its own final answer rather than propagate it further.
         """
-        if self._orphan_policy != "drop":
-            return False
-        return self.resolve(otel_span_id).status == "synthetic"
-
-    def resolve(self, otel_span_id: int) -> _ParentResolution:
-        """Return where ``otel_span_id``'s effective parent chain bottoms out."""
-        cached = self._cache.get(otel_span_id)
+        cached = memo.get(x)
         if cached is not None:
             return cached
 
-        if otel_span_id in self._visiting:
-            # A cyclic parent chain from a misbehaving exporter. Treat as
-            # root rather than recursing forever. Deliberately not cached:
-            # if this id is reached again via a different (non-cyclic) path,
-            # that resolution should not be poisoned by the cycle break.
-            logger.warning(
-                "Cyclic OTel parent chain detected at span_id=%016x; treating as root.",
-                otel_span_id,
-            )
-            return _ParentResolution("root", None)
+        if x in in_progress:
+            # Do not cache: this is a transient signal for the frame that
+            # is CURRENTLY resolving x's descendant. That frame commits its
+            # own final answer to memo exactly once, below; this branch
+            # itself must never write to memo, or a later, unrelated call
+            # that legitimately reaches x again would replay a stale cycle
+            # signal instead of resolving x fresh.
+            return (_SIG_CYCLE, None)
 
-        self._visiting.add(otel_span_id)
+        in_progress.add(x)
         try:
-            result = self._resolve_uncached(otel_span_id)
+            if x not in buf.spans:
+                signal: tuple[str, int | None] = (_SIG_MISSING, x)
+            else:
+                parent_id = physical_parent(x)
+                if parent_id is None:
+                    upstream: tuple[str, int | None] = (_SIG_ROOT, None)
+                else:
+                    upstream = upward(parent_id)
+                    if upstream[0] == _SIG_CYCLE:
+                        # x's own edge closes a cycle. Sever it here: this
+                        # is x's final, once-committed answer, not a
+                        # value any other frame will revisit or replace.
+                        upstream = (_SIG_ROOT, None)
+
+                if x in kind_map:
+                    if upstream[0] == _SIG_ROOT:
+                        result.parent_of[x] = None
+                    elif upstream[0] == _SIG_ATTACH:
+                        result.parent_of[x] = upstream[1]
+                    else:  # _SIG_MISSING
+                        origin = upstream[1]
+                        assert origin is not None
+                        if orphan_policy == "drop":
+                            result.dropped.add(x)
+                        else:
+                            result.parent_of[x] = origin
+                            result.synthetic_origin[x] = origin
+
+                    # x is now resolved (kept or dropped): descendants
+                    # attach to x itself if kept, or -- if x was dropped --
+                    # x's own upstream signal passes through untouched, so
+                    # a dropped orphan's children still cascade correctly
+                    # to whatever x would have attached to.
+                    signal = (_SIG_ATTACH, x) if x not in result.dropped else upstream
+                else:
+                    # x is invisible to the emitted trace (unrecognized
+                    # kind): pass the upstream signal straight through.
+                    signal = upstream
         finally:
-            self._visiting.discard(otel_span_id)
+            in_progress.discard(x)
 
-        self._cache[otel_span_id] = result
-        return result
+        memo[x] = signal
+        return signal
 
-    def _resolve_uncached(self, otel_span_id: int) -> _ParentResolution:
-        span = self._buf.spans.get(otel_span_id)
-        if span is None:
-            # Only reachable if called with an id outside this buffer.
-            return _ParentResolution("root", None)
+    for start in kind_map:
+        upward(start)  # populates result.* as a side effect; return value unused here
 
-        parent_ctx = _get_parent_context(span)
-        if parent_ctx is None or not is_valid_otel_span_id(parent_ctx.span_id):
-            return _ParentResolution("root", None)
-
-        parent_id = parent_ctx.span_id
-        if parent_id not in self._buf.spans:
-            return _ParentResolution("synthetic", parent_id)
-
-        if parent_id in self._kind_map and not self.is_orphan_dropped(parent_id):
-            return _ParentResolution("real", parent_id)
-
-        # The parent exists physically in the buffer but will not be
-        # emitted (unrecognized kind, or itself an orphan): transparently
-        # inherit its own resolution so this span attaches to the same
-        # eventual ancestor its parent would have.
-        return self.resolve(parent_id)
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -800,18 +859,18 @@ class NiriZanSpanProcessor:
             id_map[otel_span_id] = nirizan_id
             source_map[otel_span_id] = source
 
-        # Pass 3: resolve each candidate's effective parent, dropping
-        # orphans per orphan_policy and re-parenting past any skipped
-        # ancestor (including ancestors dropped for being orphans
-        # themselves, handled transparently by _ParentResolver).
-        resolver = _ParentResolver(buf, kind_map, self._orphan_policy)
+        # Pass 3: resolve every candidate's effective parent in a single,
+        # order-independent pass. See _resolve_parents for the cascading
+        # -drop and cycle-safety guarantees.
+        resolution = _resolve_parents(buf, kind_map, self._orphan_policy)
+
         parent_map: dict[int, UUID | None] = {}
         kept_ids: set[int] = set()
         for otel_span_id in kind_map:
             if otel_span_id not in id_map:
                 continue
 
-            if resolver.is_orphan_dropped(otel_span_id):
+            if otel_span_id in resolution.dropped:
                 self._record_stat("orphan_parent_missing")
                 logger.debug(
                     "Dropping orphan span (otel_span_id=%016x): no ancestor "
@@ -820,21 +879,19 @@ class NiriZanSpanProcessor:
                 )
                 continue
 
-            resolution = resolver.resolve(otel_span_id)
-            if resolution.status == "root":
+            ancestor_id = resolution.parent_of.get(otel_span_id)
+            if ancestor_id is None:
                 parent_map[otel_span_id] = None
-            elif resolution.status == "real":
-                assert resolution.ref is not None
-                parent_map[otel_span_id] = id_map[resolution.ref]
-            else:  # "synthetic" -- only reachable when orphan_policy == "emit"
-                assert resolution.ref is not None
-                parent_map[otel_span_id] = otel_span_id_to_uuid(resolution.ref)
+            elif otel_span_id in resolution.synthetic_origin:
+                parent_map[otel_span_id] = otel_span_id_to_uuid(ancestor_id)
                 logger.debug(
                     "Span (otel_span_id=%016x) has a parent that never arrived "
                     "in this buffer; emitting with a synthetic parent id "
                     "(orphan_policy='emit').",
                     otel_span_id,
                 )
+            else:
+                parent_map[otel_span_id] = id_map[ancestor_id]
             kept_ids.add(otel_span_id)
 
         if not kept_ids:
