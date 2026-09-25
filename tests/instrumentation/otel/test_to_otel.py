@@ -2,25 +2,20 @@
 """Unit tests for NiriZan -> OpenTelemetry span/trace exporter.
 
 The tests exercise three layers:
-  1. Pure conversion helpers (``_to_nanoseconds``, ``_format_payload_value``,
-     ``convert_span_to_otel_attributes``, ``_topological_sort_spans``).
-  2. Export functions that interact with the OTel SDK's ``Tracer`` interface
-     (``export_span_to_otel``, ``export_trace_to_otel``).
-  3. The ``NiriZanToOTelExporter`` class as the ``BaseExporter`` implementation.
+  1. Pure conversion helpers (_to_nanoseconds, _format_payload_value,
+     convert_span_to_otel_attributes, _topological_sort_spans).
+  2. Export functions that interact with the OTel SDK's Tracer interface
+     (export_span_to_otel, export_trace_to_otel).
+  3. The NiriZanToOTelExporter class as the BaseExporter implementation.
 
-Tests use ``MagicMock`` for the tracer and for spans, because the goal is to
+Tests use MagicMock for the tracer and for spans, because the goal is to
 verify the arguments the exporter hands to OTel, not to exercise OTel itself.
-One test uses a real NiriZan ``Span`` object as a guard against attribute-name
+One test uses a real NiriZan Span object as a guard against attribute-name
 drift between the exporter and the pydantic model it reads from.
 """
 
 import pytest
 
-# ``opentelemetry`` is an optional dependency installed via the ``otel`` extra.
-# Skip this entire module if it is absent, so a contributor working on other
-# parts of NiriZan is never forced to install OpenTelemetry to get a green
-# build. CI installs ``nirizan[otel]`` in the job that actually exercises
-# the bridge.
 pytest.importorskip("opentelemetry")
 pytest.importorskip("opentelemetry.sdk")
 
@@ -44,6 +39,8 @@ from nirizan.instrumentation.otel.semconv import (  # noqa: E402
     GEN_AI_RESPONSE_MODEL,
     GEN_AI_SYSTEM,
     GEN_AI_USAGE_COMPLETION_TOKENS,
+    GEN_AI_USAGE_INPUT_TOKENS,
+    GEN_AI_USAGE_OUTPUT_TOKENS,
     GEN_AI_USAGE_PROMPT_TOKENS,
     MAX_ATTR_VALUE_LENGTH,
     NIRIZAN_PLANNING_CONTEXT,
