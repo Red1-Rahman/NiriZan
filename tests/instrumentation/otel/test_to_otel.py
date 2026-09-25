@@ -269,6 +269,8 @@ def test_convert_attributes_generation_kind() -> None:
     assert attrs[GEN_AI_RESPONSE_MODEL] == "gpt-4"
     assert attrs[GEN_AI_USAGE_PROMPT_TOKENS] == 10
     assert attrs[GEN_AI_USAGE_COMPLETION_TOKENS] == 20
+    assert attrs[GEN_AI_USAGE_INPUT_TOKENS] == 10
+    assert attrs[GEN_AI_USAGE_OUTPUT_TOKENS] == 20
     assert attrs[GEN_AI_OPERATION_NAME] == "chat"
 
 
