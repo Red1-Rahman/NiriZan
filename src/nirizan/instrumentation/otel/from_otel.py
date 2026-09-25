@@ -283,7 +283,14 @@ def _convert_attributes(
 class _TraceBuffer:
     """Per-trace buffer of ``ReadableSpan`` objects awaiting assembly."""
 
-    __slots__ = ("otel_trace_id", "spans", "first_seen", "last_seen", "open_spans")
+    __slots__ = (
+        "otel_trace_id",
+        "spans",
+        "first_seen",
+        "last_seen",
+        "open_spans",
+        "has_untracked_start",
+    )
 
     def __init__(self, otel_trace_id: int, now: float) -> None:
         self.otel_trace_id = otel_trace_id
@@ -291,6 +298,10 @@ class _TraceBuffer:
         self.first_seen = now
         self.last_seen = now
         self.open_spans = 0
+        # True once a start marker for this trace was dropped on queue
+        # saturation, so the open-span count can no longer be trusted to
+        # reach zero on its own. See _consume_dropped_start.
+        self.has_untracked_start = False
 
     def mark_started(self, now: float) -> None:
         """Increment active open span count and update last_seen timestamp."""
@@ -444,6 +455,12 @@ class NiriZanSpanProcessor(SpanProcessor):
         self._queue: queue.Queue[Any] = queue.Queue(maxsize=max_queue_size)
         self._buffers: dict[int, _TraceBuffer] = {}
         self._recent_flushes: dict[int, None] = {}
+        # Trace IDs whose start marker was dropped on queue saturation, keyed
+        # in insertion order so the oldest can be evicted once the bound is
+        # hit. Written by the producer thread (on_start), read and cleared by
+        # the consumer thread (_consume_dropped_start). Both sides go through
+        # _stats_lock.
+        self._dropped_start_traces: dict[int, None] = {}
         self._stats: dict[str, int] = {}
         self._stats_lock = threading.Lock()
         self._shutdown = threading.Event()
@@ -497,8 +514,16 @@ class NiriZanSpanProcessor(SpanProcessor):
         try:
             self._queue.put_nowait((_START_MARKER, ctx.trace_id, self._clock()))
         except queue.Full:
-            # Drop start marker non-blocking on queue saturation to avoid stalling app execution
-            self._record_stat("queue_full")
+            # Drop start marker non-blocking on queue saturation to avoid stalling
+            # app execution. Record which trace missed it so the consumer thread
+            # can avoid idle-flushing that specific trace while one of its spans
+            # may still be open (see _consume_dropped_start, _sweep_idle_traces).
+            with self._stats_lock:
+                self._dropped_start_traces[ctx.trace_id] = None
+                if len(self._dropped_start_traces) > _RECENT_FLUSHES_MAX:
+                    oldest = next(iter(self._dropped_start_traces))
+                    del self._dropped_start_traces[oldest]
+                self._stats["queue_full"] = self._stats.get("queue_full", 0) + 1
 
     def on_end(self, span: ReadableSpan) -> None:
         """Push a completed OTel span to the consumer thread."""
@@ -564,6 +589,19 @@ class NiriZanSpanProcessor(SpanProcessor):
         with self._stats_lock:
             self._stats[reason] = self._stats.get(reason, 0) + 1
 
+    def _consume_dropped_start(self, otel_trace_id: int) -> bool:
+        """Return ``True`` and forget the flag if a start marker for this trace was dropped.
+
+        Called from the consumer thread only, whenever it creates or reuses a
+        ``_TraceBuffer`` for ``otel_trace_id``, so the resulting
+        ``has_untracked_start`` flag is set at most once per drop.
+        """
+        with self._stats_lock:
+            if otel_trace_id in self._dropped_start_traces:
+                del self._dropped_start_traces[otel_trace_id]
+                return True
+            return False
+
     # -- Consumer thread --------------------------------------------------------
 
     def _consume_loop(self) -> None:
@@ -587,6 +625,7 @@ class NiriZanSpanProcessor(SpanProcessor):
             if _is_start_marker(item):
                 _, otel_trace_id, ts = item
                 self._mark_span_started(otel_trace_id, ts)
+                self._enforce_buffer_cap()
                 continue
 
             self._buffer_span(item)
@@ -626,6 +665,8 @@ class NiriZanSpanProcessor(SpanProcessor):
         if buf is None:
             buf = _TraceBuffer(otel_trace_id, now)
             self._buffers[otel_trace_id] = buf
+        if self._consume_dropped_start(otel_trace_id):
+            buf.has_untracked_start = True
         buf.mark_started(now)
 
     def _buffer_span(self, span: ReadableSpan) -> None:
@@ -668,6 +709,8 @@ class NiriZanSpanProcessor(SpanProcessor):
         if buf is None:
             buf = _TraceBuffer(ctx.trace_id, now)
             self._buffers[ctx.trace_id] = buf
+        if self._consume_dropped_start(ctx.trace_id):
+            buf.has_untracked_start = True
 
         was_duplicate = buf.add(span, now)
         if was_duplicate:
@@ -682,11 +725,17 @@ class NiriZanSpanProcessor(SpanProcessor):
         now = self._clock()
         to_flush: list[tuple[int, str]] = []
         for trace_id, buf in self._buffers.items():
-            # Flush on idle ONLY when no open spans remain active in the trace
-            if now - buf.last_seen >= self._idle_timeout and buf.open_spans == 0:
-                to_flush.append((trace_id, "idle"))
-            elif now - buf.first_seen >= self._max_age:
+            if now - buf.first_seen >= self._max_age:
                 to_flush.append((trace_id, "max_age"))
+            elif (
+                not buf.has_untracked_start
+                and now - buf.last_seen >= self._idle_timeout
+                and buf.open_spans == 0
+            ):
+                # Flush on idle ONLY when no open spans remain active in the
+                # trace, and only when open_spans is actually trustworthy for
+                # this trace (no dropped start marker left it undercounted).
+                to_flush.append((trace_id, "idle"))
         for trace_id, reason in to_flush:
             self._flush_trace(trace_id, reason=reason)
 
