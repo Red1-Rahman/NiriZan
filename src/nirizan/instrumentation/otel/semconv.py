@@ -13,6 +13,7 @@ __all__ = [
     "GEN_AI_COMPLETION",
     "GEN_AI_OPERATION_NAME",
     "GEN_AI_PROMPT",
+    "GEN_AI_PROVIDER_NAME",
     "GEN_AI_REQUEST_MODEL",
     "GEN_AI_RESPONSE_MODEL",
     "GEN_AI_SYSTEM",
@@ -20,7 +21,10 @@ __all__ = [
     "GEN_AI_USAGE_INPUT_TOKENS",
     "GEN_AI_USAGE_OUTPUT_TOKENS",
     "GEN_AI_USAGE_PROMPT_TOKENS",
+    "ID_SOURCE_DERIVED",
+    "ID_SOURCE_ROUNDTRIP",
     "MAX_ATTR_VALUE_LENGTH",
+    "NIRIZAN_INSTRUMENTATION_SCOPE",
     "NIRIZAN_PLANNING_CONTEXT",
     "NIRIZAN_PLANNING_OUTPUT",
     "NIRIZAN_RETRIEVAL_QUERY",
@@ -46,15 +50,19 @@ __all__ = [
     "SPAN_ID_SOURCE_ROUNDTRIP",
     "TRUNCATION_SUFFIX",
     "decode_sequence_key",
+    "dumps_attribute_json",
     "encode_sequence_attribute_value",
     "encode_sequence_key",
     "is_sequence_key",
     "truncate_attribute_value",
 ]
 
-# Upstream OpenTelemetry Semantic Conventions version standard.
-# Refers to OpenTelemetry Semantic Conventions v1.27.0
-# (GenAI conventions upstream are experimental).
+# Baseline upstream OpenTelemetry Semantic Conventions version that the
+# attribute names below are modeled on (GenAI conventions upstream are
+# experimental and keep moving). This is a compatibility baseline, not a
+# claim that every constant is current: see the notes on deprecated
+# attributes below. Names introduced after this baseline (for example
+# GEN_AI_PROVIDER_NAME) are documented where they are defined.
 # Provenance: https://github.com/open-telemetry/semantic-conventions/releases/tag/v1.27.0
 SEMCONV_VERSION: str = "1.27.0"
 
@@ -63,8 +71,25 @@ MAX_ATTR_VALUE_LENGTH: int = 1024
 TRUNCATION_SUFFIX: str = "...[truncated]"
 SEQ_ATTR_PREFIX: str = "nirizan.seq."
 
+# OpenTelemetry instrumentation scope name used by NiriZan's own exporter.
+# The OTel -> NiriZan span processor uses it to recognize and skip spans that
+# NiriZan itself exported, which prevents an export/ingest feedback loop when
+# both bridge directions are attached to the same TracerProvider.
+NIRIZAN_INSTRUMENTATION_SCOPE: str = "nirizan"
+
 # Standard OpenTelemetry GenAI Attributes
+#
+# Upstream status notes (GenAI conventions are still evolving):
+#   - gen_ai.system was later deprecated in favor of gen_ai.provider.name
+#     (introduced in semantic conventions v1.37.0).
+#   - gen_ai.prompt / gen_ai.completion were later deprecated upstream in
+#     favor of event / message based content capture.
+# NiriZan keeps reading and writing the older names for compatibility with
+# existing consumers, and the exporter can emit the newer provider name next
+# to the older system name. Remove the deprecated constants together with the
+# dual-emit in a future release.
 GEN_AI_SYSTEM: str = "gen_ai.system"
+GEN_AI_PROVIDER_NAME: str = "gen_ai.provider.name"
 GEN_AI_OPERATION_NAME: str = "gen_ai.operation.name"
 GEN_AI_REQUEST_MODEL: str = "gen_ai.request.model"
 GEN_AI_RESPONSE_MODEL: str = "gen_ai.response.model"
@@ -128,8 +153,14 @@ NIRIZAN_TOOL_RESULT: str = "nirizan.tool.result"
 # nirizan.trace_id can still contain one child span that arrived from a
 # genuinely external system and had no stashed nirizan.span_id, so its
 # span_id must be derived even though the trace_id round-tripped.
-SPAN_ID_SOURCE_ROUNDTRIP: str = "roundtrip"
-SPAN_ID_SOURCE_DERIVED: str = "derived"
+#
+# ID_SOURCE_* are the neutral names, since the values describe either kind
+# of id. SPAN_ID_SOURCE_* are kept as aliases so existing imports keep
+# working; both names refer to the same string values.
+ID_SOURCE_ROUNDTRIP: str = "roundtrip"
+ID_SOURCE_DERIVED: str = "derived"
+SPAN_ID_SOURCE_ROUNDTRIP: str = ID_SOURCE_ROUNDTRIP
+SPAN_ID_SOURCE_DERIVED: str = ID_SOURCE_DERIVED
 
 # Captured OTel Metadata Attributes (written during OTel -> NiriZan ingestion)
 OTEL_SPAN_ID: str = "otel.span_id"
@@ -198,14 +229,59 @@ def is_sequence_key(key: str) -> bool:
     return key.startswith(SEQ_ATTR_PREFIX)
 
 
+def dumps_attribute_json(value: object) -> str:
+    """Serialize ``value`` to JSON text for use as a span attribute value.
+
+    This is the single place that decides how NiriZan formats JSON attribute
+    values, so the exporter and the sequence encoder stay consistent.
+
+    * Non-ASCII text is kept as-is (``ensure_ascii=False``). With the default
+      ASCII escaping, a Bangla or Arabic character costs about six characters
+      of the length budget instead of one, so non-English content would be
+      truncated far earlier than English content.
+    * If the unescaped text cannot be encoded as UTF-8 (for example a lone
+      surrogate left behind by a lossy decode), the value is re-serialized
+      with ASCII escaping so the result can always be exported.
+    * Values that are not natively JSON serializable are rendered with
+      ``str`` via ``default=str``.
+
+    Raises:
+        TypeError: If the value contains something ``default=str`` cannot
+            handle, such as a non-string dict key that is not a basic scalar.
+        ValueError: If the value contains a circular reference.
+        RecursionError: If the value is nested too deeply to serialize.
+    """
+    text = json.dumps(value, ensure_ascii=False, default=str)
+    try:
+        text.encode("utf-8")
+    except UnicodeEncodeError:
+        text = json.dumps(value, ensure_ascii=True, default=str)
+    return text
+
+
+def _dumps_item(item: object) -> str:
+    """Serialize one sequence item, falling back to its ``str`` form if needed."""
+    try:
+        return dumps_attribute_json(item)
+    except (TypeError, ValueError, RecursionError):
+        return dumps_attribute_json(str(item))
+
+
 def encode_sequence_attribute_value(
     sequence: Sequence[object],
     max_length: int = MAX_ATTR_VALUE_LENGTH,
 ) -> str:
     """Serialize a sequence to a JSON string, strictly preserving valid JSON structure.
 
-    Attempts to trim tail items from the sequence until the serialized array fits
-    within `max_length` while ending with a `TRUNCATION_SUFFIX` element.
+    If the full JSON array does not fit within ``max_length``, the longest
+    prefix of items that fits is kept and a ``TRUNCATION_SUFFIX`` element is
+    appended, so the result is always a valid JSON array.
+
+    The work is a single forward pass that stops serializing as soon as the
+    budget is exceeded, so the cost is bounded by ``max_length`` rather than by
+    the size of the input sequence. Each item is serialized exactly once; an
+    item that cannot be serialized natively is replaced by its ``str`` form
+    without affecting the other items.
 
     Args:
         sequence: A sequence of values (e.g., list, tuple) to encode.
@@ -218,31 +294,45 @@ def encode_sequence_attribute_value(
         ValueError: If max_length is too small to fit even a sentinel-only array as valid JSON.
 
     Note:
-        `TRUNCATION_SUFFIX` is appended as a list item to mark truncation. If a real
-        sequence item equals `TRUNCATION_SUFFIX` exactly, consumers should check
+        ``TRUNCATION_SUFFIX`` is appended as a list item to mark truncation. If a real
+        sequence item equals ``TRUNCATION_SUFFIX`` exactly, consumers should check
         total string length against limits if disambiguation is required.
+        Length is measured in characters (code points), not UTF-8 bytes.
     """
-    items = list(sequence)
-    try:
-        raw_json = json.dumps(items, default=str)
-    except TypeError:
-        items = [str(item) for item in items]
-        raw_json = json.dumps(items)
+    # Output layout for k items is "[" + ", ".join(parts) + "]", which is
+    # 2 + sum(len(part)) + 2 * (k - 1) characters for k >= 1 and 2 for k == 0.
+    parts: list[str] = []
+    total = 0
+    exceeded = False
+    for item in sequence:
+        part = _dumps_item(item)
+        parts.append(part)
+        total += len(part)
+        if 2 + total + 2 * (len(parts) - 1) > max_length:
+            # Any longer prefix is longer still, so stop serializing here.
+            exceeded = True
+            break
 
-    if len(raw_json) <= max_length:
-        return raw_json
+    if not exceeded:
+        candidate = "[" + ", ".join(parts) + "]"
+        if len(candidate) <= max_length:
+            return candidate
 
-    # Iteratively remove tail items and insert sentinel to preserve valid JSON
-    trimmed = items.copy()
-    while trimmed:
-        candidate_list = trimmed + [TRUNCATION_SUFFIX]
-        candidate_json = json.dumps(candidate_list, default=str)
-        if len(candidate_json) <= max_length:
-            return candidate_json
-        trimmed.pop()
+    # Keep the longest prefix such that prefix + sentinel still fits. For k kept
+    # items plus the sentinel there are k separators of two characters each.
+    sentinel = dumps_attribute_json(TRUNCATION_SUFFIX)
+    kept = 0
+    kept_total = 0
+    for part in parts:
+        if 2 + kept_total + len(part) + len(sentinel) + 2 * (kept + 1) > max_length:
+            break
+        kept_total += len(part)
+        kept += 1
 
-    # Try sentinel-only array
-    sentinel_only = json.dumps([TRUNCATION_SUFFIX], default=str)
+    if kept > 0:
+        return "[" + ", ".join([*parts[:kept], sentinel]) + "]"
+
+    sentinel_only = "[" + sentinel + "]"
     if len(sentinel_only) <= max_length:
         return sentinel_only
 
