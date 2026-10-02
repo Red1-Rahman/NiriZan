@@ -9,21 +9,31 @@ cleanup, async behaviour, external dependencies) are intentionally absent.
 """
 
 import json
+import random
+import re
 
 import pytest
 
+from nirizan.instrumentation.otel import semconv
 from nirizan.instrumentation.otel.semconv import (
+    GEN_AI_PROVIDER_NAME,
+    GEN_AI_SYSTEM,
+    ID_SOURCE_DERIVED,
+    ID_SOURCE_ROUNDTRIP,
     MAX_ATTR_VALUE_LENGTH,
+    NIRIZAN_INSTRUMENTATION_SCOPE,
     SEMCONV_VERSION,
     SEQ_ATTR_PREFIX,
+    SPAN_ID_SOURCE_DERIVED,
+    SPAN_ID_SOURCE_ROUNDTRIP,
     TRUNCATION_SUFFIX,
     decode_sequence_key,
+    dumps_attribute_json,
     encode_sequence_attribute_value,
     encode_sequence_key,
     is_sequence_key,
     truncate_attribute_value,
 )
-
 
 # ---------------------------------------------------------------------------
 # Constant invariants (regression protection)
@@ -45,9 +55,47 @@ def test_max_attr_value_length_default_is_1024() -> None:
     assert MAX_ATTR_VALUE_LENGTH == 1024
 
 
-def test_semconv_version_is_pinned() -> None:
-    """The tracked upstream version is documented and versioned deliberately."""
-    assert SEMCONV_VERSION == "1.27.0"
+def test_semconv_version_has_semver_format() -> None:
+    """The tracked upstream version is a MAJOR.MINOR.PATCH string.
+
+    The test asserts the format rather than a specific value, so a deliberate
+    bump of the baseline does not require touching this test. A bump should be
+    accompanied by a review of the attribute constants, not by editing a test.
+    """
+    assert re.fullmatch(r"\d+\.\d+\.\d+", SEMCONV_VERSION)
+
+
+def test_persisted_provenance_values_are_frozen() -> None:
+    """These values are written into span attributes and read back on re-ingest."""
+    assert ID_SOURCE_ROUNDTRIP == "roundtrip"
+    assert ID_SOURCE_DERIVED == "derived"
+
+
+def test_span_id_source_aliases_match_neutral_names() -> None:
+    """The older SPAN_ID_SOURCE_* names must stay equal to ID_SOURCE_*."""
+    assert SPAN_ID_SOURCE_ROUNDTRIP == ID_SOURCE_ROUNDTRIP
+    assert SPAN_ID_SOURCE_DERIVED == ID_SOURCE_DERIVED
+
+
+def test_provider_name_and_legacy_system_keys_are_distinct() -> None:
+    """The newer provider key must not collide with the legacy system key."""
+    assert GEN_AI_PROVIDER_NAME == "gen_ai.provider.name"
+    assert GEN_AI_SYSTEM == "gen_ai.system"
+    assert GEN_AI_PROVIDER_NAME != GEN_AI_SYSTEM
+
+
+def test_instrumentation_scope_name_is_frozen() -> None:
+    """The exporter's tracer name and the processor's loop guard must agree."""
+    assert NIRIZAN_INSTRUMENTATION_SCOPE == "nirizan"
+
+
+def test_all_exports_exist_and_are_sorted() -> None:
+    """Every name in ``__all__`` resolves, and the list stays sorted and unique."""
+    names = list(semconv.__all__)
+    assert len(names) == len(set(names))
+    for name in names:
+        assert hasattr(semconv, name), f"__all__ lists missing name {name!r}"
+    assert names == sorted(names)
 
 
 # ---------------------------------------------------------------------------
@@ -155,6 +203,40 @@ def test_encode_sequence_key_rejects_blank_bodies(bad_key: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+# JSON attribute formatting
+# ---------------------------------------------------------------------------
+
+
+def test_dumps_attribute_json_keeps_non_ascii_unescaped() -> None:
+    """Non-ASCII text is not expanded into ``\\uXXXX`` escapes."""
+    text = "বাংলা"
+    result = dumps_attribute_json([text])
+    assert "\\u" not in result
+    assert json.loads(result) == [text]
+
+
+def test_dumps_attribute_json_uses_str_for_unknown_types() -> None:
+    class CustomObj:
+        def __str__(self) -> str:
+            return "custom_val"
+
+    assert json.loads(dumps_attribute_json({"k": CustomObj()})) == {"k": "custom_val"}
+
+
+def test_dumps_attribute_json_escapes_text_that_is_not_utf8_encodable() -> None:
+    """A lone surrogate cannot be encoded as UTF-8, so it falls back to escapes."""
+    result = dumps_attribute_json(["\ud800"])
+    result.encode("utf-8")  # must not raise
+    assert json.loads(result) == ["\ud800"]
+
+
+def test_dumps_attribute_json_is_deterministic_and_uses_default_separators() -> None:
+    """The separators are part of the length math in the sequence encoder."""
+    assert dumps_attribute_json(["a", "b"]) == '["a", "b"]'
+    assert dumps_attribute_json({"a": 1}) == '{"a": 1}'
+
+
+# ---------------------------------------------------------------------------
 # Sequence attribute value encoding
 # ---------------------------------------------------------------------------
 
@@ -170,6 +252,12 @@ def test_encode_sequence_attribute_value_within_limit_is_valid_json() -> None:
 def test_encode_sequence_attribute_value_empty_sequence() -> None:
     """An empty sequence serializes to a valid empty JSON array."""
     assert encode_sequence_attribute_value([]) == "[]"
+
+
+def test_encode_sequence_attribute_value_empty_sequence_needs_two_characters() -> None:
+    """``[]`` is two characters; a smaller budget cannot hold even the sentinel."""
+    with pytest.raises(ValueError, match="Cannot encode sequence as valid JSON"):
+        encode_sequence_attribute_value([], max_length=1)
 
 
 def test_encode_sequence_attribute_value_single_item() -> None:
@@ -188,6 +276,27 @@ def test_encode_sequence_attribute_value_non_serializable_items_use_str() -> Non
 
     result = encode_sequence_attribute_value([CustomObj()])
     assert json.loads(result) == ["custom_val"]
+
+
+def test_encode_sequence_attribute_value_unserializable_item_does_not_affect_others() -> None:
+    """A dict with a tuple key cannot be serialized natively. Only that item
+    falls back to ``str``; its neighbours keep their native JSON form.
+    """
+    bad_item = {(1, 2): "v"}
+    result = encode_sequence_attribute_value(["ok", bad_item, 7])
+
+    parsed = json.loads(result)
+    assert parsed[0] == "ok"
+    assert parsed[1] == str(bad_item)
+    assert parsed[2] == 7
+
+
+def test_encode_sequence_attribute_value_circular_reference_uses_str() -> None:
+    loop: list[object] = []
+    loop.append(loop)
+
+    parsed = json.loads(encode_sequence_attribute_value([loop]))
+    assert parsed == [str(loop)]
 
 
 def test_encode_sequence_attribute_value_truncates_with_sentinel() -> None:
@@ -213,8 +322,8 @@ def test_encode_sequence_attribute_value_truncation_preserves_prefix_items() -> 
     result = encode_sequence_attribute_value(items, max_length=max_len)
 
     parsed = json.loads(result)
-    assert parsed[:2] == ["alpha", "beta"]
-    assert parsed[-1] == TRUNCATION_SUFFIX
+    assert parsed == ["alpha", "beta", TRUNCATION_SUFFIX]
+    assert len(result) == max_len
 
 
 def test_encode_sequence_attribute_value_sentinel_only_when_needed() -> None:
@@ -248,28 +357,156 @@ def test_encode_sequence_attribute_value_exactly_at_limit_does_not_truncate() ->
     assert result == json.dumps(items)
 
 
+def test_encode_sequence_attribute_value_one_below_exact_limit_truncates() -> None:
+    """One character below the exact fit must switch to the truncated form."""
+    items = ["a" * 20, "b" * 20]
+    exact_len = len(json.dumps(items))
+    result = encode_sequence_attribute_value(items, max_length=exact_len - 1)
+
+    assert json.loads(result) == ["a" * 20, TRUNCATION_SUFFIX]
+    assert len(result) <= exact_len - 1
+
+
 def test_encode_sequence_attribute_value_raises_when_even_sentinel_does_not_fit() -> None:
     with pytest.raises(ValueError, match="Cannot encode sequence as valid JSON"):
         encode_sequence_attribute_value(["a", "b"], max_length=5)
 
 
-def test_encode_sequence_attribute_value_output_is_always_parseable() -> None:
-    """Property: whatever the input, the output parses as a JSON array.
+def test_encode_sequence_attribute_value_counts_code_points_not_escapes() -> None:
+    """Non-ASCII items cost one character per code point against the budget.
 
-    This is the module's central contract for this function -- the earlier
-    version returned invalid JSON when the input was too long to fit. The
-    test cases below cover the three branches: fits-as-is, fits-after-trim,
-    and sentinel-only.
+    Under ASCII escaping this list would need roughly six times as many
+    characters and would be truncated at this limit.
     """
-    test_cases = [
+    items = ["বাংলা", "العربية", "日本語"]
+    exact_len = len(json.dumps(items, ensure_ascii=False))
+
+    result = encode_sequence_attribute_value(items, max_length=exact_len)
+
+    assert "\\u" not in result
+    assert json.loads(result) == items
+
+
+def test_encode_sequence_attribute_value_output_is_always_encodable() -> None:
+    """Even a lone surrogate inside an item yields text that can be exported."""
+    result = encode_sequence_attribute_value(["ok", "\ud800"])
+    result.encode("utf-8")  # must not raise
+    assert json.loads(result) == ["ok", "\ud800"]
+
+
+def test_encode_sequence_attribute_value_work_is_bounded_by_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A huge input must not be serialized in full.
+
+    Regression: the previous implementation re-serialized the whole remaining
+    list for every dropped item, which is quadratic. The encoder now stops once
+    the budget is exceeded, so the number of ``json.dumps`` calls depends on
+    ``max_length`` and not on the length of the input.
+    """
+    real_dumps = json.dumps
+    calls = 0
+
+    def counting_dumps(*args: object, **kwargs: object) -> str:
+        nonlocal calls
+        calls += 1
+        return real_dumps(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(json, "dumps", counting_dumps)
+
+    items = [f"item_{i}" for i in range(10_000)]
+    result = encode_sequence_attribute_value(items, max_length=MAX_ATTR_VALUE_LENGTH)
+
+    assert len(result) <= MAX_ATTR_VALUE_LENGTH
+    assert json.loads(result)[-1] == TRUNCATION_SUFFIX
+    assert calls < 200
+
+
+# ---------------------------------------------------------------------------
+# Equivalence with the original (quadratic) algorithm
+# ---------------------------------------------------------------------------
+
+
+def _reference_encode(items: list[object], max_length: int) -> str:
+    """The original trim-from-the-tail algorithm, kept as an executable spec.
+
+    It is quadratic, which is why the production code no longer uses it, but it
+    is obviously correct, so it is a good oracle for randomized comparison.
+    """
+    raw = json.dumps(items, ensure_ascii=False, default=str)
+    if len(raw) <= max_length:
+        return raw
+
+    trimmed = list(items)
+    while trimmed:
+        candidate = json.dumps([*trimmed, TRUNCATION_SUFFIX], ensure_ascii=False, default=str)
+        if len(candidate) <= max_length:
+            return candidate
+        trimmed.pop()
+
+    sentinel_only = json.dumps([TRUNCATION_SUFFIX])
+    if len(sentinel_only) <= max_length:
+        return sentinel_only
+    raise ValueError("does not fit")
+
+
+def _random_item(rng: random.Random) -> object:
+    choice = rng.randrange(6)
+    if choice == 0:
+        return rng.randrange(-1000, 1000)
+    if choice == 1:
+        return rng.random() < 0.5
+    if choice == 2:
+        return None
+    if choice == 3:
+        return round(rng.uniform(-100, 100), 3)
+    alphabet = "abcXYZ 012_-বাংলাعربي日本"
+    return "".join(rng.choice(alphabet) for _ in range(rng.randrange(0, 25)))
+
+
+def test_encode_sequence_attribute_value_matches_reference_algorithm() -> None:
+    """The linear encoder returns exactly what the original algorithm returned."""
+    rng = random.Random(20260402)
+
+    for _ in range(400):
+        items = [_random_item(rng) for _ in range(rng.randrange(0, 40))]
+        max_length = rng.randrange(0, 260)
+
+        try:
+            expected: str | None = _reference_encode(items, max_length)
+        except ValueError:
+            expected = None
+
+        if expected is None:
+            with pytest.raises(ValueError, match="Cannot encode sequence as valid JSON"):
+                encode_sequence_attribute_value(items, max_length=max_length)
+        else:
+            assert encode_sequence_attribute_value(items, max_length=max_length) == expected
+
+
+def test_encode_sequence_attribute_value_output_is_always_parseable() -> None:
+    """Property: whatever the input, the output parses as a JSON array within budget.
+
+    This is the module's central contract for this function. The cases cover
+    fits-as-is, fits-after-trim, and sentinel-only, plus randomized inputs.
+    """
+    test_cases: list[tuple[list[object], int]] = [
         (["short"], 1024),  # fits as-is
         ([f"item_{i}" for i in range(100)], 50),  # fits after trim
-        (["x" * 200], 100),  # fits after trim (one item dropped)
+        (["x" * 200], 100),  # sentinel-only (the item itself cannot fit)
         ([], 10),  # empty
         ([1, 2, 3], 20),  # mixed types, fits
         ([{"a": 1}], 100),  # dict item, uses default=str
     ]
     for items, max_len in test_cases:
         result = encode_sequence_attribute_value(items, max_length=max_len)
-        parsed = json.loads(result)
-        assert isinstance(parsed, list)
+        assert len(result) <= max_len
+        assert isinstance(json.loads(result), list)
+
+    rng = random.Random(7)
+    for _ in range(200):
+        items = [_random_item(rng) for _ in range(rng.randrange(0, 60))]
+        max_len = rng.randrange(18, 400)  # 18 is the smallest sentinel-only budget
+        result = encode_sequence_attribute_value(items, max_length=max_len)
+        assert len(result) <= max_len
+        assert isinstance(json.loads(result), list)
