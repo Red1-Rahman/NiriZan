@@ -7,14 +7,18 @@ the UUID <-> int conversions. Categories that do not apply (state transitions,
 side effects, resource cleanup, async behaviour) are intentionally absent.
 """
 
+import hashlib
+import os
+import random
 import subprocess
 import sys
 from uuid import UUID
 
 import pytest
 
-from nirizan.instrumentation.otel._id_mapping import _MAX_SPAN_ID, _MAX_TRACE_ID
 from nirizan.instrumentation.otel._id_mapping import (
+    _MAX_SPAN_ID,
+    _MAX_TRACE_ID,
     _NIRIZAN_SPAN_ID_NAMESPACE,
     is_valid_otel_span_id,
     is_valid_otel_trace_id,
@@ -23,7 +27,6 @@ from nirizan.instrumentation.otel._id_mapping import (
     uuid_to_otel_span_id,
     uuid_to_otel_trace_id,
 )
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -35,6 +38,17 @@ from nirizan.instrumentation.otel._id_mapping import (
 _VALID_UUID = UUID("12345678-1234-5678-1234-567812345678")
 _VALID_TRACE_INT = 0x1234567890ABCDEF1234567890ABCDEF
 _VALID_SPAN_INT = 0x1122334455667788
+
+# Known answers for the span ID derivation, computed once and committed. They
+# are also what the standard library's ``uuid.uuid5`` returns on Python 3.12+
+# when given the same namespace and the 8-byte big-endian name, which is how
+# the values were cross-checked. If any of these fail, every span ID that was
+# ever derived from an OTel span ID has silently changed.
+_DERIVED_SPAN_ID_GOLDEN: dict[int, UUID] = {
+    0x1122334455667788: UUID("423a37ba-78b3-520e-b257-9cecf2d06ae3"),
+    1: UUID("7f606d49-dcda-5d16-bd23-81bc87414121"),
+    _MAX_SPAN_ID: UUID("917f31d2-65ce-5fbe-ab8a-99bea247d331"),
+}
 
 
 # ---------------------------------------------------------------------------
@@ -214,13 +228,37 @@ def test_otel_span_id_to_uuid_uses_big_endian_byte_serialization() -> None:
     implementation avoids ``uuid.uuid5`` for the same reason, so the test
     mirrors that choice.
     """
-    import hashlib
-
     digest = hashlib.sha1(
         _NIRIZAN_SPAN_ID_NAMESPACE.bytes + _VALID_SPAN_INT.to_bytes(8, "big")
     ).digest()
     expected = UUID(bytes=digest[:16], version=5)
     assert otel_span_id_to_uuid(_VALID_SPAN_INT) == expected
+
+
+@pytest.mark.parametrize(("otel_id", "expected"), list(_DERIVED_SPAN_ID_GOLDEN.items()))
+def test_otel_span_id_to_uuid_matches_known_answers(otel_id: int, expected: UUID) -> None:
+    """Pin concrete outputs, not just the recipe.
+
+    The recipe test above recomputes the expected value with the same steps as
+    the implementation, so a change to the namespace or byte order that is
+    applied to both would go unnoticed. Committed literals do not move.
+    """
+    assert otel_span_id_to_uuid(otel_id) == expected
+
+
+def test_otel_span_id_to_uuid_yields_rfc4122_version_5_uuids() -> None:
+    """Derived IDs are well-formed name-based (version 5) UUIDs."""
+    derived = otel_span_id_to_uuid(_VALID_SPAN_INT)
+    assert derived.version == 5
+    assert derived.variant == "specified in RFC 4122"
+
+
+def test_otel_span_id_to_uuid_has_no_collisions_in_a_large_sample() -> None:
+    """Distinct OTel span IDs map to distinct UUIDs (sampled, not exhaustive)."""
+    rng = random.Random(20260402)
+    ids = {rng.randrange(1, _MAX_SPAN_ID + 1) for _ in range(5_000)}
+    derived = {otel_span_id_to_uuid(i) for i in ids}
+    assert len(derived) == len(ids)
 
 
 # ---------------------------------------------------------------------------
@@ -259,31 +297,29 @@ def test_trace_id_round_trip_otel_to_uuid_to_otel(otel_value: int) -> None:
     assert uuid_to_otel_trace_id(nirizan_value) == otel_value
 
 
-def test_span_id_round_trip_is_intentionally_one_directional() -> None:
-    """The documented lossiness of span ID conversion.
+def test_span_id_conversion_is_lossy_in_both_directions() -> None:
+    """Span ID conversion is lossy both ways, and derivation is stable.
 
-    NiriZan -> OTel truncates the UUID to 64 bits. OTel -> NiriZan derives a
-    *new* UUID via uuid5. So a full NiriZan -> OTel -> NiriZan round trip does
-    NOT recover the original UUID, and the test asserts that explicitly rather
-    than assuming a bijection the module never claimed.
+    NiriZan -> OTel keeps only the low 64 bits of the UUID. OTel -> NiriZan
+    derives a new UUID from a hash of the OTel span ID, so the derived UUID
+    does not carry the input value in its low bits. As a result, neither
+    NiriZan -> OTel -> NiriZan nor OTel -> NiriZan -> OTel recovers the
+    original value, and the bridge preserves the original ID by stashing it
+    in a span attribute instead (``nirizan.span_id`` and ``otel.span_id``).
 
-    OTel -> NiriZan -> OTel, on the other hand, is exact, because the derived
-    UUID's low 64 bits are... let me not assert something false; the derived
-    UUID is a fresh uuid5 output, not a value whose low bits equal the input.
-    The only exact round trip is the one the module actually guarantees, and
-    that is tested at the OTel layer: given an OTel span ID, deriving a
-    NiriZan UUID twice yields the same result, and the caller stashes the
-    original OTel ID in ``attributes["otel.span_id"]`` for later recovery.
+    Deriving a NiriZan UUID from the same OTel span ID always gives the same
+    result, which is what makes the derived value usable as an identifier.
     """
-    original = UUID("12345678-1234-5678-1234-567812345678")
-    otel_id = uuid_to_otel_span_id(original)
+    # NiriZan -> OTel -> NiriZan does not recover the original UUID.
+    otel_id = uuid_to_otel_span_id(_VALID_UUID)
     reconstructed = otel_span_id_to_uuid(otel_id)
-
-    # The reconstruction is a valid UUID but NOT the original.
     assert isinstance(reconstructed, UUID)
-    assert reconstructed != original
+    assert reconstructed != _VALID_UUID
 
-    # Repeated derivation from the same OTel ID is stable.
+    # OTel -> NiriZan -> OTel does not recover the original span ID.
+    assert uuid_to_otel_span_id(otel_span_id_to_uuid(_VALID_SPAN_INT)) != _VALID_SPAN_INT
+
+    # Derivation from the same OTel span ID is stable.
     assert otel_span_id_to_uuid(otel_id) == reconstructed
 
 
@@ -307,34 +343,49 @@ def test_uuid_to_otel_span_id_is_idempotent() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_otel_span_id_to_uuid_is_stable_across_processes() -> None:
-    """The uuid5 derivation must not depend on process-local state.
+def _run_derivation_in_fresh_interpreter(hash_seed: str) -> str:
+    """Derive a span ID UUID in a new interpreter with a given PYTHONHASHSEED.
 
-    PYTHONHASHSEED and similar environment variables affect the standard
-    library's hash randomization, but not uuid5 (which uses SHA-1). This test
-    runs the same derivation in two fresh interpreters with different
-    PYTHONHASHSEED values and asserts the outputs match.
+    The child environment is the parent environment with ``PYTHONHASHSEED``
+    set last, so an ambient value (for example one set by CI or a pytest
+    plugin) cannot override the seed under test. ``PYTHONPATH`` is rebuilt
+    from the parent's ``sys.path`` so the child can import the package even
+    when the tests rely on pytest's ``pythonpath`` setting rather than an
+    installed distribution.
     """
     script = (
         "from nirizan.instrumentation.otel._id_mapping import otel_span_id_to_uuid;"
-        "print(otel_span_id_to_uuid(0x1122334455667788))"
+        f"print(otel_span_id_to_uuid({_VALID_SPAN_INT:#x}))"
     )
+    env = {
+        **os.environ,
+        "PYTHONPATH": os.pathsep.join(p for p in sys.path if p),
+        "PYTHONHASHSEED": hash_seed,
+    }
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        capture_output=True,
+        text=True,
+        check=True,
+        env=env,
+    )
+    return proc.stdout.strip()
 
-    outputs = []
-    for seed in ("0", "1"):
-        proc = subprocess.run(
-            [sys.executable, "-c", script],
-            capture_output=True,
-            text=True,
-            check=True,
-            env={"PYTHONHASHSEED": seed, "PATH": "", **__import__("os").environ},
-        )
-        outputs.append(proc.stdout.strip())
+
+def test_otel_span_id_to_uuid_is_stable_across_processes() -> None:
+    """The uuid5 derivation must not depend on process-local state.
+
+    PYTHONHASHSEED randomizes ``str`` and ``bytes`` hashing, but not SHA-1, so
+    the derivation is expected to be independent of it. This runs the same
+    derivation in two fresh interpreters with different seeds and checks that
+    both agree with each other, with the in-process result, and with the
+    committed known answer.
+    """
+    outputs = [_run_derivation_in_fresh_interpreter(seed) for seed in ("0", "1")]
 
     assert outputs[0] == outputs[1], f"uuid5 derivation differs across processes: {outputs!r}"
-
-    # And the subprocess result matches the in-process result.
     assert outputs[0] == str(otel_span_id_to_uuid(_VALID_SPAN_INT))
+    assert outputs[0] == str(_DERIVED_SPAN_ID_GOLDEN[_VALID_SPAN_INT])
 
 
 # ---------------------------------------------------------------------------
