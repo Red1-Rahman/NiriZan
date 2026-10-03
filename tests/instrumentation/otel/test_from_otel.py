@@ -2835,20 +2835,25 @@ def test_sdk_nested_spans_become_a_linked_trace(
     assert spans["retrieve"].input_payload == "q"
 
 
-def test_sdk_exception_is_captured_as_an_error_status(
-    provider: tuple[TracerProvider, NiriZanSpanProcessor], sink: RecordingSink
-) -> None:
-    tracer_provider, _ = provider
-    tracer = tracer_provider.get_tracer("app")
+def test_raising_span_exports_error_status() -> None:
+    """A span whose body raises exports OTel error status and the message."""
+    sink = RecordingSink()
+    tracer_provider = TracerProvider()
+    tracer_provider.add_span_processor(NiriZanSpanProcessor(sink))
+    tracer = tracer_provider.get_tracer("tests.from_otel")
 
     with pytest.raises(ValueError, match="kaboom"):
-        with tracer.start_as_current_span("failing", attributes={NIRIZAN_SPAN_KIND: "planning"}):
+        with tracer.start_as_current_span(
+            "failing", attributes={NIRIZAN_SPAN_KIND: "planning"}
+        ):
             raise ValueError("kaboom")
 
     assert tracer_provider.force_flush() is True
     attrs = sink.traces[0].spans[0].attributes
     assert attrs[OTEL_STATUS_CODE] == "error"
     assert "kaboom" in str(attrs[OTEL_STATUS_DESCRIPTION])
+
+    tracer_provider.shutdown()
 
 
 def test_sdk_in_flight_trace_survives_a_force_flush(
