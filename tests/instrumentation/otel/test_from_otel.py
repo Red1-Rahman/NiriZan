@@ -475,8 +475,16 @@ def test_processor_accepts_every_keyword_from_the_original_constructor(
 
 
 def test_processor_rejects_unknown_keywords(sink: RecordingSink) -> None:
+    """The constructor rejects unknown keyword arguments with ``TypeError``.
+
+    The bogus keyword is passed through ``**`` unpacking on purpose: a name
+    supplied from a dict is not statically resolvable, so CodeQL's
+    ``py/call/wrong-named-class-argument`` (and mypy's ``call-arg``) cannot
+    flag a call whose failure is the very behavior under test.
+    """
+    invalid_kwargs: dict[str, Any] = {"not_a_setting": 1}
     with pytest.raises(TypeError):
-        NiriZanSpanProcessor(sink, not_a_setting=1)  # type: ignore[call-arg]
+        NiriZanSpanProcessor(sink, **invalid_kwargs)
 
 
 def test_invalid_configuration_does_not_start_a_consumer_thread(sink: RecordingSink) -> None:
