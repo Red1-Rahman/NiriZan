@@ -94,8 +94,6 @@ _QUEUE_FULL_WARNING_INTERVAL_SECONDS: float = 5.0
 _SIG_ROOT: str = "root"
 _SIG_ATTACH: str = "attach_to"
 _SIG_MISSING: str = "missing"
-_SIG_CYCLE: str = "cycle"
-
 
 # ---------------------------------------------------------------------------
 # Stat reasons and configuration
