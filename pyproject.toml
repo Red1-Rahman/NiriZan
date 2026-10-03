@@ -51,6 +51,10 @@ dev = [
     "mypy>=1.10",
     "scipy-stubs",
 ]
+otel = [
+    "opentelemetry-api>=1.27",
+    "opentelemetry-sdk>=1.27",
+]
 
 [build-system]
 requires = ["hatchling"]
