@@ -41,7 +41,7 @@ import os  # noqa: E402
 import random  # noqa: E402
 import re  # noqa: E402
 import threading  # noqa: E402
-from collections.abc import Callable, Iterator  # noqa: E402
+from collections.abc import Callable, Iterator, Sequence  # noqa: E402
 from datetime import UTC, datetime  # noqa: E402
 from functools import lru_cache  # noqa: E402
 from typing import Any  # noqa: E402
