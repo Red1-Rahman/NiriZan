@@ -41,6 +41,8 @@ import os  # noqa: E402
 import random  # noqa: E402
 import re  # noqa: E402
 import threading  # noqa: E402
+import time  # noqa: E402
+import warnings  # noqa: E402
 from collections.abc import Callable, Iterator, Sequence  # noqa: E402
 from datetime import UTC, datetime  # noqa: E402
 from functools import lru_cache  # noqa: E402
@@ -196,7 +198,7 @@ def make_span(
         else None
     )
     return ReadableSpan(
-        name=name,
+        name=name,  # type: ignore[arg-type]  # tests pass None to cover the fallback
         context=SpanContext(
             trace_id=trace_id,
             span_id=span_id,
@@ -261,6 +263,19 @@ class BlockingSink(RecordingSink):
         self.entered.set()
         assert self.release.wait(timeout=10), "test never released the sink"
         super().enqueue_trace(trace)
+
+
+def wait_until(predicate: Callable[[], bool], *, timeout: float = 5.0) -> None:
+    """Poll a condition that another thread is about to make true.
+
+    Used only to line threads up at a known point (for example "the shutdown flag
+    is set"), never to wait for work to finish: results are always read after an
+    explicit ``force_flush``, ``shutdown`` or ``join``.
+    """
+    deadline = time.monotonic() + timeout
+    while not predicate():
+        assert time.monotonic() < deadline, "condition was not reached in time"
+        time.sleep(0.002)
 
 
 def span_names(trace: Trace) -> list[str]:
@@ -443,8 +458,9 @@ def test_config_accepts_the_smallest_valid_values() -> None:
 
 def test_config_is_immutable() -> None:
     config = ProcessorConfig()
+    field = "max_queue_size"
     with pytest.raises(ValidationError):
-        config.max_queue_size = 5  # type: ignore[misc]
+        setattr(config, field, 5)
 
 
 def test_processor_exposes_its_validated_config_and_round_trips_through_from_config(
@@ -930,15 +946,28 @@ def test_convert_attributes_does_not_mutate_its_input() -> None:
     assert original == snapshot
 
 
-def test_scope_name_reads_the_scope_and_falls_back_to_the_deprecated_info() -> None:
+def test_scope_name_reads_the_instrumentation_scope() -> None:
     assert _scope_name(make_span(1, scope="my.lib")) == "my.lib"
 
-    legacy = MagicMock(spec=["instrumentation_info"])
-    legacy.instrumentation_info.name = "old.lib"
-    assert _scope_name(legacy) == "old.lib"
+
+def test_scope_name_never_touches_the_deprecated_instrumentation_info() -> None:
+    """``instrumentation_info`` warns on every access (deprecated since OpenTelemetry 1.11.1).
+
+    Regression: a span without a scope used to fall through to that property and
+    emit a ``DeprecationWarning`` from library code.
+    """
+    scopeless = ReadableSpan(name="no-scope", context=None)
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        assert _scope_name(scopeless) is None
 
 
-@pytest.mark.parametrize("span", [object(), MagicMock(), MagicMock(spec=[])], ids=["bare", "mock", "empty-spec"])
+@pytest.mark.parametrize(
+    "span",
+    [object(), MagicMock(), MagicMock(spec=[]), MagicMock(spec=["instrumentation_info"])],
+    ids=["bare", "mock", "empty-spec", "legacy-info-only"],
+)
 def test_scope_name_is_none_when_the_name_is_unavailable_or_not_a_string(span: Any) -> None:
     assert _scope_name(span) is None
 
@@ -1301,8 +1330,8 @@ def test_resolve_parents_result_does_not_depend_on_insertion_order() -> None:
         rng.shuffle(shuffled)
         kind_map = dict.fromkeys(sorted(kinds), SpanKind.GENERATION)
 
-        a = _resolve_parents(buffer_of(*spans), kind_map, "emit")  # type: ignore[arg-type]
-        b = _resolve_parents(buffer_of(*shuffled), kind_map, "emit")  # type: ignore[arg-type]
+        a = _resolve_parents(buffer_of(*spans), kind_map, "emit")
+        b = _resolve_parents(buffer_of(*shuffled), kind_map, "emit")
 
         assert a.parent_of == b.parent_of
         assert a.dropped == b.dropped
@@ -1356,8 +1385,9 @@ def test_assembly_upholds_the_trace_and_span_contracts(inert: NiriZanSpanProcess
     assert len({s.span_id for s in trace.spans}) == len(trace.spans)
     assert all(isinstance(v, (str, int, float, bool)) for s in trace.spans for v in s.attributes.values())
     assert trace.application_name
-    with pytest.raises(ValidationError):
-        trace.spans[0].name = "mutated"  # type: ignore[misc]  # Span is frozen
+    field = "name"
+    with pytest.raises(ValidationError):  # Span is frozen
+        setattr(trace.spans[0], field, "mutated")
 
 
 def test_assembly_orders_spans_by_start_time_then_span_id(inert: NiriZanSpanProcessor) -> None:
@@ -1441,6 +1471,23 @@ def test_assembly_gives_a_duplicate_stashed_span_id_a_derived_replacement(
     assert spans["second"].attributes[NIRIZAN_SPAN_ID_SOURCE] == SPAN_ID_SOURCE_DERIVED
     assert len({s.span_id for s in trace.spans}) == 2
     assert inert.get_stats()["duplicate_nirizan_span_id"] == 1
+
+
+def test_assembly_lets_the_earliest_started_span_keep_a_contested_id_whatever_the_arrival_order(
+    inert: NiriZanSpanProcessor,
+) -> None:
+    shared = str(uuid4())
+    earlier = make_span(1, name="earlier", attributes={NIRIZAN_SPAN_ID: shared})
+    later = make_span(2, name="later", attributes={NIRIZAN_SPAN_ID: shared})
+
+    arrived_late_first = assemble_ok(inert, later, earlier)
+    arrived_early_first = assemble_ok(inert, earlier, later)
+
+    for trace in (arrived_late_first, arrived_early_first):
+        spans = by_name(trace)
+        assert spans["earlier"].span_id == UUID(shared)
+        assert spans["later"].span_id == otel_span_id_to_uuid(2)
+    assert arrived_late_first.spans == arrived_early_first.spans
 
 
 def test_assembly_keeps_children_attached_to_the_right_duplicate(
@@ -1601,6 +1648,33 @@ def test_assembly_captures_trace_state_only_when_present(inert: NiriZanSpanProce
     assert OTEL_TRACE_STATE not in without.spans[0].attributes
 
 
+def test_assembly_captures_trace_state_in_the_w3c_header_format(
+    inert: NiriZanSpanProcessor,
+) -> None:
+    """Regression: ``str(TraceState)`` is a Python list repr, not the W3C tracestate value."""
+    state = TraceState([("congo", "t61rcWkgMzE"), ("rojo", "00f067aa0ba902b7")])
+
+    value = assemble_ok(inert, make_span(1, trace_state=state)).spans[0].attributes[OTEL_TRACE_STATE]
+
+    assert value == "congo=t61rcWkgMzE,rojo=00f067aa0ba902b7"
+    assert "{key=" not in str(value)
+    assert TraceState.from_header([str(value)]) == state
+
+
+def test_assembly_omits_trace_state_it_cannot_serialize_and_keeps_the_span(
+    inert: NiriZanSpanProcessor, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def broken(self: TraceState) -> str:
+        raise RuntimeError("cannot serialize")
+
+    monkeypatch.setattr(TraceState, "to_header", broken)
+
+    trace = assemble_ok(inert, make_span(1, trace_state=TraceState([("vendor", "x")])))
+
+    assert OTEL_TRACE_STATE not in trace.spans[0].attributes
+    assert inert.get_stats() == {}
+
+
 def test_assembly_captures_service_and_span_id_metadata(inert: NiriZanSpanProcessor) -> None:
     attrs = assemble_ok(inert, make_span(0xAB, service="svc")).spans[0].attributes
 
@@ -1622,7 +1696,7 @@ def test_assembly_preserves_the_original_otel_attributes(inert: NiriZanSpanProce
 def test_assembly_encodes_sequence_attributes(inert: NiriZanSpanProcessor) -> None:
     attrs = assemble_ok(inert, make_span(1, attributes={"tags": ("a", "b")})).spans[0].attributes
 
-    assert json.loads(attrs[f"{SEQ_ATTR_PREFIX}tags"]) == ["a", "b"]
+    assert json.loads(str(attrs[f"{SEQ_ATTR_PREFIX}tags"])) == ["a", "b"]
 
 
 @pytest.mark.parametrize("kind", list(SpanKind))
@@ -1655,7 +1729,7 @@ def test_assembly_preserves_non_ascii_text(inert: NiriZanSpanProcessor) -> None:
 
     assert result.name == "বাংলা পরীক্ষা"
     assert result.input_payload == "আপনি কেমন আছেন?"
-    assert "\\u" not in result.attributes[f"{SEQ_ATTR_PREFIX}words"]
+    assert "\\u" not in str(result.attributes[f"{SEQ_ATTR_PREFIX}words"])
 
 
 def test_assembly_drops_unrecognized_spans_by_default_and_counts_them(
@@ -2538,6 +2612,82 @@ def test_shutdown_delivers_spans_queued_before_it(sink: RecordingSink) -> None:
     assert len(sink.traces) == 1
 
 
+def test_on_end_never_raises_into_the_application_when_enqueueing_fails(
+    make_processor: Callable[..., NiriZanSpanProcessor],
+    sink: RecordingSink,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    processor = make_processor()
+
+    def broken_put(_: object) -> None:
+        raise RuntimeError("queue is broken")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(processor._queue, "put_nowait", broken_put)
+        with caplog.at_level(logging.ERROR, logger=_MODULE_LOGGER):
+            processor.on_end(make_span(1))  # must not raise
+
+    assert any("Failed to enqueue OTel span" in r.getMessage() for r in caplog.records)
+    processor.on_end(make_span(1, trace_id=0xB))
+    assert processor.force_flush() is True
+    assert [t.trace_id for t in sink.traces] == [otel_trace_id_to_uuid(0xB)]
+
+
+def test_shutdown_with_a_full_queue_still_stops_the_consumer_and_loses_nothing_queued(
+    make_processor: Callable[..., NiriZanSpanProcessor],
+) -> None:
+    blocking = BlockingSink()
+    processor = make_processor(sink=blocking, max_queue_size=1)
+    processor.on_end(make_span(1, trace_id=0xA))
+    flusher = threading.Thread(target=processor.force_flush, kwargs={"timeout_millis": 10_000})
+    flusher.start()
+    assert blocking.entered.wait(timeout=5), "consumer never reached the sink"
+    processor.on_end(make_span(1, trace_id=0xB))  # takes the only queue slot
+
+    closer = threading.Thread(target=processor.shutdown)
+    closer.start()
+    wait_until(lambda: processor.get_stats().get("queue_full") == 1)  # sentinel did not fit
+    blocking.release.set()
+    closer.join(timeout=10)
+    flusher.join(timeout=10)
+
+    assert not closer.is_alive() and not flusher.is_alive()
+    assert not processor._consumer.is_alive()
+    assert {t.trace_id for t in blocking.traces} == {
+        otel_trace_id_to_uuid(0xA),
+        otel_trace_id_to_uuid(0xB),
+    }
+
+
+def test_shutdown_releases_a_force_flush_that_was_still_queued(
+    make_processor: Callable[..., NiriZanSpanProcessor],
+) -> None:
+    """No caller may be left waiting on a flush that shutdown will never process normally."""
+    blocking = BlockingSink()
+    processor = make_processor(sink=blocking)
+    processor.on_end(make_span(1, trace_id=0xA))
+    first = threading.Thread(target=processor.force_flush, kwargs={"timeout_millis": 10_000})
+    first.start()
+    assert blocking.entered.wait(timeout=5), "consumer never reached the sink"
+    results: list[bool] = []
+    second = threading.Thread(
+        target=lambda: results.append(processor.force_flush(timeout_millis=10_000))
+    )
+    second.start()
+    wait_until(lambda: processor._queue.qsize() == 1)  # the second request is queued
+    closer = threading.Thread(target=processor.shutdown)
+    closer.start()
+    wait_until(processor._shutdown.is_set)
+
+    blocking.release.set()
+    for thread in (first, second, closer):
+        thread.join(timeout=10)
+
+    assert not any(t.is_alive() for t in (first, second, closer))
+    assert results == [True]
+
+
 def test_force_flush_times_out_when_the_queue_is_saturated_and_data_is_not_lost_silently(
     make_processor: Callable[..., NiriZanSpanProcessor],
 ) -> None:
@@ -2757,13 +2907,17 @@ def test_a_processor_that_was_shut_down_stays_shut_down_after_a_simulated_fork(
     assert inert.force_flush() is False
 
 
-def test_reinit_after_fork_replaces_inherited_state_and_restarts_the_consumer(
+def test_reinit_after_fork_discards_inherited_state_and_restarts_the_consumer(
     make_processor: Callable[..., NiriZanSpanProcessor], sink: RecordingSink
 ) -> None:
-    processor = make_processor()
+    processor = make_processor(idle_timeout_seconds=0.05, max_trace_age_seconds=60.0)
+    # Trace A is in flight: two spans started, only one ended, so it stays buffered.
     processor.on_start(make_span(1, trace_id=0xA))
+    processor.on_start(make_span(2, trace_id=0xA))
     processor.on_end(make_span(2, trace_id=0xA))
     assert processor.force_flush()
+    assert sink.traces == []
+    inherited_consumer = processor._consumer
     old_queue, old_lock = processor._queue, processor._stats_lock
     processor._record_stat(StatReason.LATE_ARRIVAL)
 
@@ -2773,9 +2927,49 @@ def test_reinit_after_fork_replaces_inherited_state_and_restarts_the_consumer(
     assert processor._stats_lock is not old_lock
     assert processor._buffers == {} and processor._recent_flushes == {}
     assert processor.get_stats() == {}
+    assert processor._consumer is not inherited_consumer
+    assert processor._consumer.is_alive()
     processor.on_end(make_span(1, trace_id=0xB))
     assert processor.force_flush()
+    # Trace A belonged to the pre-fork process and is not re-emitted by this one.
     assert [t.trace_id for t in sink.traces] == [otel_trace_id_to_uuid(0xB)]
+
+
+def test_a_consumer_superseded_by_reinit_retires_and_leaves_one_consumer_running(
+    make_processor: Callable[..., NiriZanSpanProcessor],
+) -> None:
+    """A thread that predates ``_reinit_after_fork`` must not compete with its replacement.
+
+    A real forked child has no inherited threads, but the processor must stay
+    correct if re-initialization ever runs while the old thread still exists.
+    """
+    processor = make_processor(idle_timeout_seconds=0.05, max_trace_age_seconds=60.0)
+    inherited_consumer = processor._consumer
+
+    processor._reinit_after_fork()
+    inherited_consumer.join(timeout=5)
+
+    assert not inherited_consumer.is_alive()
+    assert processor._consumer.is_alive()
+    assert [t for t in consumer_threads() if t is inherited_consumer] == []
+
+
+def test_a_superseded_consumer_does_not_flush_the_new_state_on_its_way_out(
+    make_processor: Callable[..., NiriZanSpanProcessor], sink: RecordingSink
+) -> None:
+    processor = make_processor(idle_timeout_seconds=0.05, max_trace_age_seconds=60.0)
+    inherited_consumer = processor._consumer
+    processor._reinit_after_fork()
+    processor.on_start(make_span(1, trace_id=0xB))
+    processor.on_start(make_span(2, trace_id=0xB))
+    processor.on_end(make_span(2, trace_id=0xB))
+    assert processor.force_flush()
+
+    inherited_consumer.join(timeout=5)
+
+    assert not inherited_consumer.is_alive()
+    assert sink.traces == []
+    assert 0xB in processor._buffers
 
 
 def test_live_processors_are_registered_for_fork_handling_without_keeping_them_alive(
@@ -2910,7 +3104,7 @@ def test_sdk_tuple_attributes_are_encoded_as_sequences(
 
     assert tracer_provider.force_flush() is True
     attrs = sink.traces[0].spans[0].attributes
-    assert json.loads(attrs[f"{SEQ_ATTR_PREFIX}tags"]) == ["a", "b"]
+    assert json.loads(str(attrs[f"{SEQ_ATTR_PREFIX}tags"])) == ["a", "b"]
 
 
 def test_sdk_spans_from_the_nirizan_scope_are_ignored_unless_opted_in(
