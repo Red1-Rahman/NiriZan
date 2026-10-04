@@ -239,10 +239,13 @@ def _get_parent_context(span: ReadableSpan) -> SpanContext | None:
 
 
 def _scope_name(span: Any) -> str | None:
-    """Return the instrumentation scope name that created ``span``, if known."""
-    scope = getattr(span, "instrumentation_scope", None) or getattr(
-        span, "instrumentation_info", None
-    )
+    """Return the instrumentation scope name that created ``span``, if known.
+
+    Only ``instrumentation_scope`` is consulted. The older ``instrumentation_info``
+    property is deprecated since OpenTelemetry 1.11.1 and warns on access, and the
+    ``otel`` extra requires a version that always provides the scope.
+    """
+    scope = getattr(span, "instrumentation_scope", None)
     name = getattr(scope, "name", None)
     return name if isinstance(name, str) else None
 
@@ -747,8 +750,14 @@ class NiriZanSpanProcessor(SpanProcessor):
         return self._config
 
     def _start_consumer(self) -> None:
+        # The thread is handed the queue and shutdown event it must serve, instead
+        # of reading them from ``self`` on every iteration. If ``_reinit_after_fork``
+        # replaces them, a thread that predates the replacement notices it has been
+        # superseded and retires, rather than competing with its replacement for
+        # the new queue and the shared buffers.
         self._consumer = threading.Thread(
             target=self._consume_loop,
+            args=(self._queue, self._shutdown),
             name="nirizan-otel-span-consumer",
             daemon=True,
         )
@@ -937,12 +946,19 @@ class NiriZanSpanProcessor(SpanProcessor):
             self._record_stat(StatReason.CONSUMER_ERROR)
             logger.exception("Unexpected error in NiriZanSpanProcessor consumer; continuing.")
 
-    def _consume_loop(self) -> None:
-        """Drain the queue, buffer spans, flush traces on idle or age."""
-        while not self._shutdown.is_set():
+    def _consume_loop(self, work_queue: queue.Queue[Any], shutdown: threading.Event) -> None:
+        """Drain the queue, buffer spans, flush traces on idle or age.
+
+        ``work_queue`` and ``shutdown`` are the objects this thread was started for.
+        A thread whose queue is no longer the processor's current queue has been
+        superseded by ``_reinit_after_fork`` and exits without touching shared state.
+        """
+        while not shutdown.is_set():
             try:
-                item = self._queue.get(timeout=self._idle_timeout / 2.0)
+                item = work_queue.get(timeout=self._idle_timeout / 2.0)
             except queue.Empty:
+                if work_queue is not self._queue:
+                    return
                 self._guarded(self._idle_tick)
                 continue
 
@@ -951,6 +967,9 @@ class NiriZanSpanProcessor(SpanProcessor):
 
             self._guarded(self._process_item, item)
 
+        # Only a thread serving the current queue can leave the loop above: a
+        # superseded thread returns early, and the shutdown event and sentinel
+        # always belong to the current queue.
         self._guarded(self._drain_and_flush)
 
     def _idle_tick(self) -> None:
@@ -1421,8 +1440,10 @@ class NiriZanSpanProcessor(SpanProcessor):
             trace_state_str: str | None = None
             trace_state = getattr(ctx, "trace_state", None)
             if trace_state:
+                # ``str(TraceState)`` is a Python list repr, not the W3C value.
+                # ``to_header()`` is the standard "k1=v1,k2=v2" serialization.
                 try:
-                    trace_state_str = str(trace_state)
+                    trace_state_str = trace_state.to_header()
                 except Exception:
                     trace_state_str = None
 
