@@ -22,7 +22,7 @@ jobs:
           python-version: "3.11"
 
       - name: Install project with dev dependencies
-        run: pip install -e ".[dev,otel]"
+        run: pip install -e ".[${{ matrix.extras }}]"
 
       - name: Run pytest
         run: pytest
