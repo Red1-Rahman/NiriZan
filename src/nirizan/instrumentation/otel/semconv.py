@@ -229,6 +229,13 @@ def is_sequence_key(key: str) -> bool:
     return key.startswith(SEQ_ATTR_PREFIX)
 
 
+# Built once and reused. ``json.dumps`` with non-default arguments constructs a
+# new encoder on every call; a ``JSONEncoder`` holds no per-call state, so
+# ``encode`` gives identical output to ``json.dumps`` with the same arguments.
+_JSON_ENCODER = json.JSONEncoder(ensure_ascii=False, default=str)
+_JSON_ENCODER_ASCII = json.JSONEncoder(ensure_ascii=True, default=str)
+
+
 def dumps_attribute_json(value: object) -> str:
     """Serialize ``value`` to JSON text for use as a span attribute value.
 
@@ -251,11 +258,11 @@ def dumps_attribute_json(value: object) -> str:
         ValueError: If the value contains a circular reference.
         RecursionError: If the value is nested too deeply to serialize.
     """
-    text = json.dumps(value, ensure_ascii=False, default=str)
+    text = _JSON_ENCODER.encode(value)
     try:
         text.encode("utf-8")
     except UnicodeEncodeError:
-        text = json.dumps(value, ensure_ascii=True, default=str)
+        text = _JSON_ENCODER_ASCII.encode(value)
     return text
 
 
