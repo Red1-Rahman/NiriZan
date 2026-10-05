@@ -434,8 +434,8 @@ def _convert_attributes(
         elif isinstance(value, (int, float, bool)):
             result[key] = value
         elif isinstance(value, (list, tuple)):
-            encoded_key = key if is_sequence_key(key) else encode_sequence_key(key)
             try:
+                encoded_key = key if is_sequence_key(key) else encode_sequence_key(key)
                 result[encoded_key] = encode_sequence_attribute_value(value)
             except ValueError as err:
                 logger.warning("Dropping sequence attribute '%s' from OTel span: %s", key, err)
