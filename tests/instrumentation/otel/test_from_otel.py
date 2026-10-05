@@ -2995,6 +2995,24 @@ def test_a_superseded_consumer_does_not_flush_the_new_state_on_its_way_out(
     assert 0xB in processor._buffers
 
 
+def test_a_superseded_consumer_discards_items_left_in_its_old_queue(
+    make_processor: Callable[..., NiriZanSpanProcessor], sink: RecordingSink
+) -> None:
+    processor = make_processor(idle_timeout_seconds=0.05, max_trace_age_seconds=60.0)
+    inherited_consumer = processor._consumer
+    old_queue = processor._queue
+
+    processor._reinit_after_fork()
+    old_queue.put_nowait(make_span(1, trace_id=0xB))
+    inherited_consumer.join(timeout=5)
+
+    assert not inherited_consumer.is_alive()
+    assert processor._buffers == {}
+    assert processor.force_flush()
+    assert sink.traces == []
+    assert processor._consumer.is_alive()
+
+
 def test_live_processors_are_registered_for_fork_handling_without_keeping_them_alive(
     sink: RecordingSink,
 ) -> None:
