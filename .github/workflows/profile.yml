@@ -1,0 +1,136 @@
+name: Nirizan Profiling
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "src/nirizan/**"
+      - "tests/**"
+      - "pyproject.toml"
+      - ".github/scripts/profile_runner.py"
+      - ".github/workflows/profile.yml"
+  workflow_dispatch:
+
+# Deny everything by default; grant per job.
+permissions: {}
+
+concurrency:
+  group: profile-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  profile:
+    name: cProfile per-module report
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read # no write token in the job that executes PR code
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.11"
+
+      - name: Install package and dev dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      # Profiles the test suite from the outside; src/nirizan is never touched.
+      - name: Run non-invasive profiler
+        run: python .github/scripts/profile_runner.py
+
+      - name: Upload profiling reports
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: profiling-reports
+          path: profiling_reports/
+          if-no-files-found: warn
+          retention-days: 14
+
+      # Only the comment body crosses into the privileged job.
+      - name: Upload PR comment body
+        if: always() && github.event_name == 'pull_request'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: profiling-comment
+          path: profiling_reports/COMMENT.md
+          if-no-files-found: ignore
+          retention-days: 1
+
+      - name: Write job summary
+        if: always()
+        run: |
+          if [ -f profiling_reports/SUMMARY.md ]; then
+            cat profiling_reports/SUMMARY.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+  comment:
+    name: Post profiling comment
+    needs: profile
+    # Fork PRs get a read-only token, so only comment for same-repo PRs.
+    if: >-
+      ${{ !cancelled()
+      && github.event_name == 'pull_request'
+      && github.event.pull_request.head.repo.full_name == github.repository }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      pull-requests: write # the only permission this job needs
+
+    steps:
+      # No checkout, no pip, no PR code executed in this job.
+      - name: Download PR comment body
+        continue-on-error: true # profile job may have failed before producing it
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: profiling-comment
+          path: comment
+
+      - name: Create or update PR comment
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        env:
+          COMMENT_PATH: comment/COMMENT.md
+        with:
+          script: |
+            const fs = require('fs');
+            const path = process.env.COMMENT_PATH;
+            if (!fs.existsSync(path)) {
+              core.warning('No profiling comment file found; skipping.');
+              return;
+            }
+            const marker = '<!-- nirizan-profiling-report -->';
+            let body = fs.readFileSync(path, 'utf8');
+            // The body comes from PR-controlled code: require our marker, cap the size.
+            if (!body.startsWith(marker)) {
+              core.warning('Comment body missing marker; skipping.');
+              return;
+            }
+            body = body.slice(0, 60000);
+
+            const { owner, repo } = context.repo;
+            const issue_number = context.issue.number;
+
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner, repo, issue_number, per_page: 100,
+            });
+            const existing = comments.find(
+              (c) => c.user?.type === 'Bot' && c.body?.includes(marker)
+            );
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner, repo, comment_id: existing.id, body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner, repo, issue_number, body,
+              });
+            }
