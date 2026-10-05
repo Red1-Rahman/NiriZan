@@ -13,6 +13,7 @@ registered with OpenTelemetry, and no thread starts, until a
 
 from __future__ import annotations
 
+import heapq
 import math
 import os
 import queue
@@ -772,8 +773,8 @@ class NiriZanSpanProcessor(SpanProcessor):
         none of its threads, so a lock that another thread held at fork time
         would never be released. Everything is replaced and the consumer is
         restarted. Spans buffered by the parent belong to the parent and are
-        not re-emitted by the child. A processor that was already shut down
-        stays shut down.
+        not re-emitted by the child. Items still waiting in the superseded queue
+        are discarded. A processor that was already shut down stays shut down.
         """
         if self._shutdown.is_set():
             return
@@ -1147,12 +1148,13 @@ class NiriZanSpanProcessor(SpanProcessor):
         # Evict traces that look finished first, oldest first. A trace that still
         # has open spans is evicted last, because evicting it loses the rest of
         # its spans as late arrivals.
-        ordered = sorted(
+        excess = len(self._buffers) - self._max_buffered
+        victims = heapq.nsmallest(
+            excess,
             self._buffers.items(),
             key=lambda kv: (not self._is_quiescent(kv[1]), kv[1].first_seen),
         )
-        excess = len(self._buffers) - self._max_buffered
-        for trace_id, buf in ordered[:excess]:
+        for trace_id, buf in victims:
             if not self._is_quiescent(buf):
                 self._record_stat(StatReason.EVICTED_OPEN_TRACE)
             logger.warning(
