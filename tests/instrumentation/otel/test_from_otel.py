@@ -910,6 +910,23 @@ def test_convert_attributes_drops_a_sequence_that_cannot_be_encoded_and_keeps_th
     assert any("Dropping sequence attribute 'tags'" in r.getMessage() for r in caplog.records)
 
 
+def test_a_whitespace_only_sequence_key_drops_only_that_attribute_not_the_span(
+    inert: NiriZanSpanProcessor, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The SDK keeps a whitespace-only key; a list under it must not cost the whole span."""
+    with caplog.at_level(logging.WARNING, logger=_MODULE_LOGGER):
+        trace = assemble_ok(
+            inert,
+            make_span(1, name="kept", attributes={" ": ["a"], "tags": ["b"]}),
+        )
+
+    span = by_name(trace)["kept"]
+    assert f"{SEQ_ATTR_PREFIX}tags" in span.attributes
+    assert " " not in span.attributes
+    assert "conversion_error" not in inert.get_stats()
+    assert any("Dropping sequence attribute ' '" in r.getMessage() for r in caplog.records)
+
+
 def test_convert_attributes_writes_all_metadata_when_present() -> None:
     result = _convert(
         {},
