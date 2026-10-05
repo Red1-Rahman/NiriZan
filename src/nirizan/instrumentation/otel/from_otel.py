@@ -428,7 +428,9 @@ def _convert_attributes(
     for key, value in otel_attrs.items():
         if value is None:
             continue
-        if isinstance(value, (str, int, float, bool)):
+        if isinstance(value, str):
+            result[key] = truncate_attribute_value(value)
+        elif isinstance(value, (int, float, bool)):
             result[key] = value
         elif isinstance(value, (list, tuple)):
             encoded_key = key if is_sequence_key(key) else encode_sequence_key(key)
@@ -951,7 +953,9 @@ class NiriZanSpanProcessor(SpanProcessor):
 
         ``work_queue`` and ``shutdown`` are the objects this thread was started for.
         A thread whose queue is no longer the processor's current queue has been
-        superseded by ``_reinit_after_fork`` and exits without touching shared state.
+        superseded by ``_reinit_after_fork``. It exits without processing any item,
+        including one it had already taken from its old queue, so it touches no
+        shared state.
         """
         while not shutdown.is_set():
             try:
@@ -961,6 +965,9 @@ class NiriZanSpanProcessor(SpanProcessor):
                     return
                 self._guarded(self._idle_tick)
                 continue
+
+            if work_queue is not self._queue:
+                return
 
             if item is _SHUTDOWN_SENTINEL:
                 break

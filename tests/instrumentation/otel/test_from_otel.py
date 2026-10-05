@@ -870,6 +870,29 @@ def test_convert_attributes_stringifies_and_truncates_unsupported_types() -> Non
     assert result["odd"].endswith("...[truncated]")
     assert result["raw"] == "b'bytes'"
 
+def test_convert_attributes_truncates_long_string_attributes() -> None:
+    result = _convert({"prompt": "x" * (MAX_ATTR_VALUE_LENGTH * 2)})
+
+    assert len(result["prompt"]) == MAX_ATTR_VALUE_LENGTH
+    assert result["prompt"].endswith("...[truncated]")
+
+
+def test_convert_attributes_leaves_short_strings_unchanged() -> None:
+    value = "x" * (MAX_ATTR_VALUE_LENGTH - 1)
+
+    assert _convert({"prompt": value})["prompt"] == value
+
+
+def test_assembly_keeps_full_payload_when_attribute_copy_is_truncated(
+    inert: NiriZanSpanProcessor,
+) -> None:
+    long_prompt = "p" * (MAX_ATTR_VALUE_LENGTH * 2)
+
+    span = assemble_ok(inert, make_span(1, attributes={GEN_AI_PROMPT: long_prompt})).spans[0]
+
+    assert span.input_payload == long_prompt
+    assert len(str(span.attributes[GEN_AI_PROMPT])) == MAX_ATTR_VALUE_LENGTH
+
 
 def test_convert_attributes_drops_a_sequence_that_cannot_be_encoded_and_keeps_the_rest(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
