@@ -489,6 +489,12 @@ def export_trace_to_otel(
 class NiriZanToOTelExporter(BaseExporter):
     """Trace exporter bridging NiriZan traces and spans into OpenTelemetry.
 
+    Performance: ``export`` performs span conversion and ``end()`` calls on the
+    calling thread. Configure the target ``TracerProvider`` with a
+    ``BatchSpanProcessor``. With a ``SimpleSpanProcessor`` wrapping a network
+    exporter, every ended span performs a blocking export, which stalls the
+    event loop for each span in the trace.
+
     ``export`` never raises (apart from task cancellation): a failure in the
     OpenTelemetry pipeline is logged and counted in ``export_failures`` and the
     trace is dropped, as the ``TraceExporter`` contract requires.
