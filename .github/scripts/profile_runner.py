@@ -272,14 +272,15 @@ def _externals(row: FuncRow, limit: int = 3) -> str:
 def _table(rows: list[FuncRow]) -> list[str]:
     out = [
         "| Function | Line | ncalls | tottime (s) | tottime/call | cumtime (s) | cumtime/call "
-        "| Top external callees (cumtime) |",
+        + "| Top external callees (cumtime) |",
         "| :--- | ---: | ---: | ---: | ---: | ---: | ---: | :--- |",
     ]
     for r in rows:
         calls = str(r.ncalls) if r.ncalls == r.prim_calls else f"{r.ncalls}/{r.prim_calls}"
         out.append(
             f"| `{r.name}` | {r.line} | {calls} | {_fmt(r.tottime)} | "
-            f"{_fmt(r.tot_percall)} | {_fmt(r.cumtime)} | {_fmt(r.cum_percall)} | {_externals(r)} |"
+            + f"{_fmt(r.tot_percall)} | {_fmt(r.cumtime)} | {_fmt(r.cum_percall)} "
+            + f"| {_externals(r)} |"
         )
     return out
 
@@ -309,7 +310,7 @@ def render_summary(reports: list[ModuleReport], top: int, src_name: str, exit_co
         "### ⏱️ NiriZan Profiling Report",
         "",
         "`cProfile` + `pstats` over the test suite, split per module. "
-        "Timings include profiler overhead: use them for *relative* comparison.",
+        + "Timings include profiler overhead: use them for *relative* comparison.",
         "",
     ]
     if exit_code != 0:
@@ -339,7 +340,7 @@ def render_summary(reports: list[ModuleReport], top: int, src_name: str, exit_co
         ]
     lines += [
         "Full per-function reports, `nirizan_only.prof` and `full.prof` "
-        "(open with `tuna nirizan_only.prof`) are in the `profiling-reports` workflow artifact.",
+        + "(open with `tuna nirizan_only.prof`) are in the `profiling-reports` workflow artifact.",
         "",
     ]
     return "\n".join(lines)
