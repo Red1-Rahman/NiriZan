@@ -232,8 +232,8 @@ def is_sequence_key(key: str) -> bool:
 # Built once and reused. ``json.dumps`` with non-default arguments constructs a
 # new encoder on every call; a ``JSONEncoder`` holds no per-call state, so
 # ``encode`` gives identical output to ``json.dumps`` with the same arguments.
-_JSON_ENCODER = json.JSONEncoder(ensure_ascii=False, default=str)
-_JSON_ENCODER_ASCII = json.JSONEncoder(ensure_ascii=True, default=str)
+_JSON_ENCODER = json.JSONEncoder(ensure_ascii=False, allow_nan=False, default=str)
+_JSON_ENCODER_ASCII = json.JSONEncoder(ensure_ascii=True, allow_nan=False, default=str)
 
 
 def dumps_attribute_json(value: object) -> str:
