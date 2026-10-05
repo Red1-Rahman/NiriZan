@@ -401,25 +401,30 @@ def test_encode_sequence_attribute_value_work_is_bounded_by_budget(
 
     Regression: the previous implementation re-serialized the whole remaining
     list for every dropped item, which is quadratic. The encoder now stops once
-    the budget is exceeded, so the number of ``json.dumps`` calls depends on
+    the budget is exceeded, so the number of item serializations depends on
     ``max_length`` and not on the length of the input.
+
+    The count is taken on ``semconv._dumps_item``, the per-item serializer the
+    encoder calls. Counting ``json.dumps`` would be vacuous: the encoder uses
+    cached ``JSONEncoder`` objects and never calls ``json.dumps``, so the
+    counter would stay at zero whatever the algorithm did.
     """
-    real_dumps = json.dumps
+    real_item = semconv._dumps_item
     calls = 0
 
-    def counting_dumps(*args: object, **kwargs: object) -> str:
+    def counting_item(item: object) -> str:
         nonlocal calls
         calls += 1
-        return real_dumps(*args, **kwargs)  # type: ignore[arg-type]
+        return real_item(item)
 
-    monkeypatch.setattr(json, "dumps", counting_dumps)
+    monkeypatch.setattr(semconv, "_dumps_item", counting_item)
 
     items = [f"item_{i}" for i in range(10_000)]
     result = encode_sequence_attribute_value(items, max_length=MAX_ATTR_VALUE_LENGTH)
 
     assert len(result) <= MAX_ATTR_VALUE_LENGTH
     assert json.loads(result)[-1] == TRUNCATION_SUFFIX
-    assert calls < 200
+    assert 0 < calls < 200
 
 
 # ---------------------------------------------------------------------------
