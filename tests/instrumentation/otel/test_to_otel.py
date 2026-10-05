@@ -50,9 +50,9 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import (  # noqa: E4
     InMemorySpanExporter,
 )
 from opentelemetry.sdk.trace.sampling import ALWAYS_OFF, ParentBased  # noqa: E402
-from opentelemetry.trace import SpanContext, Tracer, TraceFlags  # noqa: E402
+from opentelemetry.trace import SpanContext, TraceFlags, Tracer  # noqa: E402
 from opentelemetry.trace import SpanKind as OTelSpanKind  # noqa: E402
-from opentelemetry.trace.status import Status, StatusCode  # noqa: E402
+from opentelemetry.trace.status import StatusCode  # noqa: E402
 from pydantic import ValidationError  # noqa: E402
 
 import nirizan  # noqa: E402
@@ -76,18 +76,13 @@ from nirizan.instrumentation.otel.semconv import (  # noqa: E402
     ID_SOURCE_ROUNDTRIP,
     MAX_ATTR_VALUE_LENGTH,
     NIRIZAN_INSTRUMENTATION_SCOPE,
-    NIRIZAN_PLANNING_CONTEXT,
-    NIRIZAN_PLANNING_OUTPUT,
     NIRIZAN_RETRIEVAL_QUERY,
-    NIRIZAN_RETRIEVAL_RESULTS,
     NIRIZAN_RETRIEVAL_TOP_K,
     NIRIZAN_SESSION_ID,
     NIRIZAN_SPAN_ID,
     NIRIZAN_SPAN_ID_SOURCE,
     NIRIZAN_SPAN_KIND,
-    NIRIZAN_TOOL_ARGUMENTS,
     NIRIZAN_TOOL_NAME,
-    NIRIZAN_TOOL_RESULT,
     NIRIZAN_TRACE_ID,
     NIRIZAN_TRACE_ID_SOURCE,
     OTEL_STATUS_CODE,
@@ -717,8 +712,8 @@ def test_retrieval_top_k_of_zero_is_exported() -> None:
 def test_retrieval_top_k_must_be_an_integer(bad: bool | float | str) -> None:
     attrs = convert_span_to_otel_attributes(nspan(kind=SpanKind.RETRIEVAL, attributes={"top_k": bad}))
 
-    assert NIRIZAN_RETRIEVAL_TOP_K not in attrs or attrs[NIRIZAN_RETRIEVAL_TOP_K] == bad
-    assert attrs.get(NIRIZAN_RETRIEVAL_TOP_K) is not True or bad is True
+    assert NIRIZAN_RETRIEVAL_TOP_K not in attrs  # not mapped to the semantic attribute...
+    assert attrs["top_k"] == bad  # ...but still carried over as the span's own attribute
 
 
 @pytest.mark.parametrize("source_key", ["tool_name", "name", NIRIZAN_TOOL_NAME])
@@ -1318,6 +1313,16 @@ def test_exporting_nothing_returns_nothing_and_touches_no_tracer() -> None:
     tracer.start_span.assert_not_called()
 
 
+def test_export_trace_uses_the_default_tracer_when_none_is_given(
+    otel: OTel, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(otel_trace, "get_tracer", lambda name, version=None: otel.tracer)
+
+    export_trace_to_otel(ntrace(nspan(name="via-default")))
+
+    assert "via-default" in otel.by_name()
+
+
 def test_spans_are_exported_parents_first_whatever_the_input_order(otel: OTel) -> None:
     root = nspan(name="root")
     child = nspan(name="child", parent=root.span_id)
@@ -1421,7 +1426,7 @@ def test_random_forests_always_export_in_one_trace_with_correct_links(otel: OTel
         assert {span_context_of(s).trace_id for s in exported.values()} == {OTEL_TRACE_ID}
         for span in spans:
             out = exported[str(span.span_id)]
-            if span.parent_span_id in exported:
+            if str(span.parent_span_id) in exported:
                 assert out.parent is not None
                 assert out.parent.span_id == span_context_of(exported[str(span.parent_span_id)]).span_id
             else:
