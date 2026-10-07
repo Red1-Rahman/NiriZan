@@ -148,6 +148,7 @@ class ProcessorConfig(BaseModel):
     orphan_policy: Literal["emit", "drop"] = "emit"
     unrecognized_span_policy: Literal["drop", "generation"] = "drop"
     ignore_own_scope: bool = True
+    trust_stashed_ids: bool = False
 
     @field_validator("idle_timeout_seconds")
     @classmethod
@@ -289,16 +290,21 @@ def _parse_stashed_uuid(value: object) -> UUID | None:
     return None if parsed.int == 0 else parsed
 
 
-def _extract_nirizan_span_id(span: ReadableSpan, ctx: SpanContext) -> tuple[UUID, str]:
+def _extract_nirizan_span_id(
+    span: ReadableSpan, ctx: SpanContext, trust: bool
+) -> tuple[UUID, str]:
     """Return ``(NiriZan span_id, provenance source)`` for an OTel span.
 
-    A stashed ``nirizan.span_id`` is recovered as-is. Its provenance is
-    ``derived`` if the stashed ``nirizan.span_id.source`` says the id was
-    originally derived from an OTel id, and ``roundtrip`` otherwise.
+    A stashed ``nirizan.span_id`` is recovered as-is, but only when ``trust``
+    is ``True``. A stashed span id cannot be verified against anything the
+    OTel SDK generated, so an untrusted ingest path always falls back to the
+    id derived from the OTel span id. Its provenance is ``derived`` if the
+    stashed ``nirizan.span_id.source`` says the id was originally derived
+    from an OTel id, and ``roundtrip`` otherwise.
     """
     attrs = getattr(span, "attributes", None) or {}
     stashed = attrs.get(NIRIZAN_SPAN_ID)
-    if isinstance(stashed, str):
+    if trust and isinstance(stashed, str):
         parsed = _parse_stashed_uuid(stashed)
         if parsed is not None:
             prior = attrs.get(NIRIZAN_SPAN_ID_SOURCE)
@@ -313,13 +319,19 @@ def _extract_nirizan_span_id(span: ReadableSpan, ctx: SpanContext) -> tuple[UUID
 
 
 def _extract_nirizan_trace_id(
-    spans: Mapping[int, ReadableSpan], otel_trace_id: int
+    spans: Mapping[int, ReadableSpan], otel_trace_id: int, trust: bool
 ) -> tuple[UUID, str]:
     """Return ``(NiriZan trace_id, provenance source)`` for a buffered OTel trace.
 
     Spans are examined in start-time order so the result does not depend on
-    arrival order. A stashed id wins over a derived one.
+    arrival order. A stashed id wins over a derived one, but only when
+    ``trust`` is ``True``. When it is ``False``, every span's id is derived
+    from the OTel trace id, so an ingested span cannot claim an existing
+    stored trace's id.
     """
+    if not trust:
+        return otel_trace_id_to_uuid(otel_trace_id), ID_SOURCE_DERIVED
+
     ordered = sorted(
         spans.items(),
         key=lambda item: (_int_or_zero(getattr(item[1], "start_time", None)), item[0]),
@@ -684,6 +696,7 @@ class NiriZanSpanProcessor(SpanProcessor):
         orphan_policy: Literal["emit", "drop"] = "emit",
         unrecognized_span_policy: Literal["drop", "generation"] = "drop",
         ignore_own_scope: bool = True,
+        trust_stashed_ids: bool = False,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         config = ProcessorConfig(
@@ -695,6 +708,7 @@ class NiriZanSpanProcessor(SpanProcessor):
             orphan_policy=orphan_policy,
             unrecognized_span_policy=unrecognized_span_policy,
             ignore_own_scope=ignore_own_scope,
+            trust_stashed_ids=trust_stashed_ids,
         )
 
         self._config = config
@@ -1215,9 +1229,9 @@ class NiriZanSpanProcessor(SpanProcessor):
             return None
 
         nirizan_trace_id, trace_id_source = _extract_nirizan_trace_id(
-            buf.spans, buf.otel_trace_id
+            buf.spans, buf.otel_trace_id, self._config.trust_stashed_ids
         )
-        if _has_conflicting_trace_ids(buf.spans):
+        if self._config.trust_stashed_ids and _has_conflicting_trace_ids(buf.spans):
             self._record_stat(StatReason.CONFLICTING_TRACE_ID)
             logger.warning(
                 "OTel trace_id=%d carries more than one distinct nirizan.trace_id; using %s",
@@ -1337,7 +1351,9 @@ class NiriZanSpanProcessor(SpanProcessor):
             ctx = _get_span_context(span)
             if ctx is None:
                 continue
-            nirizan_id, source = _extract_nirizan_span_id(span, ctx)
+            nirizan_id, source = _extract_nirizan_span_id(
+                span, ctx, self._config.trust_stashed_ids
+            )
             if nirizan_id in used:
                 self._record_stat(StatReason.DUPLICATE_NIRIZAN_SPAN_ID)
                 derived = otel_span_id_to_uuid(ctx.span_id)
@@ -1402,9 +1418,11 @@ class NiriZanSpanProcessor(SpanProcessor):
             raw = attrs.get(NIRIZAN_SESSION_ID)
             if isinstance(raw, str):
                 try:
-                    return UUID(raw)
+                    parsed = UUID(raw)
                 except ValueError:
                     continue
+                if parsed.int != 0:
+                    return parsed
         return None
 
     def _convert_span(
