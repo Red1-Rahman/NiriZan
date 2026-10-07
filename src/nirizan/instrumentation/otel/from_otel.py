@@ -70,7 +70,7 @@ from nirizan.instrumentation.spans import Span, SpanKind, Trace
 
 logger = get_logger(__name__)
 
-__all__ = ["NiriZanSpanProcessor", "ProcessorConfig", "StatReason", "TraceSink"]
+__all__ = ["NiriZanSpanProcessor", "ProcessorConfig", "StatReason", "ThreadSafeTraceSink"]
 
 
 # ---------------------------------------------------------------------------
@@ -211,11 +211,15 @@ class ProcessorConfig(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-class TraceSink(Protocol):
+class ThreadSafeTraceSink(Protocol):
     """Minimal sync interface for handing an assembled ``Trace`` to a consumer.
 
     ``enqueue_trace`` is called from the processor's consumer thread, not from
     the event loop, so implementations must be thread-safe and must not block.
+    Renamed from ``TraceSink`` to avoid colliding with the differently-shaped
+    (async) ``TraceSink`` protocol in ``orchestrator/collector.py``; the two
+    are not interchangeable, and a collector cannot be passed here directly
+    (see ``orchestrator/loop_sink.py::LoopTraceSink``, which bridges the two).
     """
 
     def enqueue_trace(self, trace: Trace) -> None:
@@ -686,7 +690,7 @@ class NiriZanSpanProcessor(SpanProcessor):
 
     def __init__(
         self,
-        sink: TraceSink,
+        sink: ThreadSafeTraceSink,
         *,
         idle_timeout_seconds: float = 5.0,
         max_trace_age_seconds: float = 300.0,
@@ -753,7 +757,7 @@ class NiriZanSpanProcessor(SpanProcessor):
     @classmethod
     def from_config(
         cls,
-        sink: TraceSink,
+        sink: ThreadSafeTraceSink,
         config: ProcessorConfig,
         *,
         clock: Callable[[], float] = time.monotonic,
@@ -1220,7 +1224,9 @@ class NiriZanSpanProcessor(SpanProcessor):
         try:
             self._sink.enqueue_trace(trace)
         except Exception:
-            logger.exception("TraceSink.enqueue_trace raised for OTel trace_id=%d", otel_trace_id)
+            logger.exception(
+                "ThreadSafeTraceSink.enqueue_trace raised for OTel trace_id=%d", otel_trace_id
+            )
 
     # -- Trace assembly ---------------------------------------------------------
 
