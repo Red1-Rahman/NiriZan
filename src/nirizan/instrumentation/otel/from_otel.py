@@ -65,7 +65,7 @@ from nirizan.instrumentation.otel.semconv import (
     is_sequence_key,
     truncate_attribute_value,
 )
-from nirizan.instrumentation.spans import Span, SpanKind, Trace
+from nirizan.instrumentation.spans import SYNTHETIC_PARENT_ATTRIBUTE, Span, SpanKind, Trace
 
 logger = get_logger(__name__)
 
@@ -1377,9 +1377,20 @@ class NiriZanSpanProcessor(SpanProcessor):
         for otel_span_id in kept_ids:
             base = base_spans[otel_span_id]
             parent = parent_map[otel_span_id]
-            nirizan_spans.append(
-                base if parent is None else base.model_copy(update={"parent_span_id": parent})
-            )
+            if parent is None:
+                nirizan_spans.append(base)
+                continue
+            update: dict[str, Any] = {"parent_span_id": parent}
+            if otel_span_id in resolution.synthetic_origin:
+                # This span's parent was dropped from the trace (unrecognized
+                # kind, conversion failure, and so on); _resolve_parents
+                # re-attached it to the nearest surviving ancestor instead of
+                # leaving it orphaned. That ancestor is not actually this
+                # span's parent in the trace being emitted, so Trace's
+                # validator must be told this parent link is synthetic rather
+                # than treating it as a dangling, corrupted reference.
+                update["attributes"] = {**base.attributes, SYNTHETIC_PARENT_ATTRIBUTE: True}
+            nirizan_spans.append(base.model_copy(update=update))
 
         return Trace(
             trace_id=nirizan_trace_id,
