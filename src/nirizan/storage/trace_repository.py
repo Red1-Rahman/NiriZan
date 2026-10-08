@@ -102,10 +102,16 @@ class SQLiteTraceRepository(BaseTraceRepository):
             with self._conn:
                 self._conn.execute(
                     """
-                    INSERT OR REPLACE INTO traces (
+                    INSERT INTO traces (
                         trace_id, application_name, created_at,
                         code_commit, data_snapshot_id, session_id
                     ) VALUES (?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(trace_id) DO UPDATE SET
+                        application_name = excluded.application_name,
+                        created_at = excluded.created_at,
+                        code_commit = excluded.code_commit,
+                        data_snapshot_id = excluded.data_snapshot_id,
+                        session_id = excluded.session_id
                     """,
                     (
                         trace_record.trace_id,
@@ -117,12 +123,28 @@ class SQLiteTraceRepository(BaseTraceRepository):
                     ),
                 )
                 for span in trace_record.spans:
-                    self._conn.execute(
+                    # A plain insert, or an update of a span that already belongs
+                    # to this same trace, both touch exactly one row. A span_id
+                    # that collides with a span stored under a different
+                    # trace_id is excluded by the WHERE clause, so the ON
+                    # CONFLICT branch updates nothing and rowcount is 0. That is
+                    # the signal that a span is being stolen from another trace,
+                    # so the save is aborted and rolled back by the `with
+                    # self._conn:` context instead of silently cascading a
+                    # delete the way INSERT OR REPLACE did.
+                    cur = self._conn.execute(
                         """
-                        INSERT OR REPLACE INTO spans (
+                        INSERT INTO spans (
                             span_id, trace_id, parent_span_id, kind, name,
                             started_at, ended_at, attributes_json, input_payload, output_payload
                         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        ON CONFLICT(span_id) DO UPDATE SET
+                            name = excluded.name,
+                            ended_at = excluded.ended_at,
+                            attributes_json = excluded.attributes_json,
+                            input_payload = excluded.input_payload,
+                            output_payload = excluded.output_payload
+                        WHERE spans.trace_id = excluded.trace_id
                         """,
                         (
                             span.span_id,
@@ -137,6 +159,11 @@ class SQLiteTraceRepository(BaseTraceRepository):
                             span.output_payload,
                         ),
                     )
+                    if cur.rowcount == 0:
+                        raise ValueError(
+                            f"span {span.span_id!r} already belongs to another trace "
+                            f"(attempted trace_id={span.trace_id!r})"
+                        )
 
         await asyncio.to_thread(_insert)
 
