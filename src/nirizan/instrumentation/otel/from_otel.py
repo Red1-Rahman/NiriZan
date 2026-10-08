@@ -13,7 +13,6 @@ registered with OpenTelemetry, and no thread starts, until a
 
 from __future__ import annotations
 
-import heapq
 import math
 import os
 import queue
@@ -90,6 +89,10 @@ _MAX_SPAN_NAME_LENGTH: int = 200
 _DEFAULT_MAX_QUEUE_SIZE: int = 50_000
 _DEFAULT_MAX_SPANS_PER_TRACE: int = 10_000
 
+_PAYLOAD_SUFFIX: str = "...[truncated]"
+_DEFAULT_MAX_PAYLOAD_CHARS: int = 65_536
+_DEFAULT_MAX_BUFFERED_SPANS: int = 100_000
+
 _QUEUE_FULL_WARNING_INTERVAL_SECONDS: float = 5.0
 
 _SIG_ROOT: str = "root"
@@ -149,6 +152,8 @@ class ProcessorConfig(BaseModel):
     unrecognized_span_policy: Literal["drop", "generation"] = "drop"
     ignore_own_scope: bool = True
     trust_stashed_ids: bool = False
+    max_payload_chars: int = _DEFAULT_MAX_PAYLOAD_CHARS
+    max_buffered_spans: int = _DEFAULT_MAX_BUFFERED_SPANS
 
     @field_validator("idle_timeout_seconds")
     @classmethod
@@ -183,6 +188,20 @@ class ProcessorConfig(BaseModel):
     def _max_spans_positive(cls, value: int) -> int:
         if value < 1:
             raise ValueError("max_spans_per_trace must be at least 1.")
+        return value
+
+    @field_validator("max_payload_chars")
+    @classmethod
+    def _payload_limit(cls, value: int) -> int:
+        if value <= len(_PAYLOAD_SUFFIX):
+            raise ValueError("max_payload_chars must exceed the truncation suffix length.")
+        return value
+
+    @field_validator("max_buffered_spans")
+    @classmethod
+    def _max_buffered_spans_positive(cls, value: int) -> int:
+        if value < 1:
+            raise ValueError("max_buffered_spans must be at least 1.")
         return value
 
     @field_validator("orphan_policy", mode="before")
@@ -425,6 +444,19 @@ def _extract_payloads(kind: SpanKind, attrs: Mapping[str, Any]) -> tuple[str | N
             _to_str_or_none(attrs.get(NIRIZAN_PLANNING_OUTPUT)),
         )
     return None, None
+
+
+def _cap_payload(value: str | None, limit: int) -> str | None:
+    """Truncate ``value`` to at most ``limit`` characters, marking truncation.
+
+    The tail of an oversized payload is lost; the remaining text is shortened
+    just enough that the appended ``_PAYLOAD_SUFFIX`` still fits inside
+    ``limit``. ``limit`` must exceed ``len(_PAYLOAD_SUFFIX)``, which
+    ``ProcessorConfig`` enforces for ``max_payload_chars``.
+    """
+    if value is None or len(value) <= limit:
+        return value
+    return value[: limit - len(_PAYLOAD_SUFFIX)] + _PAYLOAD_SUFFIX
 
 
 def _convert_attributes(
@@ -701,6 +733,8 @@ class NiriZanSpanProcessor(SpanProcessor):
         unrecognized_span_policy: Literal["drop", "generation"] = "drop",
         ignore_own_scope: bool = True,
         trust_stashed_ids: bool = False,
+        max_payload_chars: int = _DEFAULT_MAX_PAYLOAD_CHARS,
+        max_buffered_spans: int = _DEFAULT_MAX_BUFFERED_SPANS,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         config = ProcessorConfig(
@@ -713,6 +747,8 @@ class NiriZanSpanProcessor(SpanProcessor):
             unrecognized_span_policy=unrecognized_span_policy,
             ignore_own_scope=ignore_own_scope,
             trust_stashed_ids=trust_stashed_ids,
+            max_payload_chars=max_payload_chars,
+            max_buffered_spans=max_buffered_spans,
         )
 
         self._config = config
@@ -724,6 +760,11 @@ class NiriZanSpanProcessor(SpanProcessor):
         self._orphan_policy = config.orphan_policy
         self._unrecognized_span_policy = config.unrecognized_span_policy
         self._clock = clock
+        # Running count of spans currently held across every buffered trace.
+        # Written only by the consumer thread (in _buffer_span and
+        # _flush_trace), so no lock is needed; _enforce_buffer_cap reads it
+        # from the same thread.
+        self._buffered_spans: int = 0
 
         self._queue: queue.Queue[Any] = queue.Queue(maxsize=config.max_queue_size)
         self._buffers: dict[int, _TraceBuffer] = {}
@@ -798,6 +839,7 @@ class NiriZanSpanProcessor(SpanProcessor):
             return
         self._queue = queue.Queue(maxsize=self._config.max_queue_size)
         self._buffers = {}
+        self._buffered_spans = 0
         self._recent_flushes = {}
         self._dropped_start_traces = {}
         self._dropped_end_traces = {}
@@ -1118,6 +1160,8 @@ class NiriZanSpanProcessor(SpanProcessor):
             return
 
         was_duplicate = buf.add(span, now)
+        if not was_duplicate:
+            self._buffered_spans += 1
         if was_duplicate:
             logger.warning(
                 "Duplicate OTel span_id=%016x within trace_id=%d",
@@ -1160,25 +1204,33 @@ class NiriZanSpanProcessor(SpanProcessor):
         for trace_id, reason in to_flush:
             self._flush_trace(trace_id, reason=reason)
 
+    def _over_buffer_cap(self) -> bool:
+        return (
+            len(self._buffers) > self._max_buffered
+            or self._buffered_spans > self._config.max_buffered_spans
+        )
+
     def _enforce_buffer_cap(self) -> None:
-        if len(self._buffers) <= self._max_buffered:
+        if not self._over_buffer_cap():
             return
         # Evict traces that look finished first, oldest first. A trace that still
         # has open spans is evicted last, because evicting it loses the rest of
-        # its spans as late arrivals.
-        excess = len(self._buffers) - self._max_buffered
-        victims = heapq.nsmallest(
-            excess,
-            self._buffers.items(),
-            key=lambda kv: (not self._is_quiescent(kv[1]), kv[1].first_seen),
-        )
-        for trace_id, buf in victims:
+        # its spans as late arrivals. Unlike the trace-count cap, the number of
+        # traces that must be evicted to clear the span budget is not known in
+        # advance (each trace holds a different number of spans), so eviction
+        # proceeds one trace at a time until both budgets are satisfied.
+        while self._over_buffer_cap() and self._buffers:
+            trace_id, buf = min(
+                self._buffers.items(),
+                key=lambda kv: (not self._is_quiescent(kv[1]), kv[1].first_seen),
+            )
             if not self._is_quiescent(buf):
                 self._record_stat(StatReason.EVICTED_OPEN_TRACE)
             logger.warning(
-                "Evicting incomplete OTel trace_id=%d: buffer cap %d exceeded",
+                "Evicting incomplete OTel trace_id=%d: buffer cap %d traces / %d spans exceeded",
                 trace_id,
                 self._max_buffered,
+                self._config.max_buffered_spans,
             )
             self._flush_trace(trace_id, reason="buffer_cap")
 
@@ -1197,6 +1249,7 @@ class NiriZanSpanProcessor(SpanProcessor):
         buf = self._buffers.pop(otel_trace_id, None)
         if buf is None:
             return
+        self._buffered_spans -= len(buf.spans)
 
         self._recent_flushes[otel_trace_id] = None
         if len(self._recent_flushes) > _RECENT_FLUSHES_MAX:
@@ -1454,6 +1507,8 @@ class NiriZanSpanProcessor(SpanProcessor):
         try:
             otel_attrs = getattr(span, "attributes", None) or {}
             input_payload, output_payload = _extract_payloads(kind, otel_attrs)
+            input_payload = _cap_payload(input_payload, self._config.max_payload_chars)
+            output_payload = _cap_payload(output_payload, self._config.max_payload_chars)
 
             started_at = _ns_to_datetime(span.start_time)
             ended_at = _ns_to_datetime(span.end_time)
