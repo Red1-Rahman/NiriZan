@@ -116,3 +116,9 @@ Releases 0.1.0 to 0.3.0 were published under GPL-3.0-or-later and remain availab
 
 **Redwan Rahman**
 [github.com/Red1-Rahman](https://github.com/Red1-Rahman)
+
+### Contributors
+
+<a href="https://github.com/Red1-Rahman/NiriZan/graphs/contributors">
+  <img alt="NiriZan contributors" src="https://contrib.rocks/image?repo=Red1-Rahman/NiriZan" />
+</a>
