@@ -1,6 +1,7 @@
 # src\nirizan\storage\trace_repository.py
 import asyncio
 import sqlite3
+import threading
 from abc import ABC, abstractmethod
 from uuid import UUID
 
@@ -51,6 +52,7 @@ class SQLiteTraceRepository(BaseTraceRepository):
 
     def __init__(self, db_path: str = "nirizan_traces.db") -> None:
         self.db_path = db_path
+        self._conn_lock = threading.RLock()
         self._conn = sqlite3.connect(self.db_path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA foreign_keys = ON;")
@@ -58,7 +60,7 @@ class SQLiteTraceRepository(BaseTraceRepository):
 
     def _init_db(self) -> None:
         """Initialize relational schema and indexes for query optimization."""
-        with self._conn:
+        with self._conn_lock, self._conn:
             self._conn.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS traces (
@@ -98,7 +100,7 @@ class SQLiteTraceRepository(BaseTraceRepository):
         trace_record = TraceRecord.from_trace(trace)
 
         def _insert() -> None:
-            with self._conn:
+            with self._conn_lock, self._conn:
                 self._conn.execute(
                     """
                     INSERT INTO traces (
@@ -187,43 +189,44 @@ class SQLiteTraceRepository(BaseTraceRepository):
         trace_id_str = str(trace_id)
 
         def _query() -> TraceRecord | None:
-            trace_row = self._conn.execute(
-                "SELECT * FROM traces WHERE trace_id = ?", (trace_id_str,)
-            ).fetchone()
+            with self._conn_lock:
+                trace_row = self._conn.execute(
+                    "SELECT * FROM traces WHERE trace_id = ?", (trace_id_str,)
+                ).fetchone()
 
-            if not trace_row:
-                return None
+                if not trace_row:
+                    return None
 
-            span_rows = self._conn.execute(
-                "SELECT * FROM spans WHERE trace_id = ? ORDER BY started_at ASC",
-                (trace_id_str,),
-            ).fetchall()
+                span_rows = self._conn.execute(
+                    "SELECT * FROM spans WHERE trace_id = ? ORDER BY started_at ASC",
+                    (trace_id_str,),
+                ).fetchall()
 
-            spans = [
-                SpanRecord(
-                    span_id=row["span_id"],
-                    trace_id=row["trace_id"],
-                    parent_span_id=row["parent_span_id"],
-                    kind=row["kind"],
-                    name=row["name"],
-                    started_at=row["started_at"],
-                    ended_at=row["ended_at"],
-                    attributes_json=row["attributes_json"],
-                    input_payload=row["input_payload"],
-                    output_payload=row["output_payload"],
+                spans = [
+                    SpanRecord(
+                        span_id=row["span_id"],
+                        trace_id=row["trace_id"],
+                        parent_span_id=row["parent_span_id"],
+                        kind=row["kind"],
+                        name=row["name"],
+                        started_at=row["started_at"],
+                        ended_at=row["ended_at"],
+                        attributes_json=row["attributes_json"],
+                        input_payload=row["input_payload"],
+                        output_payload=row["output_payload"],
+                    )
+                    for row in span_rows
+                ]
+
+                return TraceRecord(
+                    trace_id=trace_row["trace_id"],
+                    application_name=trace_row["application_name"],
+                    created_at=trace_row["created_at"],
+                    spans=spans,
+                    code_commit=trace_row["code_commit"],
+                    data_snapshot_id=trace_row["data_snapshot_id"],
+                    session_id=trace_row["session_id"],
                 )
-                for row in span_rows
-            ]
-
-            return TraceRecord(
-                trace_id=trace_row["trace_id"],
-                application_name=trace_row["application_name"],
-                created_at=trace_row["created_at"],
-                spans=spans,
-                code_commit=trace_row["code_commit"],
-                data_snapshot_id=trace_row["data_snapshot_id"],
-                session_id=trace_row["session_id"],
-            )
 
         record = await asyncio.to_thread(_query)
         return record.to_trace(validate=False) if record is not None else None
@@ -235,6 +238,10 @@ class SQLiteTraceRepository(BaseTraceRepository):
         offset: int = 0,
     ) -> list[Trace]:
         def _query_list() -> list[TraceRecord]:
+            with self._conn_lock:
+                return _query_list_locked()
+
+        def _query_list_locked() -> list[TraceRecord]:
             query = (
                 "SELECT * FROM traces WHERE application_name = ? "
                 "ORDER BY created_at DESC LIMIT ? OFFSET ?"
@@ -282,7 +289,7 @@ class SQLiteTraceRepository(BaseTraceRepository):
 
     async def purge_older_than(self, created_before_iso: str) -> int:
         def _delete() -> int:
-            with self._conn:
+            with self._conn_lock, self._conn:
                 cursor = self._conn.execute(
                     "DELETE FROM traces WHERE created_at < ?",
                     (created_before_iso,),
@@ -293,4 +300,5 @@ class SQLiteTraceRepository(BaseTraceRepository):
 
     def close(self) -> None:
         """Close database connection."""
-        self._conn.close()
+        with self._conn_lock:
+            self._conn.close()
