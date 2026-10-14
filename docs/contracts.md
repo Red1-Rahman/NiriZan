@@ -166,10 +166,14 @@ into the processor callback.
 `Trace` accepts a `parent_span_id` that is not present in the trace only when
 the span's attributes contain
 `SYNTHETIC_PARENT_ATTRIBUTE = "nirizan.parent.synthetic"` with the value
-`True`. This marks intentional ingest-time re-parenting; an unmarked dangling
-parent is rejected as a data-integrity error. The OTel processor marks spans
-it re-attaches after dropping a missing, unrecognized, or unconvertible
-ancestor.
+`True`. In OTel ingestion, this is applied only when a span's local OTel
+parent is missing and `orphan_policy="emit"`; the parent ID is the UUID
+derived from that missing OTel parent span ID. Children of dropped spans
+(including unrecognized, unconvertible, or duplicate-ID spans) are instead
+re-attached to a surviving in-trace ancestor through `_SIG_ATTACH` and are not
+marked synthetic solely because of that re-attachment. A span whose parent is
+remote becomes a root. An unmarked dangling parent is rejected as a
+data-integrity error.
 
 ---
 
