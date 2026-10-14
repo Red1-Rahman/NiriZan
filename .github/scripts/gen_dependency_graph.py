@@ -83,10 +83,10 @@ def module_dotted_name(path: Path) -> tuple[str, str]:
     """Return (dotted_module_name, layer) for a file under SRC_ROOT."""
     rel = path.relative_to(SRC_ROOT)
     parts = list(rel.with_suffix("").parts)
+    layer = parts[0] if len(parts) > 1 else "root"
     if parts[-1] == "__init__":
         parts.pop()
     dotted = ".".join(["nirizan", *parts]) if parts else "nirizan"
-    layer = parts[0] if len(parts) > 1 else "root"
     return dotted, layer
 
 
