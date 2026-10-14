@@ -10,6 +10,7 @@ import json
 from collections.abc import Sequence
 
 __all__ = [
+    "CONTENT_ATTRIBUTE_KEYS",
     "GEN_AI_COMPLETION",
     "GEN_AI_OPERATION_NAME",
     "GEN_AI_PROMPT",
@@ -140,6 +141,26 @@ NIRIZAN_RETRIEVAL_TOP_K: str = "nirizan.retrieval.top_k"
 NIRIZAN_TOOL_NAME: str = "nirizan.tool.name"
 NIRIZAN_TOOL_ARGUMENTS: str = "nirizan.tool.arguments"
 NIRIZAN_TOOL_RESULT: str = "nirizan.tool.result"
+
+# Attribute keys that carry user- or model-generated content (prompts,
+# completions, tool payloads, retrieval text) rather than metadata. Both
+# bridge directions share this one definition, so export and ingest cannot
+# drift apart on which keys count as content versus metadata: to_otel.py's
+# exporter already gates export of these keys on its own capture_content
+# flag; from_otel.py's processor gates ingest of the same keys on
+# ProcessorConfig.capture_content.
+CONTENT_ATTRIBUTE_KEYS: frozenset[str] = frozenset(
+    {
+        GEN_AI_PROMPT,
+        GEN_AI_COMPLETION,
+        NIRIZAN_RETRIEVAL_QUERY,
+        NIRIZAN_RETRIEVAL_RESULTS,
+        NIRIZAN_TOOL_ARGUMENTS,
+        NIRIZAN_TOOL_RESULT,
+        NIRIZAN_PLANNING_CONTEXT,
+        NIRIZAN_PLANNING_OUTPUT,
+    }
+)
 
 # Span/Trace ID Provenance Identifiers
 #

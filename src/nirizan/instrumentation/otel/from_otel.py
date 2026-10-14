@@ -38,6 +38,7 @@ from nirizan.instrumentation.otel._id_mapping import (
     otel_trace_id_to_uuid,
 )
 from nirizan.instrumentation.otel.semconv import (
+    CONTENT_ATTRIBUTE_KEYS,
     GEN_AI_COMPLETION,
     GEN_AI_PROMPT,
     ID_SOURCE_DERIVED,
@@ -60,6 +61,7 @@ from nirizan.instrumentation.otel.semconv import (
     OTEL_STATUS_CODE,
     OTEL_STATUS_DESCRIPTION,
     OTEL_TRACE_STATE,
+    decode_sequence_key,
     encode_sequence_attribute_value,
     encode_sequence_key,
     is_sequence_key,
@@ -154,6 +156,7 @@ class ProcessorConfig(BaseModel):
     trust_stashed_ids: bool = False
     max_payload_chars: int = _DEFAULT_MAX_PAYLOAD_CHARS
     max_buffered_spans: int = _DEFAULT_MAX_BUFFERED_SPANS
+    capture_content: bool = False
 
     @field_validator("idle_timeout_seconds")
     @classmethod
@@ -470,12 +473,24 @@ def _convert_attributes(
     trace_state: str | None,
     status_code: str | None,
     status_description: str | None,
+    capture_content: bool,
 ) -> dict[str, str | int | float | bool]:
-    """Convert OTel attributes plus captured metadata into NiriZan form."""
+    """Convert OTel attributes plus captured metadata into NiriZan form.
+
+    When ``capture_content`` is ``False``, attributes in
+    ``semconv.CONTENT_ATTRIBUTE_KEYS`` (prompt, completion, tool arguments and
+    results, retrieval query and results, planning context and output) are
+    dropped rather than copied, whether or not they arrived as a
+    sequence-encoded (``nirizan.seq.``-prefixed) key: ``decode_sequence_key``
+    strips that prefix before the membership check so a list-valued
+    ``gen_ai.prompt`` is gated the same as a string-valued one.
+    """
     result: dict[str, str | int | float | bool] = {}
 
     for key, value in otel_attrs.items():
         if value is None:
+            continue
+        if not capture_content and decode_sequence_key(key) in CONTENT_ATTRIBUTE_KEYS:
             continue
         if isinstance(value, str):
             result[key] = truncate_attribute_value(value)
@@ -735,6 +750,7 @@ class NiriZanSpanProcessor(SpanProcessor):
         trust_stashed_ids: bool = False,
         max_payload_chars: int = _DEFAULT_MAX_PAYLOAD_CHARS,
         max_buffered_spans: int = _DEFAULT_MAX_BUFFERED_SPANS,
+        capture_content: bool = False,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         config = ProcessorConfig(
@@ -749,6 +765,7 @@ class NiriZanSpanProcessor(SpanProcessor):
             trust_stashed_ids=trust_stashed_ids,
             max_payload_chars=max_payload_chars,
             max_buffered_spans=max_buffered_spans,
+            capture_content=capture_content,
         )
 
         self._config = config
@@ -1517,9 +1534,12 @@ class NiriZanSpanProcessor(SpanProcessor):
 
         try:
             otel_attrs = getattr(span, "attributes", None) or {}
-            input_payload, output_payload = _extract_payloads(kind, otel_attrs)
-            input_payload = _cap_payload(input_payload, self._config.max_payload_chars)
-            output_payload = _cap_payload(output_payload, self._config.max_payload_chars)
+            if self._config.capture_content:
+                input_payload, output_payload = _extract_payloads(kind, otel_attrs)
+                input_payload = _cap_payload(input_payload, self._config.max_payload_chars)
+                output_payload = _cap_payload(output_payload, self._config.max_payload_chars)
+            else:
+                input_payload, output_payload = None, None
 
             started_at = _ns_to_datetime(span.start_time)
             ended_at = _ns_to_datetime(span.end_time)
@@ -1569,6 +1589,7 @@ class NiriZanSpanProcessor(SpanProcessor):
                 trace_state=trace_state_str,
                 status_code=status_code_str,
                 status_description=status_description,
+                capture_content=self._config.capture_content,
             )
 
             return Span(
