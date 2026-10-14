@@ -45,7 +45,7 @@ import time  # noqa: E402
 import warnings  # noqa: E402
 from collections.abc import Callable, Iterator, Sequence  # noqa: E402
 from datetime import UTC, datetime  # noqa: E402
-from functools import lru_cache  # noqa: E402
+from functools import cache  # noqa: E402
 from typing import Any  # noqa: E402
 from unittest.mock import MagicMock  # noqa: E402
 from uuid import UUID, uuid4  # noqa: E402
@@ -155,13 +155,13 @@ _ALL_STAT_REASONS = {
 }
 
 
-@lru_cache(maxsize=None)
+@cache
 def _resource(service: str | None) -> Resource:
     """A resource with exactly the given ``service.name`` (or none at all)."""
     return Resource({"service.name": service} if service else {})
 
 
-@lru_cache(maxsize=None)
+@cache
 def _scope(name: str) -> InstrumentationScope:
     return InstrumentationScope(name)
 
@@ -2242,7 +2242,7 @@ def test_quiescence_requires_no_open_spans_and_trustworthy_accounting(
         (5.0, 0, False, False, True),  # idle, nothing open
         (5.0, 1, False, False, False),  # idle but a span is open
         (5.0, 0, True, False, False),  # a dropped start: the count could be too low
-        (5.0, 3, False, True, True),  # a dropped end: the count is too high, trust silence
+        (5.0, 3, False, True, False),  # a dropped end: open spans may remain
         (5.0, 1, True, True, False),  # both: the count is meaningless, wait for max age
         (4.0, 3, False, True, False),  # a dropped end still needs the idle timeout
     ],
@@ -2266,10 +2266,10 @@ def test_idle_flush_rule_truth_table(
     assert processor._is_idle_flushable(buf, clock()) is flushable
 
 
-def test_a_dropped_end_marker_lets_an_idle_trace_flush_despite_a_stuck_open_count(
+def test_a_dropped_end_marker_waits_for_max_age_while_another_span_is_open(
     make_inert: Callable[..., NiriZanSpanProcessor], clock: FakeClock, sink: RecordingSink
 ) -> None:
-    """Regression: a lost span end left ``open_spans`` stuck, so the trace waited for max age."""
+    """A lost end marker cannot prove that the remaining open span has finished."""
     processor = make_inert(idle_timeout_seconds=5.0, max_trace_age_seconds=600.0)
     processor._mark_span_started(TRACE_ID, clock())
     processor._mark_span_started(TRACE_ID, clock())
@@ -2278,7 +2278,11 @@ def test_a_dropped_end_marker_lets_an_idle_trace_flush_despite_a_stuck_open_coun
 
     clock.advance(5.0)
     processor._sweep_idle_traces()
+    assert sink.traces == []
+    assert TRACE_ID in processor._buffers
 
+    clock.advance(595.0)
+    processor._sweep_idle_traces()
     assert len(sink.traces) == 1
     assert processor.get_stats()["queue_full"] == 1
 
