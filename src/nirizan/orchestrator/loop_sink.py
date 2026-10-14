@@ -59,12 +59,12 @@ class LoopTraceSink:
         callback, matching how any other sink failure is handled by the
         processor (logged and the trace is lost).
         """
+        coro = self._collector.enqueue_trace(trace)
         try:
-            future: Future[None] = asyncio.run_coroutine_threadsafe(
-                self._collector.enqueue_trace(trace), self._loop
-            )
+            future: Future[None] = asyncio.run_coroutine_threadsafe(coro, self._loop)
         except RuntimeError as err:
             # The loop is closed or not running; nothing left to schedule onto.
+            coro.close()
             logger.error("Failed to enqueue trace from OTel processor: %s", err)
             return
         future.add_done_callback(_log_failure)
