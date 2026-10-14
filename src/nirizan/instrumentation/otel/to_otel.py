@@ -47,6 +47,7 @@ from nirizan._logging import get_logger
 from nirizan.instrumentation.exporters import BaseExporter
 from nirizan.instrumentation.otel._id_mapping import uuid_to_otel_trace_id
 from nirizan.instrumentation.otel.semconv import (
+    CONTENT_ATTRIBUTE_KEYS,
     GEN_AI_COMPLETION,
     GEN_AI_OPERATION_NAME,
     GEN_AI_PROMPT,
@@ -108,10 +109,6 @@ _PAYLOAD_ATTRIBUTES: Mapping[SpanKind, tuple[str, str]] = {
     SpanKind.TOOL_USE: (NIRIZAN_TOOL_ARGUMENTS, NIRIZAN_TOOL_RESULT),
     SpanKind.PLANNING: (NIRIZAN_PLANNING_CONTEXT, NIRIZAN_PLANNING_OUTPUT),
 }
-_CONTENT_ATTRIBUTE_KEYS: frozenset[str] = frozenset(
-    key for pair in _PAYLOAD_ATTRIBUTES.values() for key in pair
-)
-
 AttributeValue = str | int | float | bool
 
 
@@ -306,7 +303,7 @@ def convert_span_to_otel_attributes(
     for key, value in custom.items():
         if key in attributes:
             continue
-        if not cfg.capture_content and decode_sequence_key(key) in _CONTENT_ATTRIBUTE_KEYS:
+        if not cfg.capture_content and decode_sequence_key(key) in CONTENT_ATTRIBUTE_KEYS:
             continue
         attributes[key] = truncate_attribute_value(value) if isinstance(value, str) else value
 

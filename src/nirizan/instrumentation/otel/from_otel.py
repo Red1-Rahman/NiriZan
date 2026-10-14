@@ -1392,7 +1392,10 @@ class NiriZanSpanProcessor(SpanProcessor):
 
         root_span = self._find_root_span(buf, kept_ids, parent_map)
         application_name = self._resolve_application_name(buf, kept_ids, root_span)
-        session_id = self._find_session_id({oid: buf.spans[oid] for oid in kept_ids})
+        session_id = self._find_session_id(
+            {oid: buf.spans[oid] for oid in kept_ids},
+            trust_stashed_ids=self._config.trust_stashed_ids,
+        )
 
         nirizan_spans: list[Span] = []
         for otel_span_id in kept_ids:
@@ -1403,13 +1406,11 @@ class NiriZanSpanProcessor(SpanProcessor):
                 continue
             update: dict[str, Any] = {"parent_span_id": parent}
             if otel_span_id in resolution.synthetic_origin:
-                # This span's parent was dropped from the trace (unrecognized
-                # kind, conversion failure, and so on); _resolve_parents
-                # re-attached it to the nearest surviving ancestor instead of
-                # leaving it orphaned. That ancestor is not actually this
-                # span's parent in the trace being emitted, so Trace's
-                # validator must be told this parent link is synthetic rather
-                # than treating it as a dangling, corrupted reference.
+                # The local OTel parent is missing and orphan_policy="emit".
+                # The parent ID intentionally refers to the UUID derived from
+                # that missing OTel parent span ID, so mark the dangling link
+                # for Trace's validator. Re-attachments past dropped spans use
+                # _SIG_ATTACH and do not receive this marker.
                 update["attributes"] = {**base.attributes, SYNTHETIC_PARENT_ATTRIBUTE: True}
             nirizan_spans.append(base.model_copy(update=update))
 
@@ -1501,7 +1502,11 @@ class NiriZanSpanProcessor(SpanProcessor):
         return "unknown"
 
     @staticmethod
-    def _find_session_id(spans: Mapping[int, ReadableSpan]) -> UUID | None:
+    def _find_session_id(
+        spans: Mapping[int, ReadableSpan], *, trust_stashed_ids: bool
+    ) -> UUID | None:
+        if not trust_stashed_ids:
+            return None
         for span in spans.values():
             attrs = getattr(span, "attributes", None) or {}
             raw = attrs.get(NIRIZAN_SESSION_ID)

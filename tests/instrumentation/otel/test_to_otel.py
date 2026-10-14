@@ -61,6 +61,7 @@ from nirizan.instrumentation.otel import to_otel  # noqa: E402
 from nirizan.instrumentation.otel._id_mapping import uuid_to_otel_trace_id  # noqa: E402
 from nirizan.instrumentation.otel.from_otel import _ns_to_datetime  # noqa: E402
 from nirizan.instrumentation.otel.semconv import (  # noqa: E402
+    CONTENT_ATTRIBUTE_KEYS,
     GEN_AI_COMPLETION,
     GEN_AI_OPERATION_NAME,
     GEN_AI_PROMPT,
@@ -1449,6 +1450,32 @@ def test_exported_content_follows_the_config_for_a_whole_trace(otel: OTel) -> No
     assert not any("SECRET" in v for v in withheld)
     assert any("SECRET-PLAN" in v for v in allowed)
     assert any("SECRET-PROMPT" in v for v in allowed)
+
+
+def test_payload_attributes_are_covered_by_the_shared_content_allowlist() -> None:
+    assert ALL_CONTENT_KEYS <= CONTENT_ATTRIBUTE_KEYS
+
+
+def test_shared_content_attributes_are_withheld_when_capture_is_off(otel: OTel) -> None:
+    attributes = {key: f"SECRET-{index}" for index, key in enumerate(CONTENT_ATTRIBUTE_KEYS)}
+    export_span_to_otel(nspan(kind=SpanKind.GENERATION, attributes=attributes), tracer=otel.tracer)
+
+    exported = otel.spans()[0]
+    assert exported.attributes is not None
+    assert not CONTENT_ATTRIBUTE_KEYS.intersection(exported.attributes)
+
+
+def test_shared_content_attributes_are_exported_when_capture_is_on(otel: OTel) -> None:
+    attributes = {key: f"CONTENT-{index}" for index, key in enumerate(CONTENT_ATTRIBUTE_KEYS)}
+    export_span_to_otel(
+        nspan(kind=SpanKind.GENERATION, attributes=attributes),
+        tracer=otel.tracer,
+        config=CONTENT_ON,
+    )
+
+    exported = otel.spans()[0]
+    assert exported.attributes is not None
+    assert CONTENT_ATTRIBUTE_KEYS <= set(exported.attributes)
 
 
 def test_random_forests_always_export_in_one_trace_with_correct_links(otel: OTel) -> None:

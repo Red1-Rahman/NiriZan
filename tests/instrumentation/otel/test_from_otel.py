@@ -116,7 +116,12 @@ from nirizan.instrumentation.otel.semconv import (  # noqa: E402
     SPAN_ID_SOURCE_DERIVED,
     SPAN_ID_SOURCE_ROUNDTRIP,
 )
-from nirizan.instrumentation.spans import Span, SpanKind, Trace  # noqa: E402
+from nirizan.instrumentation.spans import (  # noqa: E402
+    SYNTHETIC_PARENT_ATTRIBUTE,
+    Span,
+    SpanKind,
+    Trace,
+)
 
 _MODULE_LOGGER = "nirizan.instrumentation.otel.from_otel"
 
@@ -1667,17 +1672,37 @@ def test_assembly_application_name_survives_when_the_promoted_root_has_the_name(
 
 
 def test_assembly_session_id_uses_the_first_valid_session_by_start_time(
-    inert: NiriZanSpanProcessor,
+    make_inert: Callable[..., NiriZanSpanProcessor],
 ) -> None:
     first, second = uuid4(), uuid4()
 
     trace = assemble_ok(
-        inert,
+        make_inert(trust_stashed_ids=True),
         make_span(2, start=T0 + 20, attributes={NIRIZAN_SESSION_ID: str(second)}),
         make_span(1, start=T0 + 10, attributes={NIRIZAN_SESSION_ID: str(first)}),
     )
 
     assert trace.session_id == first
+
+
+def test_assembly_does_not_recover_a_stashed_session_id_when_untrusted(
+    inert: NiriZanSpanProcessor,
+) -> None:
+    trace = assemble_ok(inert, make_span(1, attributes={NIRIZAN_SESSION_ID: str(uuid4())}))
+
+    assert trace.session_id is None
+
+
+def test_assembly_recovers_a_stashed_session_id_when_trusted(
+    make_inert: Callable[..., NiriZanSpanProcessor],
+) -> None:
+    session_id = uuid4()
+    trace = assemble_ok(
+        make_inert(trust_stashed_ids=True),
+        make_span(1, attributes={NIRIZAN_SESSION_ID: str(session_id)}),
+    )
+
+    assert trace.session_id == session_id
 
 
 def test_assembly_ignores_an_invalid_session_id(inert: NiriZanSpanProcessor) -> None:
@@ -1911,6 +1936,7 @@ def test_assembly_survives_a_span_that_cannot_be_converted_and_reattaches_its_ch
     spans = by_name(trace)
     assert set(spans) == {"root", "leaf"}
     assert spans["leaf"].parent_span_id == spans["root"].span_id
+    assert SYNTHETIC_PARENT_ATTRIBUTE not in spans["leaf"].attributes
     assert inert.get_stats()["conversion_error"] == 1
     assert any("Failed to convert OTel span 'bad'" in r.getMessage() for r in caplog.records)
 
@@ -1928,6 +1954,7 @@ def test_assembly_emit_policy_gives_an_orphan_a_deterministic_synthetic_parent(
     trace = assemble_ok(inert, make_span(3, name="orphan", parent=0x9999))
 
     assert trace.spans[0].parent_span_id == otel_span_id_to_uuid(0x9999)
+    assert trace.spans[0].attributes[SYNTHETIC_PARENT_ATTRIBUTE] is True
     assert inert.get_stats()["orphan_emitted"] == 1
 
 
