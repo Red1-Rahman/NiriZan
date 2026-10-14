@@ -85,18 +85,25 @@ class TraceRecord(BaseModel):
         repository uses ``validate=False`` when reading those records so a
         legacy row cannot make an otherwise valid query fail.
         """
-        values = {
-            "trace_id": UUID(self.trace_id),
-            "application_name": self.application_name,
-            "created_at": datetime.fromisoformat(self.created_at),
-            "spans": [s.to_span() for s in self.spans],
-            "code_commit": self.code_commit,
-            "data_snapshot_id": self.data_snapshot_id,
-            "session_id": UUID(self.session_id) if self.session_id else None,
-        }
         if validate:
-            return Trace(**values)
-        return Trace.model_construct(**values)
+            return Trace(
+                trace_id=UUID(self.trace_id),
+                application_name=self.application_name,
+                created_at=datetime.fromisoformat(self.created_at),
+                spans=[s.to_span() for s in self.spans],
+                code_commit=self.code_commit,
+                data_snapshot_id=self.data_snapshot_id,
+                session_id=UUID(self.session_id) if self.session_id else None,
+            )
+        return Trace.model_construct(
+            trace_id=UUID(self.trace_id),
+            application_name=self.application_name,
+            created_at=datetime.fromisoformat(self.created_at),
+            spans=[s.to_span() for s in self.spans],
+            code_commit=self.code_commit,
+            data_snapshot_id=self.data_snapshot_id,
+            session_id=UUID(self.session_id) if self.session_id else None,
+        )
 
 
 class Run(BaseModel):
