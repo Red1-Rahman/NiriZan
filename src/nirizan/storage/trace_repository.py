@@ -1,8 +1,7 @@
 # src\nirizan\storage\trace_repository.py
-from abc import ABC, abstractmethod
 import asyncio
 import sqlite3
-from typing import Optional
+from abc import ABC, abstractmethod
 from uuid import UUID
 
 from nirizan.instrumentation.spans import Trace
@@ -25,7 +24,7 @@ class BaseTraceRepository(ABC):
         pass
 
     @abstractmethod
-    async def get(self, trace_id: UUID) -> Optional[Trace]:
+    async def get(self, trace_id: UUID) -> Trace | None:
         """Retrieve a Trace by trace_id. Returns None if not found, never raises
         for a missing trace (see contracts.md: "the repository stays a dumb,
         honest store")."""
@@ -139,7 +138,10 @@ class SQLiteTraceRepository(BaseTraceRepository):
                             started_at, ended_at, attributes_json, input_payload, output_payload
                         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         ON CONFLICT(span_id) DO UPDATE SET
+                            parent_span_id = excluded.parent_span_id,
+                            kind = excluded.kind,
                             name = excluded.name,
+                            started_at = excluded.started_at,
                             ended_at = excluded.ended_at,
                             attributes_json = excluded.attributes_json,
                             input_payload = excluded.input_payload,
@@ -165,12 +167,26 @@ class SQLiteTraceRepository(BaseTraceRepository):
                             f"(attempted trace_id={span.trace_id!r})"
                         )
 
+                incoming_span_ids = [span.span_id for span in trace_record.spans]
+                if incoming_span_ids:
+                    placeholders = ", ".join("?" for _ in incoming_span_ids)
+                    self._conn.execute(
+                        f"DELETE FROM spans WHERE trace_id = ? "
+                        f"AND span_id NOT IN ({placeholders})",
+                        (trace_record.trace_id, *incoming_span_ids),
+                    )
+                else:
+                    self._conn.execute(
+                        "DELETE FROM spans WHERE trace_id = ?",
+                        (trace_record.trace_id,),
+                    )
+
         await asyncio.to_thread(_insert)
 
-    async def get(self, trace_id: UUID) -> Optional[Trace]:
+    async def get(self, trace_id: UUID) -> Trace | None:
         trace_id_str = str(trace_id)
 
-        def _query() -> Optional[TraceRecord]:
+        def _query() -> TraceRecord | None:
             trace_row = self._conn.execute(
                 "SELECT * FROM traces WHERE trace_id = ?", (trace_id_str,)
             ).fetchone()

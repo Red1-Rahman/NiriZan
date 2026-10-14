@@ -22,12 +22,9 @@ from __future__ import annotations
 import asyncio
 import logging
 from concurrent.futures import Future
-from typing import TYPE_CHECKING, Protocol
+from typing import Protocol
 
 from nirizan.instrumentation.spans import Trace
-
-if TYPE_CHECKING:
-    pass
 
 logger = logging.getLogger(__name__)
 

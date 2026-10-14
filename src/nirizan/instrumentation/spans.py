@@ -7,13 +7,13 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-# Set on a Span's ``attributes`` when its ``parent_span_id`` does not refer to
-# another span in the same Trace, but was synthesized by an ingest adapter
-# (for example, the OTel bridge re-parenting an orphan onto the nearest
-# surviving ancestor it could find). ``Trace.validate_span_trace_ids`` allows
-# a dangling parent only when this attribute is set to ``True``, so a
-# dangling parent that is NOT marked this way is a real data integrity bug,
-# not an expected consequence of ingest-time re-parenting.
+# Set on a Span's ``attributes`` when an ingest adapter intentionally preserves
+# a missing local parent as a synthetic dangling link. In OTel ingestion this
+# means ``orphan_policy="emit"`` for a missing local OTel parent; children of
+# dropped spans are re-attached to surviving ancestors without this marker,
+# and remote parents produce roots. ``Trace.validate_span_trace_ids`` allows a
+# dangling parent only when this attribute is set to ``True``, so an unmarked
+# dangling parent is a real data-integrity bug.
 #
 # This constant lives in the core layer (``instrumentation/spans.py``) rather
 # than in the OTel adapter, so the adapter imports it from core and core never
