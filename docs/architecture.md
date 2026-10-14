@@ -29,7 +29,7 @@ flowchart TB
     end
 
     subgraph INSTR["Instrumentation Layer"]
-        I1["OpenTelemetry-style Tracing<br/>(planning, retrieval, tool use, generation spans)"]
+        I1["NiriZan instrumentation<br/>(native spans + optional OTel bridge)"]
     end
 
     subgraph ORCH["Evaluator Orchestrator"]
