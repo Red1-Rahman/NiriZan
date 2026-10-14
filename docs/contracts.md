@@ -116,6 +116,61 @@ class TraceRepository(Protocol):
 * `get` returns `None` for a missing trace, it does not raise. Callers that need "trace must exist" semantics wrap this themselves; the repository stays a dumb, honest store.
 * No method here accepts or returns anything from `metrics/`, `regression/`, or `reporting/`. This is Phase 1's boundary and it stays that narrow.
 
+### OpenTelemetry adapter contracts (`instrumentation/otel/`)
+
+The OpenTelemetry bridge is an optional adapter layer. Installing the `otel`
+extra adds the bridge without changing the core `Span`, `Trace`,
+`TraceExporter`, or `TraceRepository` contracts above.
+
+#### `NiriZanToOTelExporter` and `export_trace_to_otel`
+
+The NiriZan-to-OTel direction exports a validated `Trace` through the
+OpenTelemetry SDK. Spans are emitted in parent-first order, with explicit
+parent contexts for in-trace links. Roots and orphaned parent links are
+anchored to a synthetic remote parent when `link_roots_to_trace_id=True` (the
+default), keeping all spans in the NiriZan trace under one OTel trace ID.
+`OTelExporterConfig.link_roots_to_trace_id=False` instead lets each root start
+its own OTel trace.
+
+`OTelExporterConfig.capture_content` defaults to `False`. Structural metadata
+is exported, but prompt, completion, retrieval, tool, and planning content is
+withheld unless capture is explicitly enabled. Legacy semantic-convention
+aliases remain enabled by default and can be disabled with
+`emit_legacy_attributes=False`.
+
+#### `NiriZanSpanProcessor` and `ThreadSafeTraceSink`
+
+The OTel-to-NiriZan direction implements the SDK's synchronous
+`SpanProcessor` interface. It buffers completed OTel spans by OTel trace ID,
+assembles a NiriZan `Trace`, and calls a synchronous sink:
+
+```python
+class ThreadSafeTraceSink(Protocol):
+    def enqueue_trace(self, trace: Trace) -> None: ...
+```
+
+Its defensive defaults are `trust_stashed_ids=False`,
+`capture_content=False`, `orphan_policy="emit"`, and
+`unrecognized_span_policy="drop"`. Stashed NiriZan IDs are used only when
+`trust_stashed_ids=True`; otherwise IDs are derived from OTel IDs and
+provenance is recorded as `derived`.
+
+`LoopTraceSink` is the supported bridge from this synchronous sink to the
+async `TraceCollector`. It schedules `enqueue_trace` on the collector's event
+loop with `asyncio.run_coroutine_threadsafe` and returns without blocking the
+OTel consumer thread. Sink and loop failures are logged rather than raised
+into the processor callback.
+
+#### Parent-link integrity
+
+`Trace` accepts a `parent_span_id` that is not present in the trace only when
+the span's attributes contain
+`SYNTHETIC_PARENT_ATTRIBUTE = "nirizan.parent.synthetic"` with the value
+`True`. This marks intentional ingest-time re-parenting; an unmarked dangling
+parent is rejected as a data-integrity error. The OTel processor marks spans
+it re-attaches after dropping a missing, unrecognized, or unconvertible
+ancestor.
+
 ---
 
 ## Phase 2 Contracts: RAG Triad Metrics

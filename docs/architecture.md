@@ -102,9 +102,41 @@ flowchart TB
 
 **Purpose:** Capture what actually happened inside a RAG pipeline, agent, or LLM call, at a granular enough level to localize failures.
 
-- Uses OpenTelemetry-style span tracing: separate spans for planning, retrieval, tool use, and generation.
+- Native NiriZan instrumentation records separate spans for planning, retrieval, tool use, and generation.
+- The optional OpenTelemetry adapter provides both directions of interoperability:
+  `NiriZanToOTelExporter` exports validated NiriZan traces to an OTel tracer,
+  while `NiriZanSpanProcessor` buffers completed OTel spans and assembles
+  validated NiriZan traces.
+- The adapter is isolated behind the optional `otel` dependency group.
+  Applications that do not install that extra retain the core instrumentation
+  and trace contracts unchanged.
 - Runs as a lightweight SDK hook in the target application, not a wrapper that blocks the response path.
+- Exported roots and orphaned parent links use a synthetic remote OTel parent
+  by default so one NiriZan trace remains one OTel trace. Export order is
+  parent-first and preserves explicit in-trace parent contexts.
+- Content-bearing attributes are opt-in in both directions. Structural metadata
+  is retained by default; prompts, completions, retrieval data, tool arguments,
+  and planning content require an explicit capture setting.
 - **Design decision:** evaluation is decoupled from the request/response cycle. Traces are emitted asynchronously to avoid adding latency to production traffic.
+
+#### OpenTelemetry ingest and delivery flow
+
+```mermaid
+flowchart LR
+    SDK["OpenTelemetry SDK"] --> P["NiriZanSpanProcessor"]
+    P --> B["Per-trace buffer"]
+    B --> A["Trace assembly<br/>IDs, parents, provenance"]
+    A --> S["ThreadSafeTraceSink"]
+    S --> L["LoopTraceSink"]
+    L --> C["TraceCollector"]
+    C --> R["TraceRepository"]
+```
+
+The processor's synchronous callback never writes directly to the async
+collector queue. `LoopTraceSink` schedules delivery onto the collector's event
+loop, so the OTel consumer thread remains non-blocking. Trace validation rejects
+cross-trace spans and unmarked dangling parents; ingest-time re-parenting is
+explicitly marked as synthetic.
 
 ### 3.2 Evaluator Orchestrator
 
@@ -112,6 +144,9 @@ flowchart TB
 
 - **Run Scheduler:** triggers evaluation runs (on-demand, scheduled, or in response to a percentage of live production traffic).
 - **Trace Collector:** ingests spans from the instrumentation layer into the Trace Repository.
+- **OTel delivery path:** `LoopTraceSink` adapts the processor's synchronous
+  trace sink to the collector's async queue and logs delivery failures rather
+  than allowing them to escape from the OTel consumer thread.
 - **Metric Dispatcher:** routes traces to the relevant metrics based on system type (RAG, agent, general LLM app).
 
 ### 3.3 Metric Engine (Pluggable)
@@ -141,6 +176,12 @@ This is intentionally modular so new metrics can be added without changing the o
 **Purpose:** Source of truth for everything measured.
 
 - Stores raw traces, inputs, intermediate retrieval steps, and final outputs.
+- Trace upserts preserve existing trace rows and update spans only when the
+  existing span belongs to the same trace; a span ID collision across traces
+  raises instead of stealing or replacing the existing span.
+- Parent links are integrity-checked at the model boundary. Missing parents
+  are allowed only when an ingest adapter marks the link with the synthetic
+  parent attribute.
 - Every run is versioned against a specific code commit and data/prompt configuration snapshot, so any two runs are comparable.
 - Maintains historical baselines used by the Regression Detector.
 
