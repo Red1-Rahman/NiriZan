@@ -318,9 +318,7 @@ def make_processor(
 
 
 @pytest.fixture
-def make_inert(
-    sink: RecordingSink, clock: FakeClock
-) -> Callable[..., NiriZanSpanProcessor]:
+def make_inert(sink: RecordingSink, clock: FakeClock) -> Callable[..., NiriZanSpanProcessor]:
     """Factory for *inert* processors: built, then shut down.
 
     With the consumer thread gone, a test can call the internal methods
@@ -345,9 +343,7 @@ def inert(make_inert: Callable[..., NiriZanSpanProcessor]) -> NiriZanSpanProcess
 
 def consumer_threads() -> list[threading.Thread]:
     return [
-        t
-        for t in threading.enumerate()
-        if t.name == "nirizan-otel-span-consumer" and t.is_alive()
+        t for t in threading.enumerate() if t.name == "nirizan-otel-span-consumer" and t.is_alive()
     ]
 
 
@@ -393,10 +389,24 @@ def test_config_defaults_match_documented_values() -> None:
 @pytest.mark.parametrize(
     ("kwargs", "message"),
     [
-        pytest.param({"idle_timeout_seconds": 0}, "idle_timeout_seconds must be positive", id="idle-zero"),
-        pytest.param({"idle_timeout_seconds": -1.0}, "idle_timeout_seconds must be positive", id="idle-negative"),
-        pytest.param({"idle_timeout_seconds": float("nan")}, "idle_timeout_seconds must be positive", id="idle-nan"),
-        pytest.param({"idle_timeout_seconds": float("inf")}, "idle_timeout_seconds must be positive", id="idle-inf"),
+        pytest.param(
+            {"idle_timeout_seconds": 0}, "idle_timeout_seconds must be positive", id="idle-zero"
+        ),
+        pytest.param(
+            {"idle_timeout_seconds": -1.0},
+            "idle_timeout_seconds must be positive",
+            id="idle-negative",
+        ),
+        pytest.param(
+            {"idle_timeout_seconds": float("nan")},
+            "idle_timeout_seconds must be positive",
+            id="idle-nan",
+        ),
+        pytest.param(
+            {"idle_timeout_seconds": float("inf")},
+            "idle_timeout_seconds must be positive",
+            id="idle-inf",
+        ),
         pytest.param(
             {"idle_timeout_seconds": 5.0, "max_trace_age_seconds": 5.0},
             "max_trace_age_seconds must be greater than idle_timeout_seconds",
@@ -407,12 +417,26 @@ def test_config_defaults_match_documented_values() -> None:
             "max_trace_age_seconds must be greater than idle_timeout_seconds",
             id="age-below-idle",
         ),
-        pytest.param({"max_trace_age_seconds": float("nan")}, "max_trace_age_seconds must be finite", id="age-nan"),
-        pytest.param({"max_trace_age_seconds": float("inf")}, "max_trace_age_seconds must be finite", id="age-inf"),
-        pytest.param({"max_buffered_traces": 0}, "max_buffered_traces must be at least 1", id="buffered-zero"),
+        pytest.param(
+            {"max_trace_age_seconds": float("nan")},
+            "max_trace_age_seconds must be finite",
+            id="age-nan",
+        ),
+        pytest.param(
+            {"max_trace_age_seconds": float("inf")},
+            "max_trace_age_seconds must be finite",
+            id="age-inf",
+        ),
+        pytest.param(
+            {"max_buffered_traces": 0}, "max_buffered_traces must be at least 1", id="buffered-zero"
+        ),
         pytest.param({"max_queue_size": 0}, "max_queue_size must be at least 1", id="queue-zero"),
-        pytest.param({"max_spans_per_trace": 0}, "max_spans_per_trace must be at least 1", id="spans-zero"),
-        pytest.param({"orphan_policy": "bogus"}, "orphan_policy must be 'emit' or 'drop'", id="orphan-policy"),
+        pytest.param(
+            {"max_spans_per_trace": 0}, "max_spans_per_trace must be at least 1", id="spans-zero"
+        ),
+        pytest.param(
+            {"orphan_policy": "bogus"}, "orphan_policy must be 'emit' or 'drop'", id="orphan-policy"
+        ),
         pytest.param(
             {"unrecognized_span_policy": "bogus"},
             "unrecognized_span_policy must be 'drop' or 'generation'",
@@ -882,6 +906,7 @@ def test_convert_attributes_stringifies_and_truncates_unsupported_types() -> Non
     assert result["odd"].endswith("...[truncated]")
     assert result["raw"] == "b'bytes'"
 
+
 def test_convert_attributes_truncates_long_string_attributes() -> None:
     result = _convert({"prompt": "x" * (MAX_ATTR_VALUE_LENGTH * 2)})
 
@@ -1243,7 +1268,14 @@ def test_resolve_parents_breaks_a_self_parented_span() -> None:
 
 
 def test_resolve_parents_attaches_a_tail_that_feeds_into_a_cycle() -> None:
-    result = resolve([make_span(1, parent=2), make_span(2, parent=3), make_span(3, parent=2), make_span(9, parent=1)])
+    result = resolve(
+        [
+            make_span(1, parent=2),
+            make_span(2, parent=3),
+            make_span(3, parent=2),
+            make_span(9, parent=1),
+        ]
+    )
 
     assert sorted(result.parent_of) == [1, 2, 3, 9]
     assert result.parent_of[9] == 1
@@ -1436,7 +1468,9 @@ def test_assembly_upholds_the_trace_and_span_contracts(inert: NiriZanSpanProcess
 
     assert all(s.trace_id == trace.trace_id for s in trace.spans)
     assert len({s.span_id for s in trace.spans}) == len(trace.spans)
-    assert all(isinstance(v, (str, int, float, bool)) for s in trace.spans for v in s.attributes.values())
+    assert all(
+        isinstance(v, (str, int, float, bool)) for s in trace.spans for v in s.attributes.values()
+    )
     assert trace.application_name
     field = "name"
     with pytest.raises(ValidationError):  # Span is frozen
@@ -1491,7 +1525,8 @@ def test_assembly_recovers_a_stashed_trace_id(
     stashed = uuid4()
 
     trace = assemble_ok(
-        make_inert(trust_stashed_ids=True), make_span(1, attributes={NIRIZAN_TRACE_ID: str(stashed)})
+        make_inert(trust_stashed_ids=True),
+        make_span(1, attributes={NIRIZAN_TRACE_ID: str(stashed)}),
     )
 
     assert trace.trace_id == stashed
@@ -1575,7 +1610,9 @@ def test_assembly_drops_a_span_whose_replacement_id_also_collides(
     make_inert: Callable[..., NiriZanSpanProcessor],
 ) -> None:
     """Astronomically unlikely, but it must never produce duplicate ids."""
-    squatter = make_span(1, name="squatter", attributes={NIRIZAN_SPAN_ID: str(otel_span_id_to_uuid(2))})
+    squatter = make_span(
+        1, name="squatter", attributes={NIRIZAN_SPAN_ID: str(otel_span_id_to_uuid(2))}
+    )
     victim = make_span(2, name="victim")
 
     inert = make_inert(trust_stashed_ids=True)
@@ -1719,7 +1756,9 @@ def test_assembly_captures_trace_state_in_the_w3c_header_format(
     """Regression: ``str(TraceState)`` is a Python list repr, not the W3C tracestate value."""
     state = TraceState([("congo", "t61rcWkgMzE"), ("rojo", "00f067aa0ba902b7")])
 
-    value = assemble_ok(inert, make_span(1, trace_state=state)).spans[0].attributes[OTEL_TRACE_STATE]
+    value = (
+        assemble_ok(inert, make_span(1, trace_state=state)).spans[0].attributes[OTEL_TRACE_STATE]
+    )
 
     assert value == "congo=t61rcWkgMzE,rojo=00f067aa0ba902b7"
     assert "{key=" not in str(value)
@@ -2406,7 +2445,9 @@ def test_flushing_a_trace_with_only_unrecognized_spans_delivers_nothing_and_does
     assert flush_state(inert)
 
 
-def test_flushing_an_unknown_trace_is_a_no_op(inert: NiriZanSpanProcessor, sink: RecordingSink) -> None:
+def test_flushing_an_unknown_trace_is_a_no_op(
+    inert: NiriZanSpanProcessor, sink: RecordingSink
+) -> None:
     inert._flush_trace(0xDEAD, reason="test")
 
     assert sink.traces == []
@@ -2565,9 +2606,15 @@ def test_end_to_end_delivery_of_a_two_span_trace(
     root = make_span(
         0x1111,
         name="parent-span",
-        attributes={NIRIZAN_SESSION_ID: str(session), NIRIZAN_SPAN_ID: str(stashed), GEN_AI_PROMPT: "hi"},
+        attributes={
+            NIRIZAN_SESSION_ID: str(session),
+            NIRIZAN_SPAN_ID: str(stashed),
+            GEN_AI_PROMPT: "hi",
+        },
     )
-    child = make_span(0x2222, name="child-span", parent=0x1111, attributes={GEN_AI_COMPLETION: "yo"})
+    child = make_span(
+        0x2222, name="child-span", parent=0x1111, attributes={GEN_AI_COMPLETION: "yo"}
+    )
 
     processor.on_end(root)
     processor.on_end(child)
@@ -2603,7 +2650,9 @@ def test_force_flush_keeps_a_trace_with_open_spans_buffered_and_delivers_it_whol
 
     assert len(sink.traces) == 1
     assert sorted(span_names(sink.traces[0])) == ["child", "root"]
-    assert by_name(sink.traces[0])["child"].parent_span_id == by_name(sink.traces[0])["root"].span_id
+    assert (
+        by_name(sink.traces[0])["child"].parent_span_id == by_name(sink.traces[0])["root"].span_id
+    )
     assert processor.get_stats() == {}
 
 
@@ -2856,7 +2905,10 @@ def test_an_unexpected_error_in_the_consumer_is_counted_and_the_thread_survives(
     assert processor._consumer.is_alive()
     assert processor.get_stats() == {"consumer_error": 1}
     assert [t.trace_id for t in sink.traces] == [otel_trace_id_to_uuid(0xB)]
-    assert any("Unexpected error in NiriZanSpanProcessor consumer" in r.getMessage() for r in caplog.records)
+    assert any(
+        "Unexpected error in NiriZanSpanProcessor consumer" in r.getMessage()
+        for r in caplog.records
+    )
 
 
 def test_a_flush_waiter_is_released_even_if_the_flush_itself_fails(
@@ -3122,9 +3174,7 @@ def test_raising_span_exports_error_status() -> None:
     tracer = tracer_provider.get_tracer("tests.from_otel")
 
     with pytest.raises(ValueError, match="kaboom"):
-        with tracer.start_as_current_span(
-            "failing", attributes={NIRIZAN_SPAN_KIND: "planning"}
-        ):
+        with tracer.start_as_current_span("failing", attributes={NIRIZAN_SPAN_KIND: "planning"}):
             raise ValueError("kaboom")
 
     assert tracer_provider.force_flush() is True
@@ -3166,7 +3216,9 @@ def test_sdk_remote_parent_makes_a_root_even_when_orphans_are_dropped(
     )
     context = otel_trace.set_span_in_context(NonRecordingSpan(remote))
 
-    span = tracer.start_span("local-root", context=context, attributes={NIRIZAN_SPAN_KIND: "planning"})
+    span = tracer.start_span(
+        "local-root", context=context, attributes={NIRIZAN_SPAN_KIND: "planning"}
+    )
     span.end()
 
     assert tracer_provider.force_flush() is True

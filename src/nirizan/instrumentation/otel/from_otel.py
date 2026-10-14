@@ -320,9 +320,7 @@ def _parse_stashed_uuid(value: object) -> UUID | None:
     return None if parsed.int == 0 else parsed
 
 
-def _extract_nirizan_span_id(
-    span: ReadableSpan, ctx: SpanContext, trust: bool
-) -> tuple[UUID, str]:
+def _extract_nirizan_span_id(span: ReadableSpan, ctx: SpanContext, trust: bool) -> tuple[UUID, str]:
     """Return ``(NiriZan span_id, provenance source)`` for an OTel span.
 
     A stashed ``nirizan.span_id`` is recovered as-is, but only when ``trust``
@@ -1169,10 +1167,7 @@ class NiriZanSpanProcessor(SpanProcessor):
             self._buffers[ctx.trace_id] = buf
         self._apply_pending_flags(ctx.trace_id, buf)
 
-        if (
-            ctx.span_id not in buf.spans
-            and len(buf.spans) >= self._config.max_spans_per_trace
-        ):
+        if ctx.span_id not in buf.spans and len(buf.spans) >= self._config.max_spans_per_trace:
             self._record_stat(StatReason.TRACE_SPAN_CAP)
             if not buf.cap_warned:
                 buf.cap_warned = True
@@ -1447,9 +1442,7 @@ class NiriZanSpanProcessor(SpanProcessor):
             ctx = _get_span_context(span)
             if ctx is None:
                 continue
-            nirizan_id, source = _extract_nirizan_span_id(
-                span, ctx, self._config.trust_stashed_ids
-            )
+            nirizan_id, source = _extract_nirizan_span_id(span, ctx, self._config.trust_stashed_ids)
             if nirizan_id in used:
                 self._record_stat(StatReason.DUPLICATE_NIRIZAN_SPAN_ID)
                 derived = otel_span_id_to_uuid(ctx.span_id)

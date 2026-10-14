@@ -163,9 +163,7 @@ def nspan(
     )
 
 
-def ntrace(
-    *spans: Span, session_id: UUID | None = None, trace_id: UUID = TRACE_UUID
-) -> Trace:
+def ntrace(*spans: Span, session_id: UUID | None = None, trace_id: UUID = TRACE_UUID) -> Trace:
     return Trace(
         trace_id=trace_id,
         application_name="test-app",
@@ -468,8 +466,12 @@ def test_content_is_exported_when_capture_is_on(kind: SpanKind) -> None:
 def test_content_attributes_are_omitted_for_missing_payloads(kind: SpanKind) -> None:
     in_key, out_key = EXPECTED_PAYLOAD_KEYS[kind]
 
-    only_input = convert_span_to_otel_attributes(nspan(kind=kind, input_payload="i"), config=CONTENT_ON)
-    only_output = convert_span_to_otel_attributes(nspan(kind=kind, output_payload="o"), config=CONTENT_ON)
+    only_input = convert_span_to_otel_attributes(
+        nspan(kind=kind, input_payload="i"), config=CONTENT_ON
+    )
+    only_output = convert_span_to_otel_attributes(
+        nspan(kind=kind, output_payload="o"), config=CONTENT_ON
+    )
     neither = convert_span_to_otel_attributes(nspan(kind=kind), config=CONTENT_ON)
 
     assert in_key in only_input and out_key not in only_input
@@ -702,7 +704,9 @@ def test_generation_attributes_are_only_added_to_generation_spans(kind: SpanKind
 
 @pytest.mark.parametrize("source_key", ["top_k", NIRIZAN_RETRIEVAL_TOP_K])
 def test_retrieval_top_k_is_read_from_either_key(source_key: str) -> None:
-    attrs = convert_span_to_otel_attributes(nspan(kind=SpanKind.RETRIEVAL, attributes={source_key: 5}))
+    attrs = convert_span_to_otel_attributes(
+        nspan(kind=SpanKind.RETRIEVAL, attributes={source_key: 5})
+    )
 
     assert attrs[NIRIZAN_RETRIEVAL_TOP_K] == 5
 
@@ -715,7 +719,9 @@ def test_retrieval_top_k_of_zero_is_exported() -> None:
 
 @pytest.mark.parametrize("bad", [True, 2.5, "5"])
 def test_retrieval_top_k_must_be_an_integer(bad: bool | float | str) -> None:
-    attrs = convert_span_to_otel_attributes(nspan(kind=SpanKind.RETRIEVAL, attributes={"top_k": bad}))
+    attrs = convert_span_to_otel_attributes(
+        nspan(kind=SpanKind.RETRIEVAL, attributes={"top_k": bad})
+    )
 
     assert NIRIZAN_RETRIEVAL_TOP_K not in attrs  # not mapped to the semantic attribute...
     assert attrs["top_k"] == bad  # ...but still carried over as the span's own attribute
@@ -753,7 +759,9 @@ def test_other_attributes_are_carried_over_with_their_types() -> None:
 
 
 def test_long_attribute_strings_are_truncated() -> None:
-    attrs = convert_span_to_otel_attributes(nspan(attributes={"note": "x" * (MAX_ATTR_VALUE_LENGTH + 50)}))
+    attrs = convert_span_to_otel_attributes(
+        nspan(attributes={"note": "x" * (MAX_ATTR_VALUE_LENGTH + 50)})
+    )
 
     assert len(str(attrs["note"])) == MAX_ATTR_VALUE_LENGTH
     assert str(attrs["note"]).endswith("...[truncated]")
@@ -803,9 +811,9 @@ def test_conversion_does_not_mutate_the_span() -> None:
 def test_conversion_is_idempotent() -> None:
     span = nspan(attributes={"model": "m"}, input_payload="p", output_payload="c")
 
-    assert convert_span_to_otel_attributes(span, config=CONTENT_ON) == convert_span_to_otel_attributes(
+    assert convert_span_to_otel_attributes(
         span, config=CONTENT_ON
-    )
+    ) == convert_span_to_otel_attributes(span, config=CONTENT_ON)
 
 
 # ===========================================================================
@@ -824,7 +832,15 @@ def test_conversion_is_idempotent() -> None:
         ({OTEL_STATUS_CODE: "ok"}, StatusCode.OK, None),
         ({OTEL_STATUS_CODE: "Ok", OTEL_STATUS_DESCRIPTION: "ignored"}, StatusCode.OK, None),
     ],
-    ids=["error", "error-upper", "error-no-desc", "error-empty-desc", "error-bad-desc", "ok", "ok-desc"],
+    ids=[
+        "error",
+        "error-upper",
+        "error-no-desc",
+        "error-empty-desc",
+        "error-bad-desc",
+        "ok",
+        "ok-desc",
+    ],
 )
 def test_status_is_rebuilt_from_the_captured_otel_attributes(
     attrs: dict[str, str | int], code: StatusCode, description: str | None
@@ -838,10 +854,18 @@ def test_status_is_rebuilt_from_the_captured_otel_attributes(
 
 @pytest.mark.parametrize(
     "attrs",
-    [{}, {OTEL_STATUS_CODE: "unset"}, {OTEL_STATUS_CODE: "bogus"}, {OTEL_STATUS_CODE: 3}, {OTEL_STATUS_CODE: True}],
+    [
+        {},
+        {OTEL_STATUS_CODE: "unset"},
+        {OTEL_STATUS_CODE: "bogus"},
+        {OTEL_STATUS_CODE: 3},
+        {OTEL_STATUS_CODE: True},
+    ],
     ids=["absent", "unset", "unknown", "int", "bool"],
 )
-def test_no_status_is_set_for_unset_unknown_or_malformed_codes(attrs: dict[str, str | int | bool]) -> None:
+def test_no_status_is_set_for_unset_unknown_or_malformed_codes(
+    attrs: dict[str, str | int | bool],
+) -> None:
     assert _status_from_attributes(attrs) is None
 
 
@@ -948,7 +972,9 @@ def test_export_span_rebuilds_error_status_from_attributes(otel: OTel) -> None:
 def test_export_span_rebuilds_ok_status_and_leaves_others_unset(otel: OTel) -> None:
     export_span_to_otel(nspan(name="ok", attributes={OTEL_STATUS_CODE: "ok"}), tracer=otel.tracer)
     export_span_to_otel(nspan(name="plain"), tracer=otel.tracer)
-    export_span_to_otel(nspan(name="unset", attributes={OTEL_STATUS_CODE: "unset"}), tracer=otel.tracer)
+    export_span_to_otel(
+        nspan(name="unset", attributes={OTEL_STATUS_CODE: "unset"}), tracer=otel.tracer
+    )
 
     spans = otel.by_name()
     assert spans["ok"].status.status_code is StatusCode.OK
@@ -1001,7 +1027,9 @@ def test_export_span_propagates_a_tracer_failure_to_its_caller() -> None:
 
 def test_export_span_honors_the_content_setting(otel: OTel) -> None:
     export_span_to_otel(nspan(name="a", input_payload="SECRET"), tracer=otel.tracer)
-    export_span_to_otel(nspan(name="b", input_payload="SECRET"), tracer=otel.tracer, config=CONTENT_ON)
+    export_span_to_otel(
+        nspan(name="b", input_payload="SECRET"), tracer=otel.tracer, config=CONTENT_ON
+    )
 
     spans = otel.by_name()
     assert GEN_AI_PROMPT not in (spans["a"].attributes or {})
@@ -1086,7 +1114,11 @@ def test_topological_sort_puts_parents_before_children() -> None:
     child = nspan(name="child", parent=root.span_id)
     grandchild = nspan(name="grandchild", parent=child.span_id)
 
-    assert names(_topological_sort_spans([grandchild, root, child])) == ["root", "child", "grandchild"]
+    assert names(_topological_sort_spans([grandchild, root, child])) == [
+        "root",
+        "child",
+        "grandchild",
+    ]
 
 
 def test_topological_sort_of_nothing_is_nothing() -> None:
@@ -1379,7 +1411,9 @@ def test_a_cyclic_trace_is_exported_without_losing_spans(otel: OTel) -> None:
     a_id, b_id = next_id(), next_id()
 
     exported = export_trace_to_otel(
-        ntrace(nspan(name="a", span_id=a_id, parent=b_id), nspan(name="b", span_id=b_id, parent=a_id)),
+        ntrace(
+            nspan(name="a", span_id=a_id, parent=b_id), nspan(name="b", span_id=b_id, parent=a_id)
+        ),
         tracer=otel.tracer,
     )
 
@@ -1446,7 +1480,10 @@ def test_random_forests_always_export_in_one_trace_with_correct_links(otel: OTel
             out = exported[str(span.span_id)]
             if str(span.parent_span_id) in exported:
                 assert out.parent is not None
-                assert out.parent.span_id == span_context_of(exported[str(span.parent_span_id)]).span_id
+                assert (
+                    out.parent.span_id
+                    == span_context_of(exported[str(span.parent_span_id)]).span_id
+                )
             else:
                 assert out.parent is not None and out.parent.is_remote is True
 
