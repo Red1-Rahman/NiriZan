@@ -1677,7 +1677,7 @@ def test_assembly_session_id_uses_the_first_valid_session_by_start_time(
     first, second = uuid4(), uuid4()
 
     trace = assemble_ok(
-        make_inert(trust_stashed_ids=True),
+        make_inert(trust_stashed_ids=True, trusted_session_ids=frozenset({first, second})),
         make_span(2, start=T0 + 20, attributes={NIRIZAN_SESSION_ID: str(second)}),
         make_span(1, start=T0 + 10, attributes={NIRIZAN_SESSION_ID: str(first)}),
     )
@@ -1698,11 +1698,27 @@ def test_assembly_recovers_a_stashed_session_id_when_trusted(
 ) -> None:
     session_id = uuid4()
     trace = assemble_ok(
-        make_inert(trust_stashed_ids=True),
+        make_inert(trust_stashed_ids=True, trusted_session_ids=frozenset({session_id})),
         make_span(1, attributes={NIRIZAN_SESSION_ID: str(session_id)}),
     )
 
     assert trace.session_id == session_id
+
+
+def test_assembly_rejects_an_untrusted_stashed_session_id(
+    make_inert: Callable[..., NiriZanSpanProcessor],
+) -> None:
+    session_id = uuid4()
+    trusted_session_id = uuid4()
+    trace = assemble_ok(
+        make_inert(
+            trust_stashed_ids=True,
+            trusted_session_ids=frozenset({trusted_session_id}),
+        ),
+        make_span(1, attributes={NIRIZAN_SESSION_ID: str(session_id)}),
+    )
+
+    assert trace.session_id is None
 
 
 def test_assembly_ignores_an_invalid_session_id(inert: NiriZanSpanProcessor) -> None:
@@ -2627,8 +2643,8 @@ def test_other_scopes_are_never_skipped(
 def test_end_to_end_delivery_of_a_two_span_trace(
     make_processor: Callable[..., NiriZanSpanProcessor], sink: RecordingSink
 ) -> None:
-    processor = make_processor(trust_stashed_ids=True)
     session = uuid4()
+    processor = make_processor(trust_stashed_ids=True, trusted_session_ids=frozenset({session}))
     stashed = uuid4()
     root = make_span(
         0x1111,

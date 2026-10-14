@@ -158,6 +158,7 @@ class ProcessorConfig(BaseModel):
     unrecognized_span_policy: Literal["drop", "generation"] = "drop"
     ignore_own_scope: bool = True
     trust_stashed_ids: bool = False
+    trusted_session_ids: frozenset[UUID] = frozenset()
     max_payload_chars: int = _DEFAULT_MAX_PAYLOAD_CHARS
     max_buffered_spans: int = _DEFAULT_MAX_BUFFERED_SPANS
     capture_content: bool = False
@@ -209,6 +210,13 @@ class ProcessorConfig(BaseModel):
     def _max_buffered_spans_positive(cls, value: int) -> int:
         if value < 1:
             raise ValueError("max_buffered_spans must be at least 1.")
+        return value
+
+    @field_validator("trusted_session_ids", mode="before")
+    @classmethod
+    def _trusted_session_ids_set(cls, value: object) -> object:
+        if isinstance(value, (set, list, tuple)):
+            return frozenset(value)
         return value
 
     @field_validator("orphan_policy", mode="before")
@@ -755,6 +763,7 @@ class NiriZanSpanProcessor(SpanProcessor):
         unrecognized_span_policy: Literal["drop", "generation"] = "drop",
         ignore_own_scope: bool = True,
         trust_stashed_ids: bool = False,
+        trusted_session_ids: frozenset[UUID] | None = None,
         max_payload_chars: int = _DEFAULT_MAX_PAYLOAD_CHARS,
         max_buffered_spans: int = _DEFAULT_MAX_BUFFERED_SPANS,
         capture_content: bool = False,
@@ -770,6 +779,7 @@ class NiriZanSpanProcessor(SpanProcessor):
             unrecognized_span_policy=unrecognized_span_policy,
             ignore_own_scope=ignore_own_scope,
             trust_stashed_ids=trust_stashed_ids,
+            trusted_session_ids=frozenset(trusted_session_ids or ()),
             max_payload_chars=max_payload_chars,
             max_buffered_spans=max_buffered_spans,
             capture_content=capture_content,
@@ -1395,6 +1405,7 @@ class NiriZanSpanProcessor(SpanProcessor):
         session_id = self._find_session_id(
             {oid: buf.spans[oid] for oid in kept_ids},
             trust_stashed_ids=self._config.trust_stashed_ids,
+            trusted_session_ids=self._config.trusted_session_ids,
         )
 
         nirizan_spans: list[Span] = []
@@ -1503,9 +1514,12 @@ class NiriZanSpanProcessor(SpanProcessor):
 
     @staticmethod
     def _find_session_id(
-        spans: Mapping[int, ReadableSpan], *, trust_stashed_ids: bool
+        spans: Mapping[int, ReadableSpan],
+        *,
+        trust_stashed_ids: bool,
+        trusted_session_ids: frozenset[UUID],
     ) -> UUID | None:
-        if not trust_stashed_ids:
+        if not trust_stashed_ids or not trusted_session_ids:
             return None
         for span in spans.values():
             attrs = getattr(span, "attributes", None) or {}
@@ -1515,7 +1529,7 @@ class NiriZanSpanProcessor(SpanProcessor):
                     parsed = UUID(raw)
                 except ValueError:
                     continue
-                if parsed.int != 0:
+                if parsed.int != 0 and parsed in trusted_session_ids:
                     return parsed
         return None
 

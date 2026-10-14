@@ -153,7 +153,10 @@ Its defensive defaults are `trust_stashed_ids=False`,
 `capture_content=False`, `orphan_policy="emit"`, and
 `unrecognized_span_policy="drop"`. Stashed NiriZan IDs are used only when
 `trust_stashed_ids=True`; otherwise IDs are derived from OTel IDs and
-provenance is recorded as `derived`.
+provenance is recorded as `derived`. Stashed session IDs require both
+`trust_stashed_ids=True` and membership in the explicitly configured
+`trusted_session_ids` allowlist; a session ID supplied by an otherwise
+untrusted OTel producer is ignored.
 
 `LoopTraceSink` is the supported bridge from this synchronous sink to the
 async `TraceCollector`. It schedules `enqueue_trace` on the collector's event
