@@ -1207,15 +1207,15 @@ class NiriZanSpanProcessor(SpanProcessor):
         Normally a trace is flushed on idle only when no spans are open, and only
         when the open-span count can be trusted. A dropped start marker makes the
         count too low (it could reach zero early), so such a trace waits for its
-        maximum age. A dropped ended span makes the count too high (it can never
-        reach zero), so such a trace is flushed after the idle timeout alone.
+        maximum age. A dropped end marker means the count may be too high, but
+        other spans may still be open, so that trace also waits for maximum age.
         """
         if now - buf.last_seen < self._idle_timeout:
             return False
         if buf.has_untracked_start:
             return False
         if buf.has_untracked_end:
-            return True
+            return False
         return buf.open_spans == 0
 
     @staticmethod
