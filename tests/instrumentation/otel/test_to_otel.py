@@ -101,7 +101,12 @@ from nirizan.instrumentation.otel.to_otel import (  # noqa: E402
     export_span_to_otel,
     export_trace_to_otel,
 )
-from nirizan.instrumentation.spans import Span, SpanKind, Trace  # noqa: E402
+from nirizan.instrumentation.spans import (  # noqa: E402
+    SYNTHETIC_PARENT_ATTRIBUTE,
+    Span,
+    SpanKind,
+    Trace,
+)
 from nirizan.instrumentation.tracer import Tracer as NiriZanTracer  # noqa: E402
 
 _MODULE_LOGGER = "nirizan.instrumentation.otel.to_otel"
@@ -1168,7 +1173,11 @@ def test_a_trace_with_several_roots_stays_in_one_otel_trace(otel: OTel) -> None:
     """Regression: roots and orphans used to each start their own random OTel trace."""
     root_a = nspan(name="root-a")
     root_b = nspan(name="root-b")
-    orphan = nspan(name="orphan", parent=next_id())
+    orphan = nspan(
+        name="orphan",
+        parent=next_id(),
+        attributes={SYNTHETIC_PARENT_ATTRIBUTE: True},
+    )
     child = nspan(name="child", parent=root_a.span_id)
 
     export_trace_to_otel(ntrace(root_a, root_b, orphan, child), tracer=otel.tracer)
@@ -1206,7 +1215,11 @@ def test_orphans_are_anchored_to_the_trace_and_reported(
     otel: OTel, caplog: pytest.LogCaptureFixture
 ) -> None:
     missing = next_id()
-    orphan = nspan(name="orphan", parent=missing)
+    orphan = nspan(
+        name="orphan",
+        parent=missing,
+        attributes={SYNTHETIC_PARENT_ATTRIBUTE: True},
+    )
 
     with caplog.at_level(logging.WARNING, logger=_MODULE_LOGGER):
         export_trace_to_otel(ntrace(orphan), tracer=otel.tracer)
@@ -1417,7 +1430,12 @@ def test_random_forests_always_export_in_one_trace_with_correct_links(otel: OTel
                 parent = next_id()  # an orphan
             else:
                 parent = None
-            spans.append(nspan(name=f"s{index}", parent=parent))
+            attributes = (
+                {SYNTHETIC_PARENT_ATTRIBUTE: True}
+                if parent is not None and parent not in {span.span_id for span in spans}
+                else None
+            )
+            spans.append(nspan(name=f"s{index}", parent=parent, attributes=attributes))
 
         export_trace_to_otel(ntrace(*spans), tracer=otel.tracer)
 

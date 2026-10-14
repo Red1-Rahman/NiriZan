@@ -619,13 +619,16 @@ def _ctx_of(span: ReadableSpan) -> SpanContext:
 def test_extract_span_id_recovers_a_stashed_id_as_roundtrip() -> None:
     span = make_span(0xAB, attributes={NIRIZAN_SPAN_ID: str(_SAMPLE_UUID)})
 
-    assert _extract_nirizan_span_id(span, _ctx_of(span)) == (_SAMPLE_UUID, ID_SOURCE_ROUNDTRIP)
+    assert _extract_nirizan_span_id(span, _ctx_of(span), True) == (
+        _SAMPLE_UUID,
+        ID_SOURCE_ROUNDTRIP,
+    )
 
 
 def test_extract_span_id_derives_an_id_when_nothing_is_stashed() -> None:
     span = make_span(0xAB)
 
-    assert _extract_nirizan_span_id(span, _ctx_of(span)) == (
+    assert _extract_nirizan_span_id(span, _ctx_of(span), False) == (
         otel_span_id_to_uuid(0xAB),
         ID_SOURCE_DERIVED,
     )
@@ -639,7 +642,7 @@ def test_extract_span_id_derives_an_id_when_nothing_is_stashed() -> None:
 def test_extract_span_id_falls_back_to_derivation_for_unusable_stashes(stashed: object) -> None:
     span = make_span(0xAB, attributes={NIRIZAN_SPAN_ID: stashed})
 
-    assert _extract_nirizan_span_id(span, _ctx_of(span)) == (
+    assert _extract_nirizan_span_id(span, _ctx_of(span), True) == (
         otel_span_id_to_uuid(0xAB),
         ID_SOURCE_DERIVED,
     )
@@ -652,7 +655,10 @@ def test_extract_span_id_preserves_a_stashed_derived_provenance() -> None:
         attributes={NIRIZAN_SPAN_ID: str(_SAMPLE_UUID), NIRIZAN_SPAN_ID_SOURCE: ID_SOURCE_DERIVED},
     )
 
-    assert _extract_nirizan_span_id(span, _ctx_of(span)) == (_SAMPLE_UUID, ID_SOURCE_DERIVED)
+    assert _extract_nirizan_span_id(span, _ctx_of(span), True) == (
+        _SAMPLE_UUID,
+        ID_SOURCE_DERIVED,
+    )
 
 
 @pytest.mark.parametrize("prior", [ID_SOURCE_ROUNDTRIP, "bogus", None, 7])
@@ -662,13 +668,13 @@ def test_extract_span_id_treats_any_other_stashed_provenance_as_roundtrip(prior:
         attributes={NIRIZAN_SPAN_ID: str(_SAMPLE_UUID), NIRIZAN_SPAN_ID_SOURCE: prior},
     )
 
-    assert _extract_nirizan_span_id(span, _ctx_of(span))[1] == ID_SOURCE_ROUNDTRIP
+    assert _extract_nirizan_span_id(span, _ctx_of(span), True)[1] == ID_SOURCE_ROUNDTRIP
 
 
 def test_extract_trace_id_derives_from_the_otel_trace_id_by_default() -> None:
     spans = {1: make_span(1)}
 
-    assert _extract_nirizan_trace_id(spans, TRACE_ID) == (
+    assert _extract_nirizan_trace_id(spans, TRACE_ID, False) == (
         otel_trace_id_to_uuid(TRACE_ID),
         ID_SOURCE_DERIVED,
     )
@@ -680,7 +686,7 @@ def test_extract_trace_id_recovers_a_stashed_id_even_if_only_one_span_has_it() -
         2: make_span(2, attributes={NIRIZAN_TRACE_ID: str(_SAMPLE_UUID)}),
     }
 
-    assert _extract_nirizan_trace_id(spans, TRACE_ID) == (_SAMPLE_UUID, ID_SOURCE_ROUNDTRIP)
+    assert _extract_nirizan_trace_id(spans, TRACE_ID, True) == (_SAMPLE_UUID, ID_SOURCE_ROUNDTRIP)
 
 
 def test_extract_trace_id_skips_unusable_stashes_and_uses_a_later_valid_one() -> None:
@@ -689,15 +695,15 @@ def test_extract_trace_id_skips_unusable_stashes_and_uses_a_later_valid_one() ->
         2: make_span(2, attributes={NIRIZAN_TRACE_ID: str(_SAMPLE_UUID)}),
     }
 
-    assert _extract_nirizan_trace_id(spans, TRACE_ID)[0] == _SAMPLE_UUID
+    assert _extract_nirizan_trace_id(spans, TRACE_ID, True)[0] == _SAMPLE_UUID
 
 
 def test_extract_trace_id_resolves_conflicts_by_start_time_not_arrival_order() -> None:
     first = make_span(1, start=T0, attributes={NIRIZAN_TRACE_ID: str(UUID(int=1))})
     second = make_span(2, start=T0 + 10, attributes={NIRIZAN_TRACE_ID: str(UUID(int=2))})
 
-    in_order = _extract_nirizan_trace_id({1: first, 2: second}, TRACE_ID)
-    reversed_ = _extract_nirizan_trace_id({2: second, 1: first}, TRACE_ID)
+    in_order = _extract_nirizan_trace_id({1: first, 2: second}, TRACE_ID, True)
+    reversed_ = _extract_nirizan_trace_id({2: second, 1: first}, TRACE_ID, True)
 
     assert in_order == reversed_
     assert in_order[0] == UUID(int=1)
@@ -714,7 +720,7 @@ def test_extract_trace_id_preserves_a_stashed_derived_provenance() -> None:
         )
     }
 
-    assert _extract_nirizan_trace_id(spans, TRACE_ID) == (_SAMPLE_UUID, ID_SOURCE_DERIVED)
+    assert _extract_nirizan_trace_id(spans, TRACE_ID, True) == (_SAMPLE_UUID, ID_SOURCE_DERIVED)
 
 
 @pytest.mark.parametrize(
@@ -820,6 +826,7 @@ def _convert(otel_attrs: dict[str, Any], **overrides: Any) -> dict[str, Any]:
         "trace_state": None,
         "status_code": None,
         "status_description": None,
+        "capture_content": True,
     }
     kwargs.update(overrides)
     return dict(_convert_attributes(otel_attrs, **kwargs))
@@ -889,10 +896,11 @@ def test_convert_attributes_leaves_short_strings_unchanged() -> None:
 
 
 def test_assembly_keeps_full_payload_when_attribute_copy_is_truncated(
-    inert: NiriZanSpanProcessor,
+    make_inert: Callable[..., NiriZanSpanProcessor],
 ) -> None:
     long_prompt = "p" * (MAX_ATTR_VALUE_LENGTH * 2)
 
+    inert = make_inert(capture_content=True)
     span = assemble_ok(inert, make_span(1, attributes={GEN_AI_PROMPT: long_prompt})).spans[0]
 
     assert span.input_payload == long_prompt
@@ -1446,10 +1454,12 @@ def test_assembly_orders_spans_by_start_time_then_span_id(inert: NiriZanSpanProc
     assert span_names(trace) == ["b", "c", "a"]
 
 
-def test_assembly_links_parents_using_each_spans_nirizan_id(inert: NiriZanSpanProcessor) -> None:
+def test_assembly_links_parents_using_each_spans_nirizan_id(
+    make_inert: Callable[..., NiriZanSpanProcessor],
+) -> None:
     stashed = UUID("87654321-4321-8765-4321-876543218765")
     trace = assemble_ok(
-        inert,
+        make_inert(trust_stashed_ids=True),
         make_span(1, name="root", attributes={NIRIZAN_SPAN_ID: str(stashed)}),
         make_span(2, name="child", parent=1),
     )
@@ -1460,9 +1470,11 @@ def test_assembly_links_parents_using_each_spans_nirizan_id(inert: NiriZanSpanPr
     assert spans["child"].parent_span_id == stashed
 
 
-def test_assembly_reports_provenance_for_spans_and_the_trace(inert: NiriZanSpanProcessor) -> None:
+def test_assembly_reports_provenance_for_spans_and_the_trace(
+    make_inert: Callable[..., NiriZanSpanProcessor],
+) -> None:
     trace = assemble_ok(
-        inert,
+        make_inert(trust_stashed_ids=True),
         make_span(1, name="stashed", attributes={NIRIZAN_SPAN_ID: str(uuid4())}),
         make_span(2, name="plain"),
     )
@@ -1473,10 +1485,14 @@ def test_assembly_reports_provenance_for_spans_and_the_trace(inert: NiriZanSpanP
     assert all(s.attributes[NIRIZAN_TRACE_ID_SOURCE] == ID_SOURCE_DERIVED for s in trace.spans)
 
 
-def test_assembly_recovers_a_stashed_trace_id(inert: NiriZanSpanProcessor) -> None:
+def test_assembly_recovers_a_stashed_trace_id(
+    make_inert: Callable[..., NiriZanSpanProcessor],
+) -> None:
     stashed = uuid4()
 
-    trace = assemble_ok(inert, make_span(1, attributes={NIRIZAN_TRACE_ID: str(stashed)}))
+    trace = assemble_ok(
+        make_inert(trust_stashed_ids=True), make_span(1, attributes={NIRIZAN_TRACE_ID: str(stashed)})
+    )
 
     assert trace.trace_id == stashed
     assert trace.spans[0].trace_id == stashed
@@ -1484,8 +1500,9 @@ def test_assembly_recovers_a_stashed_trace_id(inert: NiriZanSpanProcessor) -> No
 
 
 def test_assembly_records_a_conflict_between_stashed_trace_ids(
-    inert: NiriZanSpanProcessor, caplog: pytest.LogCaptureFixture
+    make_inert: Callable[..., NiriZanSpanProcessor], caplog: pytest.LogCaptureFixture
 ) -> None:
+    inert = make_inert(trust_stashed_ids=True)
     with caplog.at_level(logging.WARNING, logger=_MODULE_LOGGER):
         trace = assemble_ok(
             inert,
@@ -1499,10 +1516,11 @@ def test_assembly_records_a_conflict_between_stashed_trace_ids(
 
 
 def test_assembly_gives_a_duplicate_stashed_span_id_a_derived_replacement(
-    inert: NiriZanSpanProcessor,
+    make_inert: Callable[..., NiriZanSpanProcessor],
 ) -> None:
     """``Span.span_id`` is unique per span: a second claimant is re-derived."""
     shared = str(uuid4())
+    inert = make_inert(trust_stashed_ids=True)
 
     trace = assemble_ok(
         inert,
@@ -1519,14 +1537,15 @@ def test_assembly_gives_a_duplicate_stashed_span_id_a_derived_replacement(
 
 
 def test_assembly_lets_the_earliest_started_span_keep_a_contested_id_whatever_the_arrival_order(
-    inert: NiriZanSpanProcessor,
+    make_inert: Callable[..., NiriZanSpanProcessor],
 ) -> None:
     shared = str(uuid4())
     earlier = make_span(1, name="earlier", attributes={NIRIZAN_SPAN_ID: shared})
     later = make_span(2, name="later", attributes={NIRIZAN_SPAN_ID: shared})
 
+    inert = make_inert(trust_stashed_ids=True)
     arrived_late_first = assemble_ok(inert, later, earlier)
-    arrived_early_first = assemble_ok(inert, earlier, later)
+    arrived_early_first = assemble_ok(make_inert(trust_stashed_ids=True), earlier, later)
 
     for trace in (arrived_late_first, arrived_early_first):
         spans = by_name(trace)
@@ -1553,12 +1572,13 @@ def test_assembly_keeps_children_attached_to_the_right_duplicate(
 
 
 def test_assembly_drops_a_span_whose_replacement_id_also_collides(
-    inert: NiriZanSpanProcessor,
+    make_inert: Callable[..., NiriZanSpanProcessor],
 ) -> None:
     """Astronomically unlikely, but it must never produce duplicate ids."""
     squatter = make_span(1, name="squatter", attributes={NIRIZAN_SPAN_ID: str(otel_span_id_to_uuid(2))})
     victim = make_span(2, name="victim")
 
+    inert = make_inert(trust_stashed_ids=True)
     trace = assemble_ok(inert, squatter, victim)
 
     assert span_names(trace) == ["squatter"]
@@ -1746,7 +1766,7 @@ def test_assembly_encodes_sequence_attributes(inert: NiriZanSpanProcessor) -> No
 
 @pytest.mark.parametrize("kind", list(SpanKind))
 def test_assembly_extracts_payloads_for_every_kind(
-    inert: NiriZanSpanProcessor, kind: SpanKind
+    make_inert: Callable[..., NiriZanSpanProcessor], kind: SpanKind
 ) -> None:
     in_key, out_key = _PAYLOAD_KEYS[kind]
     span = make_span(
@@ -1754,7 +1774,7 @@ def test_assembly_extracts_payloads_for_every_kind(
         attributes={NIRIZAN_SPAN_KIND: kind.value, in_key: "the input", out_key: "the output"},
     )
 
-    result = assemble_ok(inert, span).spans[0]
+    result = assemble_ok(make_inert(capture_content=True), span).spans[0]
 
     assert (result.kind, result.input_payload, result.output_payload) == (
         kind,
@@ -1763,14 +1783,16 @@ def test_assembly_extracts_payloads_for_every_kind(
     )
 
 
-def test_assembly_preserves_non_ascii_text(inert: NiriZanSpanProcessor) -> None:
+def test_assembly_preserves_non_ascii_text(
+    make_inert: Callable[..., NiriZanSpanProcessor],
+) -> None:
     span = make_span(
         1,
         name="বাংলা পরীক্ষা",
         attributes={GEN_AI_PROMPT: "আপনি কেমন আছেন?", "words": ["বাংলা", "العربية"]},
     )
 
-    result = assemble_ok(inert, span).spans[0]
+    result = assemble_ok(make_inert(capture_content=True), span).spans[0]
 
     assert result.name == "বাংলা পরীক্ষা"
     assert result.input_payload == "আপনি কেমন আছেন?"
@@ -2537,7 +2559,7 @@ def test_other_scopes_are_never_skipped(
 def test_end_to_end_delivery_of_a_two_span_trace(
     make_processor: Callable[..., NiriZanSpanProcessor], sink: RecordingSink
 ) -> None:
-    processor = make_processor()
+    processor = make_processor(trust_stashed_ids=True)
     session = uuid4()
     stashed = uuid4()
     root = make_span(
@@ -3057,7 +3079,7 @@ def test_live_processors_are_registered_for_fork_handling_without_keeping_them_a
 def provider(
     make_processor: Callable[..., NiriZanSpanProcessor],
 ) -> Iterator[tuple[TracerProvider, NiriZanSpanProcessor]]:
-    processor = make_processor()
+    processor = make_processor(capture_content=True)
     tracer_provider = TracerProvider(
         resource=Resource({"service.name": "sdk-service"}), shutdown_on_exit=False
     )
