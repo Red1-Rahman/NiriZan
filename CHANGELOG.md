@@ -10,6 +10,46 @@ While NiriZan is on a `0.x` version, breaking changes are reflected in a
 jump to `1.0.0` is reserved for the point the public contract surface is
 considered stable.
 
+## [Unreleased]
+
+### Added
+
+- **Optional OpenTelemetry integration** through the `otel` extra, adding bidirectional interoperability between NiriZan traces and OpenTelemetry spans without requiring OpenTelemetry dependencies in core installations.
+  - `NiriZanToOTelExporter` and `export_trace_to_otel` export validated NiriZan traces to an OpenTelemetry tracer, with parent-first span ordering, trace-context handling, span-kind mapping, status metadata, and identity provenance.
+  - `NiriZanSpanProcessor` converts completed OpenTelemetry spans into validated NiriZan traces using per-trace buffering, parent resolution, and configurable ingestion policies.
+  - `init_telemetry()` provides configurable OpenTelemetry initialization for tracing, metrics, and logging.
+- **OpenTelemetry semantic-convention helpers** for GenAI operations, token usage, retrieval, tool use, planning, status metadata, and sequence-valued attributes. Canonical token-usage attributes are emitted alongside legacy aliases for compatibility.
+- **Thread-safe asynchronous trace delivery** through `ThreadSafeTraceSink` and `LoopTraceSink`, bridging OpenTelemetry's synchronous span-processing callbacks to NiriZan's asynchronous trace collector.
+- **Expanded OpenTelemetry regression tests** covering identifier mapping, export and ingestion, semantic conventions, trace assembly, parent-link integrity, privacy defaults, failure handling, and operation without the optional dependency.
+
+### Changed
+
+- **Content capture is disabled by default** in both OpenTelemetry export and ingestion. Prompt, completion, retrieval, tool, and planning content is withheld unless explicitly enabled.
+- **Stashed NiriZan identifiers are no longer trusted by default.** Set `trust_stashed_ids=True` to recover NiriZan IDs from OpenTelemetry attributes; otherwise, identifiers are derived from OpenTelemetry IDs.
+- **Trace and span integrity is enforced.** Missing parent links must be explicitly marked as synthetic. During ingestion, genuinely missing local parents can be represented by synthetic-parent metadata under `orphan_policy="emit"`; children of dropped spans are re-attached to surviving in-trace ancestors without being marked synthetic solely because of that re-attachment.
+- **Trace persistence now replaces the stored span set for a trace.** Saving an existing trace updates mutable span fields and removes spans absent from the incoming trace, including when the incoming trace contains no spans. Cross-trace span-ID collisions are rejected instead of overwriting another trace's data.
+- **OpenTelemetry ingestion is more defensive and resource-bounded**, with configurable queue, buffer, and payload limits; improved eviction and parent resolution; safer attribute serialization; and string-attribute truncation.
+- **OpenTelemetry export and ingestion handle identity and context more consistently**, including W3C `tracestate`, explicit parent contexts, remote parents, GenAI span-kind inference, and identity provenance.
+- **Dependency-graph generation scans nested Python packages recursively**, keeping the generated module graph aligned with the instrumentation package structure.
+- The CI test installation now includes the optional OpenTelemetry dependencies so the integration is exercised in the test suite.
+
+### Fixed
+
+- Prevented untrusted stashed session IDs from being recovered when `trust_stashed_ids=False`.
+- Prevented content-bearing attributes and extracted payloads from being captured during ingestion when `capture_content=False`.
+- Corrected parent resolution for missing, remote, dropped, duplicate-ID, and late-arriving spans.
+- Prevented malformed sequence attributes and unserializable values from unnecessarily discarding convertible spans.
+- Prevented non-finite floating-point values from being emitted as non-standard JSON values.
+- Preserved zero-valued token counts and `top_k` values during attribute conversion.
+- Improved timestamp conversion precision and sequence-attribute encoding performance.
+- Corrected `tracestate` serialization and improved handling of processor reinitialization and consumer-thread lifecycle.
+- Prevented failed trace replacements and cross-trace span-ID collisions from leaving partially updated storage state.
+
+### Documentation
+
+- Documented the OpenTelemetry adapter architecture, optional dependencies, configuration defaults, identity trust policy, content-capture controls, asynchronous delivery path, and parent-link integrity contracts.
+- Updated the generated dependency graph to include nested instrumentation modules.
+
 ## [0.4.0] - 2026-09-20
 
 This release adds a second, multivariate track to regression detection. It catches changes in how metrics vary together (variance and correlation shifts) that the per-metric comparator cannot see. It contains two breaking changes and a license change; see **Changed**.
