@@ -132,3 +132,83 @@ async def test_repeated_identical_saves_are_deterministic_and_valid(
     assert first == second == trace
     assert second is not None
     assert {stored.trace_id for stored in second.spans} == {trace_id}
+
+
+@pytest.mark.asyncio
+async def test_get_loads_legacy_trace_with_unmarked_dangling_parent(
+    repository: SQLiteTraceRepository,
+) -> None:
+    trace_id = uuid4()
+    span_id = uuid4()
+    parent_id = uuid4()
+    repository._conn.execute(
+        """
+        INSERT INTO traces (trace_id, application_name, created_at)
+        VALUES (?, ?, ?)
+        """,
+        (str(trace_id), "storage-tests", START.isoformat()),
+    )
+    repository._conn.execute(
+        """
+        INSERT INTO spans (
+            span_id, trace_id, parent_span_id, kind, name,
+            started_at, ended_at, attributes_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            str(span_id),
+            str(trace_id),
+            str(parent_id),
+            SpanKind.GENERATION.value,
+            "legacy",
+            START.isoformat(),
+            (START + timedelta(seconds=1)).isoformat(),
+            "{}",
+        ),
+    )
+    repository._conn.commit()
+
+    stored = await repository.get(trace_id)
+
+    assert stored is not None
+    assert stored.spans[0].parent_span_id == parent_id
+
+
+@pytest.mark.asyncio
+async def test_list_loads_legacy_trace_with_unmarked_dangling_parent(
+    repository: SQLiteTraceRepository,
+) -> None:
+    trace_id = uuid4()
+    span_id = uuid4()
+    parent_id = uuid4()
+    repository._conn.execute(
+        """
+        INSERT INTO traces (trace_id, application_name, created_at)
+        VALUES (?, ?, ?)
+        """,
+        (str(trace_id), "storage-tests", START.isoformat()),
+    )
+    repository._conn.execute(
+        """
+        INSERT INTO spans (
+            span_id, trace_id, parent_span_id, kind, name,
+            started_at, ended_at, attributes_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            str(span_id),
+            str(trace_id),
+            str(parent_id),
+            SpanKind.GENERATION.value,
+            "legacy",
+            START.isoformat(),
+            (START + timedelta(seconds=1)).isoformat(),
+            "{}",
+        ),
+    )
+    repository._conn.commit()
+
+    stored = await repository.list_by_application("storage-tests")
+
+    assert len(stored) == 1
+    assert stored[0].spans[0].parent_span_id == parent_id

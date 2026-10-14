@@ -226,7 +226,7 @@ class SQLiteTraceRepository(BaseTraceRepository):
             )
 
         record = await asyncio.to_thread(_query)
-        return record.to_trace() if record is not None else None
+        return record.to_trace(validate=False) if record is not None else None
 
     async def list_by_application(
         self,
@@ -278,7 +278,7 @@ class SQLiteTraceRepository(BaseTraceRepository):
             return results
 
         records = await asyncio.to_thread(_query_list)
-        return [r.to_trace() for r in records]
+        return [r.to_trace(validate=False) for r in records]
 
     async def purge_older_than(self, created_before_iso: str) -> int:
         def _delete() -> int:

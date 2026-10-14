@@ -78,17 +78,25 @@ class TraceRecord(BaseModel):
             session_id=str(trace.session_id) if trace.session_id else None,
         )
 
-    def to_trace(self) -> Trace:
-        """Inverse of from_trace."""
-        return Trace(
-            trace_id=UUID(self.trace_id),
-            application_name=self.application_name,
-            created_at=datetime.fromisoformat(self.created_at),
-            spans=[s.to_span() for s in self.spans],
-            code_commit=self.code_commit,
-            data_snapshot_id=self.data_snapshot_id,
-            session_id=UUID(self.session_id) if self.session_id else None,
-        )
+    def to_trace(self, *, validate: bool = True) -> Trace:
+        """Inverse of from_trace.
+
+        Persisted records can predate validators added to ``Trace``. The
+        repository uses ``validate=False`` when reading those records so a
+        legacy row cannot make an otherwise valid query fail.
+        """
+        values = {
+            "trace_id": UUID(self.trace_id),
+            "application_name": self.application_name,
+            "created_at": datetime.fromisoformat(self.created_at),
+            "spans": [s.to_span() for s in self.spans],
+            "code_commit": self.code_commit,
+            "data_snapshot_id": self.data_snapshot_id,
+            "session_id": UUID(self.session_id) if self.session_id else None,
+        }
+        if validate:
+            return Trace(**values)
+        return Trace.model_construct(**values)
 
 
 class Run(BaseModel):
