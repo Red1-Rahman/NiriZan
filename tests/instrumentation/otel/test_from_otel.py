@@ -89,6 +89,7 @@ from nirizan.instrumentation.otel.from_otel import (  # noqa: E402
 )
 from nirizan.instrumentation.otel.semconv import (  # noqa: E402
     GEN_AI_COMPLETION,
+    GEN_AI_OPERATION_NAME,
     GEN_AI_PROMPT,
     ID_SOURCE_DERIVED,
     ID_SOURCE_ROUNDTRIP,
@@ -749,6 +750,10 @@ def test_has_conflicting_trace_ids(stashes: list[str], expected: bool) -> None:
         ({NIRIZAN_SPAN_KIND: "nirizan.span.TOOL_USE"}, SpanKind.TOOL_USE),
         ({GEN_AI_PROMPT: "p"}, SpanKind.GENERATION),
         ({GEN_AI_COMPLETION: "c"}, SpanKind.GENERATION),
+        ({GEN_AI_OPERATION_NAME: "chat"}, SpanKind.GENERATION),
+        ({GEN_AI_OPERATION_NAME: "text_completion"}, SpanKind.GENERATION),
+        ({GEN_AI_OPERATION_NAME: "generate_content"}, SpanKind.GENERATION),
+        ({GEN_AI_OPERATION_NAME: "execute_tool"}, SpanKind.TOOL_USE),
         ({NIRIZAN_RETRIEVAL_QUERY: "q"}, SpanKind.RETRIEVAL),
         ({NIRIZAN_RETRIEVAL_RESULTS: "r"}, SpanKind.RETRIEVAL),
         ({NIRIZAN_TOOL_ARGUMENTS: "{}"}, SpanKind.TOOL_USE),

@@ -40,6 +40,7 @@ from nirizan.instrumentation.otel._id_mapping import (
 from nirizan.instrumentation.otel.semconv import (
     CONTENT_ATTRIBUTE_KEYS,
     GEN_AI_COMPLETION,
+    GEN_AI_OPERATION_NAME,
     GEN_AI_PROMPT,
     ID_SOURCE_DERIVED,
     ID_SOURCE_ROUNDTRIP,
@@ -87,6 +88,9 @@ _START_MARKER: object = object()
 
 _RECENT_FLUSHES_MAX: int = 10_000
 _MAX_SPAN_NAME_LENGTH: int = 200
+GENAI_GENERATION_OPERATIONS: frozenset[str] = frozenset(
+    {"chat", "text_completion", "generate_content"}
+)
 
 _DEFAULT_MAX_QUEUE_SIZE: int = 50_000
 _DEFAULT_MAX_SPANS_PER_TRACE: int = 10_000
@@ -405,6 +409,11 @@ def _infer_span_kind(attrs: Mapping[str, Any]) -> SpanKind | None:
 
     if GEN_AI_PROMPT in attrs or GEN_AI_COMPLETION in attrs:
         return SpanKind.GENERATION
+    operation = attrs.get(GEN_AI_OPERATION_NAME)
+    if isinstance(operation, str) and operation in GENAI_GENERATION_OPERATIONS:
+        return SpanKind.GENERATION
+    if operation == "execute_tool":
+        return SpanKind.TOOL_USE
     if NIRIZAN_RETRIEVAL_QUERY in attrs or NIRIZAN_RETRIEVAL_RESULTS in attrs:
         return SpanKind.RETRIEVAL
     if NIRIZAN_TOOL_ARGUMENTS in attrs or NIRIZAN_TOOL_RESULT in attrs:
