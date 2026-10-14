@@ -34,9 +34,6 @@ flowchart TB
     reporting --> regression
     reporting --> root
     reporting --> trust
-    root --> gate
-    root --> metrics
-    root --> regression
     storage --> instrumentation
     storage --> metrics
     trust --> metrics
