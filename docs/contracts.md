@@ -146,7 +146,7 @@ class BaseTraceRepository(ABC):
 
 * `get` returns `None` for a missing trace, it does not raise. Callers that need "trace must exist" semantics wrap this themselves; the repository stays a dumb, honest store.
 * `list_by_application` returns descending creation-time results with limit/offset pagination.
-* `purge_older_than` removes traces older than the supplied ISO timestamp and returns the number of deleted trace rows.
+* `purge_older_than` requires a timezone-aware ISO-8601 timestamp, normalizes the cutoff to UTC, removes traces older than that instant, and returns the number of deleted trace rows. Legacy offset-bearing rows are compared by instant until they are migrated.
 * No method here accepts or returns anything from `metrics/`, `regression/`, or `reporting/`. This is Phase 1's boundary and it stays that narrow.
 
 ### OpenTelemetry adapter contracts (`instrumentation/otel/`)

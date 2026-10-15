@@ -1,5 +1,5 @@
 import sqlite3
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 from uuid import UUID, uuid4
 
@@ -411,3 +411,90 @@ async def test_list_loads_legacy_trace_with_unmarked_dangling_parent(
 
     assert len(stored) == 1
     assert stored[0].spans[0].parent_span_id == parent_id
+
+
+@pytest.mark.asyncio
+async def test_list_by_application_orders_timestamps_by_instant(
+    repository: SQLiteTraceRepository,
+) -> None:
+    later_trace_id, earlier_trace_id = uuid4(), uuid4()
+    repository._conn.executemany(
+        "INSERT INTO traces (trace_id, application_name, created_at) VALUES (?, ?, ?)",
+        [
+            (str(earlier_trace_id), "storage-tests", "2026-01-01T00:30:00+01:00"),
+            (str(later_trace_id), "storage-tests", "2026-01-01T00:00:00+00:00"),
+        ],
+    )
+    repository._conn.commit()
+
+    stored = await repository.list_by_application("storage-tests")
+
+    assert [trace.trace_id for trace in stored[:2]] == [
+        later_trace_id,
+        earlier_trace_id,
+    ]
+
+
+@pytest.mark.asyncio
+async def test_purge_older_than_compares_timestamps_by_instant(
+    repository: SQLiteTraceRepository,
+) -> None:
+    older_trace_id, newer_trace_id = uuid4(), uuid4()
+    repository._conn.executemany(
+        "INSERT INTO traces (trace_id, application_name, created_at) VALUES (?, ?, ?)",
+        [
+            (str(older_trace_id), "storage-tests", "2026-01-01T00:30:00+01:00"),
+            (str(newer_trace_id), "storage-tests", "2026-01-01T00:00:00+00:00"),
+        ],
+    )
+    repository._conn.commit()
+
+    deleted = await repository.purge_older_than("2025-12-31T23:45:00+00:00")
+
+    assert deleted == 1
+    assert await repository.get(older_trace_id) is None
+    assert await repository.get(newer_trace_id) is not None
+
+
+@pytest.mark.asyncio
+async def test_save_normalizes_timestamps_to_utc(
+    repository: SQLiteTraceRepository,
+) -> None:
+    trace_id = uuid4()
+    started_at = datetime(2026, 1, 1, 0, 30, tzinfo=timezone(timedelta(hours=1)))
+    trace = Trace(
+        trace_id=trace_id,
+        application_name="storage-tests",
+        created_at=started_at,
+        spans=[make_span(trace_id, started_at=started_at)],
+    )
+
+    await repository.save(trace)
+
+    stored_trace_row = repository._conn.execute(
+        "SELECT created_at FROM traces WHERE trace_id = ?", (str(trace_id),)
+    ).fetchone()
+    stored_span_row = repository._conn.execute(
+        "SELECT started_at, ended_at FROM spans WHERE trace_id = ?", (str(trace_id),)
+    ).fetchone()
+    assert stored_trace_row["created_at"] == "2025-12-31T23:30:00+00:00"
+    assert stored_span_row["started_at"] == "2025-12-31T23:30:00+00:00"
+    assert stored_span_row["ended_at"] == "2025-12-31T23:30:01+00:00"
+
+
+@pytest.mark.asyncio
+async def test_save_rejects_naive_timestamps(repository: SQLiteTraceRepository) -> None:
+    with pytest.raises(ValueError, match="timezone-aware"):
+        await repository.save(
+            Trace(
+                trace_id=uuid4(),
+                application_name="storage-tests",
+                created_at=datetime(2026, 1, 1),
+            )
+        )
+
+
+@pytest.mark.asyncio
+async def test_purge_rejects_naive_cutoff(repository: SQLiteTraceRepository) -> None:
+    with pytest.raises(ValueError, match="must include a timezone offset"):
+        await repository.purge_older_than("2026-01-01T00:00:00")

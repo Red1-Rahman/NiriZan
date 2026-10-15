@@ -3,6 +3,7 @@ import asyncio
 import sqlite3
 import threading
 from abc import ABC, abstractmethod
+from datetime import UTC, datetime
 from uuid import UUID
 
 from nirizan.instrumentation.spans import Trace
@@ -12,6 +13,17 @@ from nirizan.storage.models import SpanRecord, TraceRecord
 # (SQLITE_MAX_VARIABLE_NUMBER). Stale-span deletes are batched well under that
 # cap, leaving headroom for the extra trace_id parameter in each statement.
 _STALE_DELETE_BATCH_SIZE = 500
+
+
+def _normalize_cutoff_to_utc(created_before_iso: str) -> str:
+    """Validate and normalize a timezone-aware ISO-8601 purge cutoff."""
+    try:
+        cutoff = datetime.fromisoformat(created_before_iso)
+    except ValueError as err:
+        raise ValueError("created_before_iso must be a valid ISO-8601 datetime.") from err
+    if cutoff.tzinfo is None or cutoff.utcoffset() is None:
+        raise ValueError("created_before_iso must include a timezone offset.")
+    return cutoff.astimezone(UTC).isoformat()
 
 
 class BaseTraceRepository(ABC):
@@ -222,7 +234,8 @@ class SQLiteTraceRepository(BaseTraceRepository):
                     return None
 
                 span_rows = self._conn.execute(
-                    "SELECT * FROM spans WHERE trace_id = ? ORDER BY started_at ASC",
+                    "SELECT * FROM spans WHERE trace_id = ? "
+                    "ORDER BY julianday(started_at) ASC, started_at ASC",
                     (trace_id_str,),
                 ).fetchall()
 
@@ -268,7 +281,7 @@ class SQLiteTraceRepository(BaseTraceRepository):
         def _query_list_locked() -> list[TraceRecord]:
             query = (
                 "SELECT * FROM traces WHERE application_name = ? "
-                "ORDER BY created_at DESC LIMIT ? OFFSET ?"
+                "ORDER BY julianday(created_at) DESC, created_at DESC LIMIT ? OFFSET ?"
             )
             params = (application_name, limit, offset)
 
@@ -277,7 +290,8 @@ class SQLiteTraceRepository(BaseTraceRepository):
             for row in rows:
                 trace_id = row["trace_id"]
                 span_rows = self._conn.execute(
-                    "SELECT * FROM spans WHERE trace_id = ? ORDER BY started_at ASC",
+                    "SELECT * FROM spans WHERE trace_id = ? "
+                    "ORDER BY julianday(started_at) ASC, started_at ASC",
                     (trace_id,),
                 ).fetchall()
                 spans = [
@@ -312,11 +326,13 @@ class SQLiteTraceRepository(BaseTraceRepository):
         return [r.to_trace(validate=False) for r in records]
 
     async def purge_older_than(self, created_before_iso: str) -> int:
+        normalized_cutoff = _normalize_cutoff_to_utc(created_before_iso)
+
         def _delete() -> int:
             with self._conn_lock, self._conn:
                 cursor = self._conn.execute(
-                    "DELETE FROM traces WHERE created_at < ?",
-                    (created_before_iso,),
+                    "DELETE FROM traces WHERE julianday(created_at) < julianday(?)",
+                    (normalized_cutoff,),
                 )
                 return cursor.rowcount
 

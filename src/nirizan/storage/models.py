@@ -1,12 +1,27 @@
 # src/nirizan/storage/models.py
 import json
-from datetime import datetime
+from datetime import UTC, datetime
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from nirizan.instrumentation.spans import Span, SpanKind, Trace
 from nirizan.metrics.base import MetricResult as MetricResult
+
+
+def _utc_isoformat(value: datetime) -> str:
+    """Serialize an aware datetime in canonical UTC ISO-8601 form."""
+    if value.tzinfo is None or value.utcoffset() is None:
+        raise ValueError("Persisted datetimes must be timezone-aware.")
+    return value.astimezone(UTC).isoformat()
+
+
+def _parse_utc_datetime(value: str) -> datetime:
+    """Parse a persisted aware datetime and normalize it to UTC."""
+    parsed = datetime.fromisoformat(value)
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise ValueError("Persisted datetimes must be timezone-aware.")
+    return parsed.astimezone(UTC)
 
 
 class SpanRecord(BaseModel):
@@ -31,8 +46,8 @@ class SpanRecord(BaseModel):
             parent_span_id=str(span.parent_span_id) if span.parent_span_id else None,
             kind=span.kind.value,
             name=span.name,
-            started_at=span.started_at.isoformat(),
-            ended_at=span.ended_at.isoformat(),
+            started_at=_utc_isoformat(span.started_at),
+            ended_at=_utc_isoformat(span.ended_at),
             attributes_json=json.dumps(span.attributes),
             input_payload=span.input_payload,
             output_payload=span.output_payload,
@@ -46,8 +61,8 @@ class SpanRecord(BaseModel):
             parent_span_id=UUID(self.parent_span_id) if self.parent_span_id else None,
             kind=SpanKind(self.kind),
             name=self.name,
-            started_at=datetime.fromisoformat(self.started_at),
-            ended_at=datetime.fromisoformat(self.ended_at),
+            started_at=_parse_utc_datetime(self.started_at),
+            ended_at=_parse_utc_datetime(self.ended_at),
             attributes=json.loads(self.attributes_json),
             input_payload=self.input_payload,
             output_payload=self.output_payload,
@@ -70,7 +85,7 @@ class TraceRecord(BaseModel):
         return cls(
             trace_id=str(trace.trace_id),
             application_name=trace.application_name,
-            created_at=trace.created_at.isoformat(),
+            created_at=_utc_isoformat(trace.created_at),
             spans=[SpanRecord.from_span(s) for s in trace.spans],
             code_commit=trace.code_commit,
             data_snapshot_id=trace.data_snapshot_id,
@@ -88,7 +103,7 @@ class TraceRecord(BaseModel):
             return Trace(
                 trace_id=UUID(self.trace_id),
                 application_name=self.application_name,
-                created_at=datetime.fromisoformat(self.created_at),
+                created_at=_parse_utc_datetime(self.created_at),
                 spans=[s.to_span() for s in self.spans],
                 code_commit=self.code_commit,
                 data_snapshot_id=self.data_snapshot_id,
@@ -97,7 +112,7 @@ class TraceRecord(BaseModel):
         return Trace.model_construct(
             trace_id=UUID(self.trace_id),
             application_name=self.application_name,
-            created_at=datetime.fromisoformat(self.created_at),
+            created_at=_parse_utc_datetime(self.created_at),
             spans=[s.to_span() for s in self.spans],
             code_commit=self.code_commit,
             data_snapshot_id=self.data_snapshot_id,
