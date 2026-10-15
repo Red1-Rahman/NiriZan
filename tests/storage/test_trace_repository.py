@@ -6,7 +6,7 @@ import sqlite3
 import pytest
 
 from nirizan.instrumentation.spans import Span, SpanKind, Trace
-from nirizan.storage.trace_repository import SQLiteTraceRepository, _STALE_DELETE_BATCH_SIZE
+from nirizan.storage.trace_repository import SQLiteTraceRepository
 
 START = datetime(2026, 1, 1, tzinfo=timezone.utc)
 
