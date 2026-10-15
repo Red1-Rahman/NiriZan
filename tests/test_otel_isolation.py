@@ -365,6 +365,7 @@ def test_installed_metadata_gates_opentelemetry_behind_the_otel_extra() -> None:
     """
     from importlib.metadata import PackageNotFoundError, requires
 
+    requirements = None
     try:
         requirements = requires("nirizan")
     except PackageNotFoundError:
