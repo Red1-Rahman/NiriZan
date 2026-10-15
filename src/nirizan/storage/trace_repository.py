@@ -175,32 +175,42 @@ class SQLiteTraceRepository(BaseTraceRepository):
                         )
 
                 # Remove spans that were stored for this trace but are absent
-                # from the incoming trace. The stale set is computed in Python
-                # and deleted in bounded batches, so no statement ever binds
-                # more than _STALE_DELETE_BATCH_SIZE + 1 variables, however
-                # many spans the trace has. All of this runs inside the same
-                # transaction as the upserts above, so the save stays atomic.
+                # from the incoming trace. With no incoming spans, a single
+                # delete by trace_id clears the trace without reading any span
+                # IDs. Otherwise the stale set is computed in Python and
+                # deleted in bounded batches, so no statement binds more than
+                # _STALE_DELETE_BATCH_SIZE + 1 variables, however many spans
+                # the trace has. Everything runs inside the same transaction
+                # as the upserts above, so the save stays atomic.
                 incoming_span_ids = {span.span_id for span in trace_record.spans}
-                existing_span_ids = [
-                    row["span_id"]
-                    for row in self._conn.execute(
-                        "SELECT span_id FROM spans WHERE trace_id = ?",
+                if not incoming_span_ids:
+                    self._conn.execute(
+                        "DELETE FROM spans WHERE trace_id = ?",
                         (trace_record.trace_id,),
                     )
-                ]
-                stale_span_ids = [
-                    span_id
-                    for span_id in existing_span_ids
-                    if span_id not in incoming_span_ids
-                ]
-                for start in range(0, len(stale_span_ids), _STALE_DELETE_BATCH_SIZE):
-                    batch = stale_span_ids[start : start + _STALE_DELETE_BATCH_SIZE]
-                    placeholders = ", ".join("?" for _ in batch)
-                    self._conn.execute(
-                        f"DELETE FROM spans WHERE trace_id = ? "
-                        f"AND span_id IN ({placeholders})",
-                        (trace_record.trace_id, *batch),
-                    )
+                else:
+                    existing_span_ids = [
+                        row["span_id"]
+                        for row in self._conn.execute(
+                            "SELECT span_id FROM spans WHERE trace_id = ?",
+                            (trace_record.trace_id,),
+                        )
+                    ]
+                    stale_span_ids = [
+                        span_id
+                        for span_id in existing_span_ids
+                        if span_id not in incoming_span_ids
+                    ]
+                    for start in range(
+                        0, len(stale_span_ids), _STALE_DELETE_BATCH_SIZE
+                    ):
+                        batch = stale_span_ids[start : start + _STALE_DELETE_BATCH_SIZE]
+                        placeholders = ", ".join("?" for _ in batch)
+                        self._conn.execute(
+                            f"DELETE FROM spans WHERE trace_id = ? "
+                            f"AND span_id IN ({placeholders})",
+                            (trace_record.trace_id, *batch),
+                        )
 
         await asyncio.to_thread(_insert)
 
