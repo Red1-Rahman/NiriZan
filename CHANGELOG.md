@@ -17,7 +17,7 @@ considered stable.
 - **Optional OpenTelemetry integration** through the `otel` extra, adding bidirectional interoperability between NiriZan traces and OpenTelemetry spans without requiring OpenTelemetry dependencies in core installations.
   - `NiriZanToOTelExporter` and `export_trace_to_otel` export validated NiriZan traces to an OpenTelemetry tracer, with parent-first span ordering, trace-context handling, span-kind mapping, status metadata, and identity provenance.
   - `NiriZanSpanProcessor` converts completed OpenTelemetry spans into validated NiriZan traces using per-trace buffering, parent resolution, and configurable ingestion policies.
-  - `init_telemetry()` provides configurable OpenTelemetry initialization for tracing, metrics, and logging.
+  - `init_tracer()` initializes NiriZan's own async tracer and accepts an optional exporter. OpenTelemetry provider setup remains the application's responsibility; this release does not provide OTel metrics or logging initialization.
 - **OpenTelemetry semantic-convention helpers** for GenAI operations, token usage, retrieval, tool use, planning, status metadata, and sequence-valued attributes. Canonical token-usage attributes are emitted alongside legacy aliases for compatibility.
 - **Thread-safe asynchronous trace delivery** through `ThreadSafeTraceSink` and `LoopTraceSink`, bridging OpenTelemetry's synchronous span-processing callbacks to NiriZan's asynchronous trace collector.
 - **Expanded OpenTelemetry regression tests** covering identifier mapping, export and ingestion, semantic conventions, trace assembly, parent-link integrity, privacy defaults, failure handling, and operation without the optional dependency.

@@ -58,6 +58,9 @@ class Span(BaseModel):
 A trace is the ordered collection of spans belonging to one application invocation.
 
 ```python
+from pydantic import model_validator
+
+
 class Trace(BaseModel):
     model_config = ConfigDict(strict=True)
 
@@ -69,58 +72,88 @@ class Trace(BaseModel):
     data_snapshot_id: str | None = None  # Phase 3: stamped by collector.py at ingest
     session_id: UUID | None = None  # Phase 3: set when captured inside Tracer.session(...)
 
+    @model_validator(mode="after")
+    def validate_span_trace_ids(self) -> Trace:
+        known_span_ids = {span.span_id for span in self.spans}
+        for span in self.spans:
+            if span.trace_id != self.trace_id:
+                raise ValueError("Span trace_id must match Trace trace_id")
+            if (
+                span.parent_span_id is not None
+                and span.parent_span_id not in known_span_ids
+                and span.attributes.get("nirizan.parent.synthetic") is not True
+            ):
+                raise ValueError("Unmarked dangling parent link")
+        return self
+
     def spans_of_kind(self, kind: SpanKind) -> list[Span]:
         return [s for s in self.spans if s.kind == kind]
 ```
 
 **Contract guarantees:**
 
-* Every `Span` in `spans` must share the same `trace_id` as the `Trace` itself. Enforce this with a `model_validator`, do not rely on callers to get it right.
+* Every `Span` in `spans` must share the same `trace_id` as the `Trace` itself. A parent link may point outside the trace only when the span is explicitly marked with `nirizan.parent.synthetic=True`; otherwise the model validator rejects it.
 * `Trace` is the only object the Instrumentation Layer hands to the Orchestrator. Nothing calls `Span` in isolation across that boundary.
 * `code_commit`, `data_snapshot_id`, and `session_id` are additive Phase 3 fields, all optional with a `None` default, per this document's Versioning Rule. `None` means the value genuinely wasn't available at ingest (e.g. traces captured outside a git checkout, or outside a `Tracer.session(...)` block); callers must not treat `None` as a placeholder to be filled in later, only as "not applicable to this trace."
 
-### `TraceExporter` protocol (`instrumentation/exporters.py`)
+### `BaseExporter` interface (`instrumentation/exporters.py`)
 
 ```python
-from typing import Protocol
+from abc import ABC, abstractmethod
 
 
-class TraceExporter(Protocol):
+class BaseExporter(ABC):
+    @abstractmethod
     async def export(self, trace: Trace) -> None:
-        """Send a completed trace to the orchestrator's Trace Collector.
+        ...
 
-        Must not raise on transient failure; implementations are
-        responsible for their own retry/backoff. Must not block the
-        instrumented application's request/response path (Design Principle
-        2 in docs/architecture.md): callers await this from a background task,
-        never inline in the request handler.
-        """
+    async def shutdown(self) -> None:
         ...
 ```
 
 **Contract guarantees:**
 
-* This is the seam between Instrumentation and Orchestrator. Anything on the application side depends only on this `Protocol`, never on a concrete Trace Collector implementation. That is what keeps instrumentation swappable per framework without touching the orchestrator.
+* `export` is asynchronous, but the base interface does not guarantee background execution, retries, or failure suppression. `Tracer` awaits the configured exporter inline when the root span closes, so an exporter implementation must document and handle its own failure behavior.
+* `shutdown` is an optional lifecycle hook for releasing exporter resources.
+* `CollectorExporter` and other adapters may implement this interface without exposing a concrete Trace Collector to the instrumentation layer.
 
-### `TraceRepository` interface (`storage/trace_repository.py`)
+### `BaseTraceRepository` interface (`storage/trace_repository.py`)
 
 ```python
-class TraceRepository(Protocol):
+from abc import ABC, abstractmethod
+
+
+class BaseTraceRepository(ABC):
+    @abstractmethod
     async def save(self, trace: Trace) -> None: ...
+
+    @abstractmethod
     async def get(self, trace_id: UUID) -> Trace | None: ...
-    async def list_by_application(self, application_name: str, limit: int = 100) -> list[Trace]: ...
+
+    @abstractmethod
+    async def list_by_application(
+        self,
+        application_name: str,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[Trace]: ...
+
+    @abstractmethod
+    async def purge_older_than(self, created_before_iso: str) -> int: ...
 ```
 
 **Contract guarantees:**
 
 * `get` returns `None` for a missing trace, it does not raise. Callers that need "trace must exist" semantics wrap this themselves; the repository stays a dumb, honest store.
+* `list_by_application` returns descending creation-time results with limit/offset pagination.
+* `purge_older_than` removes traces older than the supplied ISO timestamp and returns the number of deleted trace rows.
 * No method here accepts or returns anything from `metrics/`, `regression/`, or `reporting/`. This is Phase 1's boundary and it stays that narrow.
 
 ### OpenTelemetry adapter contracts (`instrumentation/otel/`)
 
 The OpenTelemetry bridge is an optional adapter layer. Installing the `otel`
 extra adds the bridge without changing the core `Span`, `Trace`,
-`TraceExporter`, or `TraceRepository` contracts above.
+`BaseExporter`, or `BaseTraceRepository` contracts above.
 
 #### `NiriZanToOTelExporter` and `export_trace_to_otel`
 

@@ -110,14 +110,14 @@ flowchart TB
 - The adapter is isolated behind the optional `otel` dependency group.
   Applications that do not install that extra retain the core instrumentation
   and trace contracts unchanged.
-- Runs as a lightweight SDK hook in the target application, not a wrapper that blocks the response path.
+- Runs as a lightweight SDK hook in the target application. Native tracing awaits its configured exporter when the root span closes; exporters such as the collector adapter can then queue persistence asynchronously, while the OTel `LoopTraceSink` remains non-blocking on the processor thread.
 - Exported roots and orphaned parent links use a synthetic remote OTel parent
   by default so one NiriZan trace remains one OTel trace. Export order is
   parent-first and preserves explicit in-trace parent contexts.
 - Content-bearing attributes are opt-in in both directions. Structural metadata
   is retained by default; prompts, completions, retrieval data, tool arguments,
   and planning content require an explicit capture setting.
-- **Design decision:** evaluation is decoupled from the request/response cycle. Traces are emitted asynchronously to avoid adding latency to production traffic.
+- **Design decision:** persistence and OTel delivery are decoupled from the request/response cycle where the configured adapter supports queueing. The core `Tracer` does not create a background task automatically: it awaits its configured exporter inline when the root span closes.
 
 #### OpenTelemetry ingest and delivery flow
 
@@ -135,8 +135,10 @@ flowchart LR
 The processor's synchronous callback never writes directly to the async
 collector queue. `LoopTraceSink` schedules delivery onto the collector's event
 loop, so the OTel consumer thread remains non-blocking. Trace validation rejects
-cross-trace spans and unmarked dangling parents; ingest-time re-parenting is
-explicitly marked as synthetic.
+cross-trace spans and unmarked dangling parents. A missing local OTel parent is
+marked synthetic only when `orphan_policy="emit"`; children of dropped,
+unrecognized, duplicate, or unconvertible spans are re-attached to surviving
+ancestors without being marked synthetic solely because of that re-attachment.
 
 ### 3.2 Evaluator Orchestrator
 
