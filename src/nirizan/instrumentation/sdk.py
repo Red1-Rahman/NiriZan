@@ -2,7 +2,8 @@
 from __future__ import annotations
 
 import functools
-from typing import Any, Callable, Coroutine, Optional, ParamSpec, TypeVar
+from collections.abc import Callable, Coroutine
+from typing import Any, ParamSpec, TypeVar
 from uuid import UUID
 
 from nirizan._logging import get_logger
@@ -12,13 +13,13 @@ from nirizan.instrumentation.tracer import Tracer
 
 logger = get_logger(__name__)
 
-_GLOBAL_TRACER: Optional[Tracer] = None
+_GLOBAL_TRACER: Tracer | None = None
 
 P = ParamSpec("P")
 R = TypeVar("R")
 
 
-def init_tracer(application_name: str, exporter: Optional[BaseExporter] = None) -> Tracer:
+def init_tracer(application_name: str, exporter: BaseExporter | None = None) -> Tracer:
     """Initialize and register the global tracer instance."""
     global _GLOBAL_TRACER
     tracer = Tracer(application_name=application_name, exporter=exporter)
@@ -27,12 +28,12 @@ def init_tracer(application_name: str, exporter: Optional[BaseExporter] = None) 
     return tracer
 
 
-def get_tracer() -> Optional[Tracer]:
+def get_tracer() -> Tracer | None:
     """Return the currently configured global tracer instance."""
     return _GLOBAL_TRACER
 
 
-def start_session(session_id: Optional[UUID] = None) -> Any:
+def start_session(session_id: UUID | None = None) -> Any:
     """SDK-level context manager pass-through for grouping traces into a session."""
     tracer = get_tracer()
     if tracer is None:
@@ -51,8 +52,8 @@ def _format_input_payload(args: tuple[Any, ...], kwargs: dict[str, Any]) -> str 
 
 def trace_span(
     kind: SpanKind,
-    name: Optional[str] = None,
-    tracer: Optional[Tracer] = None,
+    name: str | None = None,
+    tracer: Tracer | None = None,
 ) -> Callable[[Callable[P, Coroutine[Any, Any, R]]], Callable[P, Coroutine[Any, Any, R]]]:
     """Decorator to instrument an async function with full signature preservation."""
 
@@ -83,32 +84,32 @@ def trace_span(
 
 
 def planning(
-    name: Optional[str] = None,
-    tracer: Optional[Tracer] = None,
+    name: str | None = None,
+    tracer: Tracer | None = None,
 ) -> Callable[[Callable[P, Coroutine[Any, Any, R]]], Callable[P, Coroutine[Any, Any, R]]]:
     """Convenience decorator for PLANNING span instrumentation."""
     return trace_span(kind=SpanKind.PLANNING, name=name, tracer=tracer)
 
 
 def retrieval(
-    name: Optional[str] = None,
-    tracer: Optional[Tracer] = None,
+    name: str | None = None,
+    tracer: Tracer | None = None,
 ) -> Callable[[Callable[P, Coroutine[Any, Any, R]]], Callable[P, Coroutine[Any, Any, R]]]:
     """Convenience decorator for RETRIEVAL span instrumentation."""
     return trace_span(kind=SpanKind.RETRIEVAL, name=name, tracer=tracer)
 
 
 def generation(
-    name: Optional[str] = None,
-    tracer: Optional[Tracer] = None,
+    name: str | None = None,
+    tracer: Tracer | None = None,
 ) -> Callable[[Callable[P, Coroutine[Any, Any, R]]], Callable[P, Coroutine[Any, Any, R]]]:
     """Convenience decorator for GENERATION span instrumentation."""
     return trace_span(kind=SpanKind.GENERATION, name=name, tracer=tracer)
 
 
 def tool_use(
-    name: Optional[str] = None,
-    tracer: Optional[Tracer] = None,
+    name: str | None = None,
+    tracer: Tracer | None = None,
 ) -> Callable[[Callable[P, Coroutine[Any, Any, R]]], Callable[P, Coroutine[Any, Any, R]]]:
     """Convenience decorator for TOOL_USE span instrumentation."""
     return trace_span(kind=SpanKind.TOOL_USE, name=name, tracer=tracer)

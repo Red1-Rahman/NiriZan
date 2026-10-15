@@ -1,14 +1,14 @@
-from datetime import datetime, timedelta, timezone
+import sqlite3
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import UUID, uuid4
-import sqlite3
 
 import pytest
 
 from nirizan.instrumentation.spans import Span, SpanKind, Trace
 from nirizan.storage.trace_repository import SQLiteTraceRepository
 
-START = datetime(2026, 1, 1, tzinfo=timezone.utc)
+START = datetime(2026, 1, 1, tzinfo=UTC)
 
 
 @pytest.fixture

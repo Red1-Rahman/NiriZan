@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from uuid import uuid4
 
 import pytest
@@ -10,7 +10,7 @@ from nirizan.instrumentation.spans import Span, SpanKind, Trace
 def test_span_creation_and_immutability() -> None:
     span_id = uuid4()
     trace_id = uuid4()
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     span = Span(
         span_id=span_id,
@@ -34,7 +34,7 @@ def test_span_creation_and_immutability() -> None:
 def test_trace_span_id_mismatch_raises() -> None:
     trace_id_1 = uuid4()
     trace_id_2 = uuid4()
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     invalid_span = Span(
         span_id=uuid4(),
@@ -56,7 +56,7 @@ def test_trace_span_id_mismatch_raises() -> None:
 
 def test_trace_spans_of_kind_filtering() -> None:
     trace_id = uuid4()
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     span_retrieval = Span(
         span_id=uuid4(),

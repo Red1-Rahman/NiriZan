@@ -6,7 +6,6 @@ import pytest
 from nirizan.instrumentation.exporters import InMemoryExporter
 from nirizan.instrumentation.sdk import (
     generation,
-    get_tracer,
     init_tracer,
     planning,
     retrieval,

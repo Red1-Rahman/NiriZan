@@ -1,9 +1,10 @@
 # src/nirizan/instrumentation/tracer.py
-from contextlib import asynccontextmanager
 import contextvars
+from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from datetime import datetime, timezone
-from typing import Any, AsyncGenerator
+from datetime import UTC, datetime
+from typing import Any
 from uuid import UUID, uuid4
 
 from nirizan.instrumentation.exporters import BaseExporter
@@ -72,7 +73,7 @@ class Tracer:
 
         parent_span_id = _CURRENT_SPAN_ID.get()
         span_id = uuid4()
-        started_at = datetime.now(timezone.utc)
+        started_at = datetime.now(UTC)
 
         # Update current active span context token
         token_span = _CURRENT_SPAN_ID.set(span_id)
@@ -81,7 +82,7 @@ class Tracer:
         try:
             yield handle
         finally:
-            ended_at = datetime.now(timezone.utc)
+            ended_at = datetime.now(UTC)
 
             # Restrict attributes to valid primitive types
             clean_attrs: dict[str, str | int | float | bool] = {}
@@ -125,7 +126,7 @@ class Tracer:
             trace_id=target_id,
             application_name=self.application_name,
             spans=matching_spans,
-            created_at=datetime.now(timezone.utc),
+            created_at=datetime.now(UTC),
             session_id=_CURRENT_SESSION_ID.get(),
         )
 
