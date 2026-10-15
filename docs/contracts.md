@@ -197,6 +197,108 @@ loop with `asyncio.run_coroutine_threadsafe` and returns without blocking the
 OTel consumer thread. Sink and loop failures are logged rather than raised
 into the processor callback.
 
+#### Conversion helpers (`convert_span_to_otel_attributes`, `export_span_to_otel`)
+
+`convert_span_to_otel_attributes(span, session_id=None, *, config=None)` maps a
+single NiriZan `Span` to the OpenTelemetry attribute dictionary without emitting
+anything. `export_span_to_otel(span, tracer=None, parent_context=None,
+session_id=None, *, config=None)` converts that single span and emits it through
+an explicit parent context (or as a root when none is given). Both take the same
+`OTelExporterConfig` as the whole-trace path; `export_trace_to_otel` and
+`NiriZanToOTelExporter` are built on top of them, so a caller that only wants one
+span does not have to assemble a `Trace` first.
+
+#### `ProcessorConfig` and `StatReason` (`instrumentation/otel/from_otel.py`)
+
+`ProcessorConfig` is the frozen, strictly validated settings model behind
+`NiriZanSpanProcessor`'s keyword arguments; `NiriZanSpanProcessor.from_config`
+and the read-only `config` property expose it. `StatReason` is a `StrEnum` of
+every drop or skip reason the processor counts in `get_stats()` (queue
+saturation, duplicates, unrecognized kinds, orphan and cycle handling,
+eviction and span-cap events, and the `own_scope_skipped` loop guard).
+Consumers key on these enum values, never on free-form strings.
+
+#### Adapter package surface (`instrumentation/otel/__init__.py`)
+
+The package `__init__` re-exports exactly `_id_mapping` and `semconv`, and
+nothing else. Importing `nirizan.instrumentation.otel` therefore never
+requires the optional `opentelemetry` packages; `to_otel` and `from_otel`
+must be imported explicitly by callers that installed the `otel` extra.
+
+#### ID mapping (`instrumentation/otel/_id_mapping.py`)
+
+Six conversion helpers with no OpenTelemetry dependency: `uuid_to_otel_trace_id`
+and `uuid_to_otel_span_id` turn NiriZan UUIDs into the 128-bit and 64-bit OTel
+integers, `otel_trace_id_to_uuid` and `otel_span_id_to_uuid` invert them, and
+`is_valid_otel_trace_id` / `is_valid_otel_span_id` perform the range checks the
+ingest path uses before converting. A conversion whose result would be an
+all-zeros OTel ID raises `ValueError`; the validation helpers return `bool` and
+never raise. `otel_span_id_to_uuid` derives its UUID deterministically (UUIDv5
+over the fixed NiriZan namespace), so the same OTel span ID yields the same
+NiriZan UUID on every platform and Python version.
+
+#### Semantic conventions (`instrumentation/otel/semconv.py`)
+
+`semconv` is the single owner of every attribute key, provenance marker, and
+limit the bridge reads or writes, so neither adapter hard-codes a wire name.
+It is pure Python with no OpenTelemetry dependency. Its complete export list,
+which is the contract with OpenTelemetry backends, is:
+
+```python
+__all__ = [
+    "CONTENT_ATTRIBUTE_KEYS",
+    "GEN_AI_COMPLETION",
+    "GEN_AI_OPERATION_NAME",
+    "GEN_AI_PROMPT",
+    "GEN_AI_PROVIDER_NAME",
+    "GEN_AI_REQUEST_MODEL",
+    "GEN_AI_RESPONSE_MODEL",
+    "GEN_AI_SYSTEM",
+    "GEN_AI_USAGE_COMPLETION_TOKENS",
+    "GEN_AI_USAGE_INPUT_TOKENS",
+    "GEN_AI_USAGE_OUTPUT_TOKENS",
+    "GEN_AI_USAGE_PROMPT_TOKENS",
+    "ID_SOURCE_DERIVED",
+    "ID_SOURCE_ROUNDTRIP",
+    "MAX_ATTR_VALUE_LENGTH",
+    "NIRIZAN_INSTRUMENTATION_SCOPE",
+    "NIRIZAN_PLANNING_CONTEXT",
+    "NIRIZAN_PLANNING_OUTPUT",
+    "NIRIZAN_RETRIEVAL_QUERY",
+    "NIRIZAN_RETRIEVAL_RESULTS",
+    "NIRIZAN_RETRIEVAL_TOP_K",
+    "NIRIZAN_SESSION_ID",
+    "NIRIZAN_SPAN_ID",
+    "NIRIZAN_SPAN_ID_SOURCE",
+    "NIRIZAN_SPAN_KIND",
+    "NIRIZAN_TOOL_ARGUMENTS",
+    "NIRIZAN_TOOL_NAME",
+    "NIRIZAN_TOOL_RESULT",
+    "NIRIZAN_TRACE_ID",
+    "NIRIZAN_TRACE_ID_SOURCE",
+    "OTEL_SAMPLED",
+    "OTEL_SPAN_ID",
+    "OTEL_STATUS_CODE",
+    "OTEL_STATUS_DESCRIPTION",
+    "OTEL_TRACE_STATE",
+    "SEMCONV_VERSION",
+    "SEQ_ATTR_PREFIX",
+    "SPAN_ID_SOURCE_DERIVED",
+    "SPAN_ID_SOURCE_ROUNDTRIP",
+    "TRUNCATION_SUFFIX",
+    "decode_sequence_key",
+    "dumps_attribute_json",
+    "encode_sequence_attribute_value",
+    "encode_sequence_key",
+    "is_sequence_key",
+    "truncate_attribute_value",
+]
+```
+
+Adding, renaming, or removing a name here changes what the bridge emits on the
+wire and is therefore a contract change under the Versioning Rule at the bottom
+of this document.
+
 #### Parent-link integrity
 
 `Trace` accepts a `parent_span_id` that is not present in the trace only when

@@ -34,6 +34,8 @@ import pytest
 pytest.importorskip("opentelemetry")
 pytest.importorskip("opentelemetry.sdk")
 
+pytestmark = pytest.mark.otel
+
 import itertools  # noqa: E402
 import json  # noqa: E402
 import logging  # noqa: E402

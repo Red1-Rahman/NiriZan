@@ -37,9 +37,7 @@ def _parse_utc_datetime(value: str) -> datetime:
     try:
         parsed = datetime.fromisoformat(value)
     except ValueError as err:
-        raise ValueError(
-            f"Stored timestamp {value!r} is not a valid ISO-8601 datetime."
-        ) from err
+        raise ValueError(f"Stored timestamp {value!r} is not a valid ISO-8601 datetime.") from err
     if parsed.tzinfo is None or parsed.utcoffset() is None:
         _warn_legacy_naive_once(value)
         return parsed.replace(tzinfo=UTC)
@@ -89,7 +87,8 @@ class SpanRecord(BaseModel):
         )
 
     def to_span(self) -> Span:
-        """Inverse of from_span; keeps this record shape an internal storage detail on the read path too."""
+        """Inverse of from_span; keeps this record shape an internal storage detail
+        on the read path too."""
         return Span(
             span_id=UUID(self.span_id),
             trace_id=UUID(self.trace_id),
@@ -156,7 +155,8 @@ class TraceRecord(BaseModel):
 
 
 class Run(BaseModel):
-    """A trace plus the MetricResults computed against it, versioned by code commit and data snapshot."""
+    """A trace plus the MetricResults computed against it, versioned by code
+    commit and data snapshot."""
 
     model_config = ConfigDict(strict=True)
 
@@ -169,7 +169,8 @@ class Run(BaseModel):
 
 
 class Baseline(BaseModel):
-    """A named, queryable set of 'known good' historical runs; references Run objects by ID, never embeds them."""
+    """A named, queryable set of 'known good' historical runs; references Run
+    objects by ID, never embeds them."""
 
     model_config = ConfigDict(strict=True)
 

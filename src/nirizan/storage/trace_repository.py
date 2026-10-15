@@ -414,8 +414,7 @@ class SQLiteTraceRepository(BaseTraceRepository):
                 # survive every purge. Fail loudly instead: the row must be
                 # repaired (or removed) before purging can proceed.
                 malformed = self._conn.execute(
-                    "SELECT trace_id, created_at FROM traces "
-                    "WHERE julianday(created_at) IS NULL"
+                    "SELECT trace_id, created_at FROM traces WHERE julianday(created_at) IS NULL"
                 ).fetchall()
                 if malformed:
                     offenders = ", ".join(

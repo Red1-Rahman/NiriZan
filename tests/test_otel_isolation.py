@@ -62,6 +62,8 @@ import asyncio
 import importlib
 import json
 import pkgutil
+import tempfile
+from pathlib import Path
 from uuid import UUID
 
 OTEL_BACKED = {OTEL_BACKED_MODULES!r}
@@ -118,6 +120,37 @@ async def trace_once():
 
 traces = asyncio.run(trace_once())
 result["core_traces"] = [len(traces), sorted(s.name for s in traces[0].spans)]
+
+# L1 mini end-to-end: tracer -> CollectorExporter -> TraceCollector ->
+# SQLiteTraceRepository -> list_by_application, all with OpenTelemetry
+# import-blocked. This is the pipeline the docs promise works core-only.
+from nirizan.orchestrator.collector import CollectorExporter, TraceCollector
+from nirizan.storage.trace_repository import SQLiteTraceRepository
+
+
+async def mini_e2e_run(db_path):
+    repository = SQLiteTraceRepository(db_path)
+    collector = TraceCollector(repository)
+    await collector.start()
+    exporter = CollectorExporter(collector)
+    tracer = Tracer("l1-app", exporter=exporter)
+    async with tracer.start_span("pipeline-root", SpanKind.PLANNING):
+        async with tracer.start_span("pipeline-child", SpanKind.GENERATION):
+            pass
+    await collector.stop()
+    stored = await repository.list_by_application("l1-app")
+    repository.close()
+    return stored
+
+
+with tempfile.TemporaryDirectory() as tmp:
+    stored = asyncio.run(mini_e2e_run(str(Path(tmp) / "l1.db")))
+
+result["l1_e2e"] = {{
+    "traces": len(stored),
+    "names": sorted(s.name for s in stored[0].spans) if stored else [],
+    "created_aware": bool(stored) and stored[0].created_at.tzinfo is not None,
+}}
 
 print(json.dumps(result))
 """
@@ -189,6 +222,25 @@ def test_tracing_still_works_without_opentelemetry(
     without_opentelemetry: dict[str, Any],
 ) -> None:
     assert without_opentelemetry["core_traces"] == [1, ["child", "root"]]
+
+
+def test_the_full_core_pipeline_runs_without_opentelemetry(
+    without_opentelemetry: dict[str, Any],
+) -> None:
+    """L1 mini e2e: tracer -> collector -> SQLite repository, otel import-blocked.
+
+    This is the pipeline the docs promise works in a core-only install: spans
+    captured by the core tracer flow through the collector and land in the
+    SQLite trace repository, with no OpenTelemetry module importable.
+    """
+    assert without_opentelemetry["l1_e2e"]["traces"] == 1
+    assert without_opentelemetry["l1_e2e"]["names"] == [
+        "pipeline-child",
+        "pipeline-root",
+    ]
+    assert without_opentelemetry["l1_e2e"]["created_aware"] is True
+    # The whole run happened with opentelemetry blocked: nothing leaked in.
+    assert without_opentelemetry["leaked"] == []
 
 
 def test_the_dependency_free_part_of_the_adapter_package_works_without_opentelemetry(
@@ -296,6 +348,84 @@ def test_the_dev_extra_does_not_pull_in_opentelemetry(project: dict[str, Any]) -
     dev = _names(project["optional-dependencies"]["dev"])
 
     assert not any(name.startswith("opentelemetry") for name in dev)
+
+
+# ---------------------------------------------------------------------------
+# L2: installed metadata agrees with the declared extras
+# ---------------------------------------------------------------------------
+
+
+def test_installed_metadata_gates_opentelemetry_behind_the_otel_extra() -> None:
+    """The *installed* distribution (not just pyproject) must gate otel deps.
+
+    ``importlib.metadata.requires`` is what pip and other tools actually read;
+    a stray un-gated ``opentelemetry-api`` line there would make every
+    ``pip install nirizan`` pull OpenTelemetry in, silently defeating the
+    optional-extra contract that the blocked-subprocess tests verify.
+    """
+    from importlib.metadata import PackageNotFoundError, requires
+
+    try:
+        requirements = requires("nirizan")
+    except PackageNotFoundError:
+        pytest.skip("nirizan is not installed as a distribution")
+    assert requirements is not None
+
+    otel_requirements = [r for r in requirements if "opentelemetry" in r.lower()]
+    # Every otel requirement carries an "extra == 'otel'" marker.
+    assert otel_requirements != []
+    assert all('extra == "otel"' in r or "extra == 'otel'" in r for r in otel_requirements)
+    # And no requirement outside the otel extra mentions it: a line without an
+    # otel extra marker would install OpenTelemetry for every user.
+    unmarked = [r for r in requirements if "opentelemetry" in r.lower() and "extra == " not in r]
+    assert unmarked == []
+
+
+def test_the_root_package_init_imports_no_opentelemetry_modules() -> None:
+    """``nirizan/__init__.py`` must stay free of adapter/otel imports."""
+    tree = ast.parse(
+        (PACKAGE_DIR / "__init__.py").read_text(encoding="utf-8"),
+        filename=str(PACKAGE_DIR / "__init__.py"),
+    )
+    offenders = [
+        node.module
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module is not None
+        and (
+            node.module == ADAPTER_PACKAGE
+            or node.module.startswith(f"{ADAPTER_PACKAGE}.")
+            or node.module == "opentelemetry"
+            or node.module.startswith("opentelemetry.")
+        )
+    ]
+
+    assert offenders == []
+
+
+def test_the_adapter_package_root_imports_only_dependency_free_submodules() -> None:
+    """``otel/__init__.py`` re-exports only modules that import without otel.
+
+    Import Hygiene in that file promises exactly ``_id_mapping`` and
+    ``semconv``; a third re-export that pulls in ``to_otel``/``from_otel``
+    would break every core-only import of ``nirizan.instrumentation.otel``.
+    """
+    init_path = ADAPTER_DIR / "__init__.py"
+    tree = ast.parse(init_path.read_text(encoding="utf-8"), filename=str(init_path))
+    imported_modules = {
+        node.module
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom) and node.module is not None
+    }
+    otel_backed = imported_modules & {"opentelemetry"} | {
+        m for m in imported_modules if m.startswith("opentelemetry.")
+    }
+
+    assert otel_backed == set()
+    # The package root only re-exports the dependency-free submodules.
+    import nirizan.instrumentation.otel as otel_pkg
+
+    assert set(otel_pkg.__all__) == {"_id_mapping", "semconv"}
 
 
 # ---------------------------------------------------------------------------

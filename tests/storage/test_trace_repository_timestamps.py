@@ -10,9 +10,10 @@ Covers the storage timestamp contract:
 - Deterministic read ordering: start instant, then parent depth, then stored
   order, with ``julianday()``'s millisecond granularity characterized.
 """
+
 import logging
 import random
-from datetime import UTC, datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import UUID, uuid4
 
@@ -441,12 +442,8 @@ async def test_failed_save_with_naive_span_leaves_database_untouched(
     with pytest.raises(ValueError, match="timezone-aware"):
         await repository.save(trace)
 
-    traces_left = repository._conn.execute(
-        "SELECT count(*) AS n FROM traces"
-    ).fetchone()
-    spans_left = repository._conn.execute(
-        "SELECT count(*) AS n FROM spans"
-    ).fetchone()
+    traces_left = repository._conn.execute("SELECT count(*) AS n FROM traces").fetchone()
+    spans_left = repository._conn.execute("SELECT count(*) AS n FROM spans").fetchone()
     assert traces_left["n"] == 0
     assert spans_left["n"] == 0
 
@@ -610,12 +607,8 @@ async def test_list_pagination_breaks_created_at_ties_deterministically(
         insert_trace_row(repository, UUID(trace_id), "2026-01-01T00:00:00+00:00")
     repository._conn.commit()
 
-    page_one = await repository.list_by_application(
-        "timestamp-tests", limit=2, offset=0
-    )
-    page_two = await repository.list_by_application(
-        "timestamp-tests", limit=2, offset=2
-    )
+    page_one = await repository.list_by_application("timestamp-tests", limit=2, offset=0)
+    page_two = await repository.list_by_application("timestamp-tests", limit=2, offset=2)
 
     observed = [str(trace.trace_id) for trace in page_one + page_two]
     # Equal created_at ties fall back to trace_id ascending, which is stable

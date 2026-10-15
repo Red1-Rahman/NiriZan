@@ -30,6 +30,8 @@ import pytest
 pytest.importorskip("opentelemetry")
 pytest.importorskip("opentelemetry.sdk")
 
+pytestmark = pytest.mark.otel
+
 import asyncio  # noqa: E402
 import importlib.metadata  # noqa: E402
 import itertools  # noqa: E402
