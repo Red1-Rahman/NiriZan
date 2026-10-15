@@ -1,5 +1,6 @@
 # src/nirizan/storage/models.py
 import json
+import threading
 from datetime import UTC, datetime
 from uuid import UUID
 
@@ -10,6 +11,12 @@ from nirizan.instrumentation.spans import Span, SpanKind, Trace
 from nirizan.metrics.base import MetricResult as MetricResult
 
 logger = get_logger(__name__)
+
+# Latch for the once-per-process legacy-row warning; see
+# ``_warn_legacy_naive_once``. A test resets the flag (never the lock) to get a
+# clean warning count.
+_legacy_naive_warning_lock = threading.Lock()
+_legacy_naive_warned = False
 
 
 def _utc_isoformat(value: datetime) -> str:
@@ -41,12 +48,19 @@ def _parse_utc_datetime(value: str) -> datetime:
 
 
 def _warn_legacy_naive_once(stored_value: str) -> None:
-    """Emit the legacy-row warning at most once per process."""
-    if getattr(_warn_legacy_naive_once, "_warned", False):
-        return
-    # The latch lives on the function rather than in a module global so that a
-    # test can reset it without touching module state other readers share.
-    _warn_legacy_naive_once._warned = True  # type: ignore[attr-defined]  # mypy: a function object has no attributes
+    """Emit the legacy-row warning at most once per process.
+
+    The latch is a module-level flag guarded by a lock rather than an attribute
+    on this function: a repository is read from worker threads, so two threads
+    hitting a legacy row for the first time at the same moment must not both
+    pass an unguarded check and warn twice. Holding the lock only for the
+    check-and-set keeps the logging call itself outside the critical section.
+    """
+    global _legacy_naive_warned
+    with _legacy_naive_warning_lock:
+        if _legacy_naive_warned:
+            return
+        _legacy_naive_warned = True
     logger.warning(
         "Stored timestamp %r has no timezone offset; reading it as UTC "
         "(legacy row, stored value left unchanged).",

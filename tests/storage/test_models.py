@@ -1,5 +1,6 @@
 # tests/storage/test_models.py
 import logging
+import threading
 from datetime import UTC, datetime, timedelta, timezone
 from uuid import uuid4
 
@@ -8,6 +9,7 @@ from pydantic import ValidationError
 
 from nirizan.instrumentation.spans import Span, SpanKind, Trace
 from nirizan.metrics.base import MetricResult
+from nirizan.storage import models
 from nirizan.storage.models import (
     Baseline,
     Run,
@@ -180,7 +182,7 @@ def test_parse_utc_datetime_accepts_z_suffix() -> None:
 def test_parse_utc_datetime_reads_naive_as_utc(
     caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(_warn_legacy_naive_once, "_warned", False, raising=False)
+    monkeypatch.setattr("nirizan.storage.models._legacy_naive_warned", False)
 
     with caplog.at_level(logging.WARNING):
         parsed = _parse_utc_datetime("2025-06-01T12:00:00")
@@ -199,7 +201,7 @@ def test_parse_utc_datetime_reads_naive_as_utc(
 def test_parse_utc_datetime_warns_once_per_process(
     caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(_warn_legacy_naive_once, "_warned", False, raising=False)
+    monkeypatch.setattr("nirizan.storage.models._legacy_naive_warned", False)
 
     with caplog.at_level(logging.WARNING):
         _parse_utc_datetime("2025-06-01T12:00:00")
@@ -219,6 +221,38 @@ def test_parse_utc_datetime_warns_once_per_process(
 def test_parse_utc_datetime_malformed_raises_clear_value_error() -> None:
     with pytest.raises(ValueError, match="'not-a-timestamp'"):
         _parse_utc_datetime("not-a-timestamp")
+
+
+def test_the_legacy_warning_latch_is_checked_under_its_lock(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The once-per-process check happens inside the lock, not before it.
+
+    A repository is read from worker threads, so an unguarded check-then-set
+    lets two threads that hit a legacy row at the same moment both warn. This
+    asserts the ordering directly: while the test holds the latch's lock, a
+    second thread calling the warner cannot get past the check. The wait is a
+    bounded ``Event.wait``, never a sleep.
+    """
+    monkeypatch.setattr("nirizan.storage.models._legacy_naive_warned", False)
+    finished = threading.Event()
+    worker = threading.Thread(
+        target=lambda: (_warn_legacy_naive_once("2025-06-01T12:00:00"), finished.set())
+    )
+
+    lock = models._legacy_naive_warning_lock
+    lock.acquire()
+    try:
+        worker.start()
+        # Without the lock the warner returns immediately, so this wait
+        # returning True is the failure signal.
+        assert finished.wait(timeout=0.2) is False
+    finally:
+        lock.release()
+
+    worker.join(timeout=5)
+    assert finished.is_set()
+    assert models._legacy_naive_warned is True
 
 
 def test_span_record_round_trip_normalizes_to_utc() -> None:
