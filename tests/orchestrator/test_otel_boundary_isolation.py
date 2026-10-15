@@ -15,7 +15,9 @@ of the package and by the leg itself, which installs no otel extra).
 
 import asyncio
 import threading
-from datetime import UTC, datetime
+from collections.abc import Iterator
+from datetime import UTC, datetime, timedelta, timezone
+from pathlib import Path
 from uuid import UUID, uuid4
 
 import pytest
@@ -28,6 +30,7 @@ from nirizan.instrumentation.spans import (
 )
 from nirizan.orchestrator.collector import CollectorExporter, TraceCollector
 from nirizan.orchestrator.loop_sink import LoopTraceSink
+from nirizan.storage.trace_repository import SQLiteTraceRepository
 
 START = datetime(2026, 1, 1, tzinfo=UTC)
 
@@ -206,3 +209,223 @@ async def test_collector_round_trips_traces_of_any_span_count(count: int) -> Non
     await collector.stop()
 
     assert len(repository.saved[0].spans) == count
+
+
+# ---------------------------------------------------------------------------
+# The real event loop: collector, thread-hop sink, and SQLite storage together
+# ---------------------------------------------------------------------------
+
+
+class RaisingRepository:
+    """A repository whose ``save`` always fails, like a full disk would."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def save(self, trace: Trace) -> None:
+        self.calls += 1
+        raise RuntimeError("storage is unavailable")
+
+
+@pytest.fixture
+def sqlite_repository(tmp_path: Path) -> Iterator[SQLiteTraceRepository]:
+    repository = SQLiteTraceRepository(str(tmp_path / "traces.db"))
+    yield repository
+    repository.close()
+
+
+class SignallingRepository(SQLiteTraceRepository):
+    """The real repository, plus an event set once a save has completed."""
+
+    def __init__(self, db_path: str) -> None:
+        super().__init__(db_path)
+        self.saved_event = asyncio.Event()
+
+    async def save(self, trace: Trace) -> None:
+        await super().save(trace)
+        self.saved_event.set()
+
+
+async def test_the_full_loop_persists_an_otel_shaped_trace_as_canonical_utc(
+    tmp_path: Path,
+) -> None:
+    """Sink, collector, and SQLite on one real loop: the trace lands in storage.
+
+    This is the production path the bridge uses: a foreign thread calls
+    ``enqueue_trace``, the sink hops onto this loop, and the collector persists
+    through the real repository. A synthetic-parent marker and a non-UTC input
+    both have to survive, with the stored text canonical UTC.
+    """
+    sqlite_repository = SignallingRepository(str(tmp_path / "traces.db"))
+    collector = TraceCollector(sqlite_repository)
+    await collector.start()
+    loop = asyncio.get_running_loop()
+    sink = LoopTraceSink(collector, loop)
+    trace_id = uuid4()
+    local = START.astimezone(timezone(timedelta(hours=5, minutes=30)))
+    orphan_id = uuid4()
+    orphan_parent_id = uuid4()
+    trace = Trace(
+        trace_id=trace_id,
+        application_name="l3-loop",
+        created_at=local,
+        spans=[
+            Span(
+                span_id=uuid4(),
+                trace_id=trace_id,
+                kind=SpanKind.PLANNING,
+                name="root",
+                started_at=local,
+                ended_at=local + timedelta(seconds=1),
+            ),
+            Span(
+                span_id=orphan_id,
+                trace_id=trace_id,
+                parent_span_id=orphan_parent_id,
+                kind=SpanKind.GENERATION,
+                name="orphan-child",
+                started_at=local,
+                ended_at=local + timedelta(seconds=1),
+                attributes={SYNTHETIC_PARENT_ATTRIBUTE: True},
+            ),
+        ],
+    )
+
+    delivered = asyncio.Event()
+
+    def producer() -> None:
+        sink.enqueue_trace(trace)
+        delivered.set()
+
+    worker = threading.Thread(target=producer)
+    worker.start()
+    worker.join(timeout=5)
+    assert delivered.is_set()
+    # Wait for the persistence itself, not just for the enqueue call: the sink
+    # schedules the coroutine and returns without blocking.
+    await asyncio.wait_for(sqlite_repository.saved_event.wait(), timeout=5)
+    await collector.stop()
+
+    stored = await sqlite_repository.get(trace_id)
+    assert stored is not None
+    assert stored.created_at == START
+    assert stored.created_at.utcoffset() == timedelta(0)
+    assert stored.created_at.tzinfo is not None
+    names = {span.name: span for span in stored.spans}
+    assert names["orphan-child"].parent_span_id == orphan_parent_id
+    assert names["orphan-child"].attributes[SYNTHETIC_PARENT_ATTRIBUTE] is True
+    row = sqlite_repository._conn.execute(
+        "SELECT created_at FROM traces WHERE trace_id = ?", (str(trace_id),)
+    ).fetchone()
+    assert row["created_at"] == "2026-01-01T00:00:00+00:00"
+    sqlite_repository.close()
+
+
+async def test_the_loop_sink_is_silent_when_the_loop_is_closed(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A closed loop loses the trace and logs; it never raises at the caller.
+
+    ``enqueue_trace`` is called from the processor's consumer thread, where an
+    exception would kill ingestion entirely, so the failure has to stay inside
+    the adapter.
+    """
+    collector = TraceCollector(RecordingRepository())
+    closed_loop = asyncio.new_event_loop()
+    sink = LoopTraceSink(collector, closed_loop)
+    closed_loop.close()
+
+    with caplog.at_level("ERROR"):
+        sink.enqueue_trace(make_trace())
+
+    assert "Failed to enqueue trace from OTel processor" in caplog.text
+
+
+async def test_the_loop_sink_is_silent_when_the_collector_raises(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A collector that raises on enqueue is logged on the loop, not propagated."""
+
+    class FailingCollector:
+        def __init__(self) -> None:
+            self.attempted = asyncio.Event()
+
+        async def enqueue_trace(self, trace: Trace) -> None:
+            self.attempted.set()
+            raise RuntimeError("collector refused the trace")
+
+    collector = FailingCollector()
+    sink = LoopTraceSink(collector, asyncio.get_running_loop())
+
+    def producer() -> None:
+        sink.enqueue_trace(make_trace())
+
+    worker = threading.Thread(target=producer)
+    worker.start()
+    worker.join(timeout=5)
+    assert not worker.is_alive()
+    # The call itself returned without raising into the calling thread.
+    await asyncio.wait_for(collector.attempted.wait(), timeout=5)
+    # The scheduled coroutine then failed on the loop; its done callback logs.
+    await wait_for_log(caplog, "collector refused the trace")
+
+
+async def wait_for_log(caplog: pytest.LogCaptureFixture, needle: str) -> None:
+    """Wait (bounded) until ``needle`` appears in the captured log records."""
+    for _ in range(50):
+        if needle in caplog.text:
+            return
+        await asyncio.sleep(0.01)
+    raise AssertionError(f"{needle!r} was never logged; log was:\n{caplog.text}")
+
+
+async def test_the_collector_isolates_a_failing_repository(
+    caplog: pytest.LogCaptureFixture,
+    sqlite_repository: SQLiteTraceRepository,
+) -> None:
+    """A repository failure is logged per trace; the collector keeps running."""
+    failing = RaisingRepository()
+    collector = TraceCollector(failing)
+    await collector.start()
+
+    for _ in range(3):
+        await collector.enqueue_trace(make_trace())
+
+    await collector.stop()
+
+    assert failing.calls == 3
+    assert "Error persisting trace in collector worker" in caplog.text
+
+
+async def test_a_failing_repository_does_not_block_the_next_trace(
+    sqlite_repository: SQLiteTraceRepository,
+) -> None:
+    """One failing save must not stop the traces queued behind it."""
+
+    class FailFirstRepository:
+        def __init__(self) -> None:
+            self.inner = sqlite_repository
+            self.calls = 0
+
+        async def save(self, trace: Trace) -> None:
+            self.calls += 1
+            if self.calls == 1:
+                raise RuntimeError("transient failure")
+            await self.inner.save(trace)
+
+    repository = FailFirstRepository()
+    collector = TraceCollector(repository)
+    await collector.start()
+    first, second = (
+        make_trace(application_name="l3-after-failure"),
+        make_trace(application_name="l3-after-failure"),
+    )
+
+    await collector.enqueue_trace(first)
+    await collector.enqueue_trace(second)
+    await collector.stop()
+
+    assert await sqlite_repository.get(first.trace_id) is None
+    stored = await sqlite_repository.get(second.trace_id)
+    assert stored is not None
+    assert stored.trace_id == second.trace_id
