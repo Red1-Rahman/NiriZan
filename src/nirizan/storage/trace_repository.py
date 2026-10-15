@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 from uuid import UUID
 
 from nirizan.instrumentation.spans import Trace
-from nirizan.storage.models import SpanRecord, TraceRecord
+from nirizan.storage.models import SpanRecord, TraceRecord, _parse_utc_datetime
 
 # SQLite builds older than 3.32.0 cap bound variables per statement at 999
 # (SQLITE_MAX_VARIABLE_NUMBER). Stale-span deletes are batched well under that
@@ -16,14 +16,110 @@ _STALE_DELETE_BATCH_SIZE = 500
 
 
 def _normalize_cutoff_to_utc(created_before_iso: str) -> str:
-    """Validate and normalize a timezone-aware ISO-8601 purge cutoff."""
+    """Validate and normalize a timezone-aware ISO-8601 purge cutoff.
+
+    A trailing ``Z`` (UTC designator) is accepted on every supported Python
+    version by normalizing it to ``+00:00`` before parsing, rather than relying
+    on interpreter-version-specific ``fromisoformat`` behavior.
+    """
+    candidate = created_before_iso
+    if candidate.endswith("Z"):
+        candidate = f"{candidate[:-1]}+00:00"
     try:
-        cutoff = datetime.fromisoformat(created_before_iso)
+        cutoff = datetime.fromisoformat(candidate)
     except ValueError as err:
         raise ValueError("created_before_iso must be a valid ISO-8601 datetime.") from err
     if cutoff.tzinfo is None or cutoff.utcoffset() is None:
         raise ValueError("created_before_iso must include a timezone offset.")
     return cutoff.astimezone(UTC).isoformat()
+
+
+def _span_depths(records: list[SpanRecord]) -> dict[str, int]:
+    """Parent depth per span_id (0 = root or out-of-trace parent).
+
+    Walks parent links iteratively with memoization, so deep chains cannot hit
+    the recursion limit. Records are visited in sorted span_id order, and a
+    cycle is cut at the first repeated span, so the result depends only on the
+    stored rows, never on fetch order.
+    """
+    parent_of: dict[str, str | None] = {record.span_id: record.parent_span_id for record in records}
+    depths: dict[str, int] = {}
+
+    for start in sorted(parent_of):
+        if start in depths:
+            continue
+        chain: list[str] = []
+        on_chain: set[str] = set()
+        current: str | None = start
+        base = 0
+        while current is not None:
+            cached = depths.get(current)
+            if cached is not None:
+                base = cached + 1
+                break
+            if current in on_chain:
+                # A stored cycle: cut it here; every read makes the same cut.
+                base = 0
+                break
+            if current not in parent_of:
+                # The parent points outside this trace (or is None): treat as
+                # a root for ordering purposes.
+                base = 0
+                break
+            chain.append(current)
+            on_chain.add(current)
+            current = parent_of[current]
+        else:
+            base = 0
+        level = base
+        for node in reversed(chain):
+            depths[node] = level
+            level += 1
+    return depths
+
+
+def _span_record_from_row(row: sqlite3.Row) -> SpanRecord:
+    """Build a SpanRecord from a stored span row, keeping timestamps as text."""
+    return SpanRecord(
+        span_id=row["span_id"],
+        trace_id=row["trace_id"],
+        parent_span_id=row["parent_span_id"],
+        kind=row["kind"],
+        name=row["name"],
+        started_at=row["started_at"],
+        ended_at=row["ended_at"],
+        attributes_json=row["attributes_json"],
+        input_payload=row["input_payload"],
+        output_payload=row["output_payload"],
+    )
+
+
+def _order_span_records(rows: list[tuple[int, SpanRecord]]) -> list[SpanRecord]:
+    """Final read order for span rows: start instant, then parent depth, then stored order.
+
+    The start instant comes from :func:`_parse_utc_datetime`, so legacy naive
+    rows compare as UTC, exactly like SQLite's ``julianday()`` does on the SQL
+    side. Timestamps are stored at text precision, but a fast nested execution
+    (or a coarse wall clock) can give several spans an identical start value:
+    for those exact ties a parent always precedes its children (parent depth),
+    and any remaining tie keeps stored insertion order, so the result is a
+    total, deterministic order that never invents timestamps.
+    """
+    if len(rows) < 2:
+        return [record for _, record in rows]
+    start_by_span_id = {
+        record.span_id: _parse_utc_datetime(record.started_at) for _, record in rows
+    }
+    depths = _span_depths([record for _, record in rows])
+    ordered = sorted(
+        rows,
+        key=lambda item: (
+            start_by_span_id[item[1].span_id],
+            depths.get(item[1].span_id, 0),
+            item[0],
+        ),
+    )
+    return [record for _, record in ordered]
 
 
 class BaseTraceRepository(ABC):
@@ -106,6 +202,12 @@ class SQLiteTraceRepository(BaseTraceRepository):
                 -- Indexes for fast filtering and time-range queries
                 CREATE INDEX IF NOT EXISTS idx_traces_app_created 
                     ON traces(application_name, created_at DESC);
+                -- Instant-based ordering uses julianday(created_at); this
+                -- expression index lets SQLite satisfy
+                -- ORDER BY julianday(created_at) DESC, created_at DESC
+                -- without a full scan + temp B-tree sort of every trace row.
+                CREATE INDEX IF NOT EXISTS idx_traces_app_julianday 
+                    ON traces(application_name, julianday(created_at));
                 CREATE INDEX IF NOT EXISTS idx_spans_trace_id 
                     ON spans(trace_id);
                 CREATE INDEX IF NOT EXISTS idx_spans_kind_started 
@@ -234,26 +336,14 @@ class SQLiteTraceRepository(BaseTraceRepository):
                     return None
 
                 span_rows = self._conn.execute(
-                    "SELECT * FROM spans WHERE trace_id = ? "
-                    "ORDER BY julianday(started_at) ASC, started_at ASC",
+                    "SELECT rowid, * FROM spans WHERE trace_id = ? "
+                    "ORDER BY julianday(started_at) ASC, started_at ASC, span_id ASC",
                     (trace_id_str,),
                 ).fetchall()
 
-                spans = [
-                    SpanRecord(
-                        span_id=row["span_id"],
-                        trace_id=row["trace_id"],
-                        parent_span_id=row["parent_span_id"],
-                        kind=row["kind"],
-                        name=row["name"],
-                        started_at=row["started_at"],
-                        ended_at=row["ended_at"],
-                        attributes_json=row["attributes_json"],
-                        input_payload=row["input_payload"],
-                        output_payload=row["output_payload"],
-                    )
-                    for row in span_rows
-                ]
+                spans = _order_span_records(
+                    [(row["rowid"], _span_record_from_row(row)) for row in span_rows]
+                )
 
                 return TraceRecord(
                     trace_id=trace_row["trace_id"],
@@ -281,7 +371,8 @@ class SQLiteTraceRepository(BaseTraceRepository):
         def _query_list_locked() -> list[TraceRecord]:
             query = (
                 "SELECT * FROM traces WHERE application_name = ? "
-                "ORDER BY julianday(created_at) DESC, created_at DESC LIMIT ? OFFSET ?"
+                "ORDER BY julianday(created_at) DESC, created_at DESC, trace_id ASC "
+                "LIMIT ? OFFSET ?"
             )
             params = (application_name, limit, offset)
 
@@ -290,25 +381,13 @@ class SQLiteTraceRepository(BaseTraceRepository):
             for row in rows:
                 trace_id = row["trace_id"]
                 span_rows = self._conn.execute(
-                    "SELECT * FROM spans WHERE trace_id = ? "
-                    "ORDER BY julianday(started_at) ASC, started_at ASC",
+                    "SELECT rowid, * FROM spans WHERE trace_id = ? "
+                    "ORDER BY julianday(started_at) ASC, started_at ASC, span_id ASC",
                     (trace_id,),
                 ).fetchall()
-                spans = [
-                    SpanRecord(
-                        span_id=s["span_id"],
-                        trace_id=s["trace_id"],
-                        parent_span_id=s["parent_span_id"],
-                        kind=s["kind"],
-                        name=s["name"],
-                        started_at=s["started_at"],
-                        ended_at=s["ended_at"],
-                        attributes_json=s["attributes_json"],
-                        input_payload=s["input_payload"],
-                        output_payload=s["output_payload"],
-                    )
-                    for s in span_rows
-                ]
+                spans = _order_span_records(
+                    [(s["rowid"], _span_record_from_row(s)) for s in span_rows]
+                )
                 results.append(
                     TraceRecord(
                         trace_id=row["trace_id"],
@@ -330,6 +409,22 @@ class SQLiteTraceRepository(BaseTraceRepository):
 
         def _delete() -> int:
             with self._conn_lock, self._conn:
+                # A malformed created_at makes julianday() return NULL, and
+                # NULL < cutoff is never true, so such a row would silently
+                # survive every purge. Fail loudly instead: the row must be
+                # repaired (or removed) before purging can proceed.
+                malformed = self._conn.execute(
+                    "SELECT trace_id, created_at FROM traces "
+                    "WHERE julianday(created_at) IS NULL"
+                ).fetchall()
+                if malformed:
+                    offenders = ", ".join(
+                        f"{row['trace_id']}={row['created_at']!r}" for row in malformed
+                    )
+                    raise ValueError(
+                        "Cannot purge: stored created_at values are not valid "
+                        f"ISO-8601 datetimes: {offenders}."
+                    )
                 cursor = self._conn.execute(
                     "DELETE FROM traces WHERE julianday(created_at) < julianday(?)",
                     (normalized_cutoff,),

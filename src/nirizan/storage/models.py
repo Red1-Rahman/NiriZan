@@ -5,23 +5,58 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from nirizan._logging import get_logger
 from nirizan.instrumentation.spans import Span, SpanKind, Trace
 from nirizan.metrics.base import MetricResult as MetricResult
 
+logger = get_logger(__name__)
+
+# One-shot flag so a process reading many legacy rows logs exactly one warning.
+# Reset via monkeypatch in tests; never reset in production paths.
+_LEGACY_NAIVE_WARNED: bool = False
+
 
 def _utc_isoformat(value: datetime) -> str:
-    """Serialize an aware datetime in canonical UTC ISO-8601 form."""
+    """Serialize an aware datetime in canonical UTC ISO-8601 form (write path, strict)."""
     if value.tzinfo is None or value.utcoffset() is None:
         raise ValueError("Persisted datetimes must be timezone-aware.")
     return value.astimezone(UTC).isoformat()
 
 
 def _parse_utc_datetime(value: str) -> datetime:
-    """Parse a persisted aware datetime and normalize it to UTC."""
-    parsed = datetime.fromisoformat(value)
+    """Parse a persisted datetime and normalize it to UTC (read path, tolerant).
+
+    A value with no offset is a legacy row written before the canonical-UTC
+    policy. It is interpreted as UTC (matching SQLite ``julianday()`` semantics
+    for offset-less strings), returned as an aware UTC datetime, and logged
+    once per process. The stored row is never rewritten on read.
+
+    A value that is not a valid ISO-8601 datetime raises a clear ``ValueError``
+    naming the stored text, rather than being silently skipped.
+    """
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError as err:
+        raise ValueError(
+            f"Stored timestamp {value!r} is not a valid ISO-8601 datetime."
+        ) from err
     if parsed.tzinfo is None or parsed.utcoffset() is None:
-        raise ValueError("Persisted datetimes must be timezone-aware.")
+        _warn_legacy_naive_once(value)
+        return parsed.replace(tzinfo=UTC)
     return parsed.astimezone(UTC)
+
+
+def _warn_legacy_naive_once(stored_value: str) -> None:
+    """Emit the legacy-row warning at most once per process."""
+    global _LEGACY_NAIVE_WARNED
+    if _LEGACY_NAIVE_WARNED:
+        return
+    _LEGACY_NAIVE_WARNED = True
+    logger.warning(
+        "Stored timestamp %r has no timezone offset; reading it as UTC "
+        "(legacy row, stored value left unchanged).",
+        stored_value,
+    )
 
 
 class SpanRecord(BaseModel):

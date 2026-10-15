@@ -1,5 +1,6 @@
 # tests/storage/test_models.py
-from datetime import UTC, datetime
+import logging
+from datetime import UTC, datetime, timedelta, timezone
 from uuid import uuid4
 
 import pytest
@@ -7,7 +8,14 @@ from pydantic import ValidationError
 
 from nirizan.instrumentation.spans import Span, SpanKind, Trace
 from nirizan.metrics.base import MetricResult
-from nirizan.storage.models import Baseline, Run, SpanRecord, TraceRecord
+from nirizan.storage.models import (
+    Baseline,
+    Run,
+    SpanRecord,
+    TraceRecord,
+    _parse_utc_datetime,
+    _utc_isoformat,
+)
 
 
 def test_span_record_round_trip() -> None:
@@ -135,3 +143,99 @@ def test_baseline_validation() -> None:
             established_at=now,
             label="",
         )
+
+
+# ---------------------------------------------------------------------------
+# Timestamp serialization helpers (write strict / read tolerant)
+# ---------------------------------------------------------------------------
+
+
+def test_utc_isoformat_normalizes_offsets_to_utc() -> None:
+    ist = timezone(timedelta(hours=5, minutes=30))
+
+    result = _utc_isoformat(datetime(2026, 1, 1, 5, 30, tzinfo=ist))
+
+    assert result == "2026-01-01T00:00:00+00:00"
+
+
+def test_utc_isoformat_rejects_naive_datetime() -> None:
+    with pytest.raises(ValueError, match="timezone-aware"):
+        _utc_isoformat(datetime(2026, 1, 1))
+
+
+def test_parse_utc_datetime_normalizes_offset_to_utc() -> None:
+    parsed = _parse_utc_datetime("2026-01-01T05:30:00+05:30")
+
+    assert parsed == datetime(2026, 1, 1, tzinfo=UTC)
+    assert parsed.utcoffset() == timedelta(0)
+
+
+def test_parse_utc_datetime_accepts_z_suffix() -> None:
+    parsed = _parse_utc_datetime("2026-01-01T00:00:00Z")
+
+    assert parsed == datetime(2026, 1, 1, tzinfo=UTC)
+
+
+def test_parse_utc_datetime_reads_naive_as_utc(
+    caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("nirizan.storage.models._LEGACY_NAIVE_WARNED", False)
+
+    with caplog.at_level(logging.WARNING):
+        parsed = _parse_utc_datetime("2025-06-01T12:00:00")
+
+    assert parsed == datetime(2025, 6, 1, 12, 0, tzinfo=UTC)
+    assert parsed.utcoffset() == timedelta(0)
+    warnings = [
+        record
+        for record in caplog.records
+        if record.name == "nirizan.storage.models" and record.levelno >= logging.WARNING
+    ]
+    assert len(warnings) == 1
+    assert "2025-06-01T12:00:00" in warnings[0].getMessage()
+
+
+def test_parse_utc_datetime_warns_once_per_process(
+    caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("nirizan.storage.models._LEGACY_NAIVE_WARNED", False)
+
+    with caplog.at_level(logging.WARNING):
+        _parse_utc_datetime("2025-06-01T12:00:00")
+        _parse_utc_datetime("2025-06-02T12:00:00")
+        _parse_utc_datetime("2025-06-03T12:00:00")
+
+    warnings = [
+        record
+        for record in caplog.records
+        if record.name == "nirizan.storage.models" and record.levelno >= logging.WARNING
+    ]
+    assert len(warnings) == 1
+    # Only the first offending value is named in the warning.
+    assert "2025-06-01T12:00:00" in warnings[0].getMessage()
+
+
+def test_parse_utc_datetime_malformed_raises_clear_value_error() -> None:
+    with pytest.raises(ValueError, match="'not-a-timestamp'"):
+        _parse_utc_datetime("not-a-timestamp")
+
+
+def test_span_record_round_trip_normalizes_to_utc() -> None:
+    ist = timezone(timedelta(hours=5, minutes=30))
+    started = datetime(2026, 1, 1, 5, 30, tzinfo=ist)
+    span = Span(
+        span_id=uuid4(),
+        trace_id=uuid4(),
+        kind=SpanKind.GENERATION,
+        name="offset-span",
+        started_at=started,
+        ended_at=started + timedelta(seconds=1),
+        attributes={},
+    )
+
+    record = SpanRecord.from_span(span)
+    reconstructed = record.to_span()
+
+    assert record.started_at == "2026-01-01T00:00:00+00:00"
+    assert reconstructed.started_at == started.astimezone(UTC)
+    assert reconstructed.ended_at == (started + timedelta(seconds=1)).astimezone(UTC)
