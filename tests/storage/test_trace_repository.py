@@ -58,10 +58,7 @@ def make_trace_with_span_count(
     trace_id: UUID, span_count: int, application_name: str = "storage-tests"
 ) -> Trace:
     """Create a trace with the specified number of spans, each with a unique span_id."""
-    spans = [
-        make_span(trace_id, name=f"span-{i}")
-        for i in range(span_count)
-    ]
+    spans = [make_span(trace_id, name=f"span-{i}") for i in range(span_count)]
     return Trace(
         trace_id=trace_id,
         application_name=application_name,
@@ -100,9 +97,7 @@ async def test_stale_delete_batch_boundaries(
     stale_count: int,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(
-        "nirizan.storage.trace_repository._STALE_DELETE_BATCH_SIZE", 2
-    )
+    monkeypatch.setattr("nirizan.storage.trace_repository._STALE_DELETE_BATCH_SIZE", 2)
 
     trace_id = uuid4()
     trace = make_trace_with_span_count(trace_id, 10)

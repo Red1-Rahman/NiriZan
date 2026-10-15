@@ -197,18 +197,13 @@ class SQLiteTraceRepository(BaseTraceRepository):
                         )
                     ]
                     stale_span_ids = [
-                        span_id
-                        for span_id in existing_span_ids
-                        if span_id not in incoming_span_ids
+                        span_id for span_id in existing_span_ids if span_id not in incoming_span_ids
                     ]
-                    for start in range(
-                        0, len(stale_span_ids), _STALE_DELETE_BATCH_SIZE
-                    ):
+                    for start in range(0, len(stale_span_ids), _STALE_DELETE_BATCH_SIZE):
                         batch = stale_span_ids[start : start + _STALE_DELETE_BATCH_SIZE]
                         placeholders = ", ".join("?" for _ in batch)
                         self._conn.execute(
-                            f"DELETE FROM spans WHERE trace_id = ? "
-                            f"AND span_id IN ({placeholders})",
+                            f"DELETE FROM spans WHERE trace_id = ? AND span_id IN ({placeholders})",
                             (trace_record.trace_id, *batch),
                         )
 
