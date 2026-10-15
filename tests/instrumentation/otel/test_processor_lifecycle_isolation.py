@@ -25,6 +25,7 @@ pytest.importorskip("opentelemetry.sdk")
 
 import queue  # noqa: E402
 import threading  # noqa: E402
+import time  # noqa: E402
 from collections.abc import Callable  # noqa: E402
 from typing import Any  # noqa: E402
 from unittest.mock import patch  # noqa: E402
@@ -49,7 +50,13 @@ T0 = 1_600_000_000_000_000_000
 SECOND = 1_000_000_000
 
 
-def make_span(span_id: int, *, trace_id: int, name: str = "span") -> ReadableSpan:
+def make_span(
+    span_id: int,
+    *,
+    trace_id: int,
+    name: str = "span",
+    attributes: dict[str, object] | None = None,
+) -> ReadableSpan:
     """A finished, kind-recognized single-span trace member."""
     start_ns = T0 + span_id
     return ReadableSpan(
@@ -63,7 +70,7 @@ def make_span(span_id: int, *, trace_id: int, name: str = "span") -> ReadableSpa
         ),
         parent=None,
         resource=Resource({"service.name": "l5-service"}),
-        attributes={NIRIZAN_SPAN_KIND: "generation"},
+        attributes=attributes or {NIRIZAN_SPAN_KIND: "generation"},
         status=Status(StatusCode.UNSET),
         start_time=start_ns,
         end_time=start_ns + SECOND,
@@ -299,3 +306,116 @@ def test_the_drain_reads_the_current_queue_not_a_snapshot() -> None:
     processor._drain_and_flush()
 
     assert len(sink.traces) == 3
+
+
+# ---------------------------------------------------------------------------
+# Concurrency on a live processor
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.filterwarnings("error::ResourceWarning")
+def test_eight_producer_threads_keep_every_accounting_invariant() -> None:
+    """Eight live producer threads: nothing escapes, and every count adds up.
+
+    One test rather than eight small ones because the invariant only means
+    something across threads: every produced span is either delivered or
+    counted, the buffer cap holds throughout, ``force_flush`` completes inside
+    its timeout, and the consumer thread is gone once ``shutdown`` returns.
+    Waiting is always a bounded join or a bounded flush, never a sleep.
+    """
+    sink = RecordingSink()
+    producer_count = 8
+    traces_each = 20
+    trace_cap = 4
+    processor = NiriZanSpanProcessor(
+        sink,
+        max_buffered_traces=trace_cap,
+        # A long idle timeout keeps the consumer from flushing between
+        # producers; the cap is the only eviction this test exercises.
+        idle_timeout_seconds=3_600.0,
+        max_trace_age_seconds=7_200.0,
+    )
+    consumer_name = processor._consumer.name
+    failures: list[BaseException] = []
+    peak_buffers: list[int] = []
+    original_buffer_span = processor._buffer_span
+
+    def recording_buffer_span(span: ReadableSpan) -> None:
+        """Record the buffer occupancy right after each buffered span."""
+        original_buffer_span(span)
+        peak_buffers.append(len(processor._buffers))
+
+    def produce(worker: int) -> None:
+        try:
+            for index in range(1, traces_each + 1):
+                trace_id = (worker << 32) | index
+                # A trace with an open span is never quiescent, so it stays
+                # buffered until the cap evicts it. That is what puts real
+                # pressure on the cap: without it the buffers would just grow
+                # to the size of the backlog.
+                processor.on_start(make_span(1, trace_id=trace_id))
+                processor.on_end(make_span(2, trace_id=trace_id))
+                # One span per trace carries an unrecognized kind: it is
+                # dropped, and dropped means counted, so the produced spans and
+                # the delivered-plus-counted spans are the same number.
+                processor.on_end(
+                    make_span(
+                        3,
+                        trace_id=trace_id,
+                        attributes={NIRIZAN_SPAN_KIND: "not-a-real-kind"},
+                    )
+                )
+        except BaseException as err:  # noqa: BLE001 - the point is to catch it
+            failures.append(err)
+
+    workers = [
+        threading.Thread(target=produce, args=(worker,)) for worker in range(1, producer_count + 1)
+    ]
+    with patch.object(processor, "_buffer_span", recording_buffer_span):
+        for worker in workers:
+            worker.start()
+        for worker in workers:
+            worker.join(timeout=60)
+            assert not worker.is_alive()
+
+    assert failures == []
+    assert processor.force_flush(timeout_millis=30_000) is True
+
+    stats = processor.get_stats()
+    assert stats.get("unrecognized_kind") == producer_count * traces_each
+    assert stats.get("consumer_error", 0) == 0
+    assert stats.get("queue_full", 0) == 0
+    assert stats.get("invalid_span_context", 0) == 0
+    # Every produced span is accounted for: delivered in a trace, or counted.
+    delivered_spans = sum(len(trace.spans) for trace in sink.traces)
+    assert delivered_spans + stats.get("unrecognized_kind", 0) == producer_count * traces_each * 2
+    assert len(sink.traces) == producer_count * traces_each
+    assert len({trace.trace_id for trace in sink.traces}) == producer_count * traces_each
+    # A trace can be evicted between its open span and its finished one, so a
+    # delivered trace carries one or two spans, never a mixed-up third trace.
+    assert all(1 <= len(trace.spans) <= 2 for trace in sink.traces)
+    # The cap held throughout the run, not just at the end: the occupancy is
+    # sampled right after every buffered span, and may exceed the cap only by
+    # the single span whose arrival triggers enforcement.
+    assert peak_buffers
+    assert max(peak_buffers) <= trace_cap + 1
+    assert len(processor._buffers) <= trace_cap
+
+    processor.shutdown()
+
+    assert not processor._consumer.is_alive()
+    assert consumer_name not in {thread.name for thread in threading.enumerate()}
+
+
+@pytest.mark.filterwarnings("error::ResourceWarning")
+def test_force_flush_on_a_stopped_processor_returns_within_its_timeout() -> None:
+    """``force_flush`` is bounded by its timeout even when nothing can drain."""
+    processor = NiriZanSpanProcessor(RecordingSink(), clock=FakeClock())
+    processor.shutdown()
+    started = time.monotonic()
+
+    assert processor.force_flush(timeout_millis=200) is False
+
+    # Generous upper bound (the timeout is 200 ms) so this checks the bound
+    # rather than the scheduler.
+    assert time.monotonic() - started < 10.0
