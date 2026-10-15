@@ -1,5 +1,5 @@
 # tests/storage/test_models.py
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from uuid import uuid4
 
 import pytest
@@ -11,7 +11,7 @@ from nirizan.storage.models import Baseline, Run, SpanRecord, TraceRecord
 
 
 def test_span_record_round_trip() -> None:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     span = Span(
         span_id=uuid4(),
         trace_id=uuid4(),
@@ -41,7 +41,7 @@ def test_span_record_round_trip() -> None:
 
 
 def test_trace_record_round_trip() -> None:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     session_id = uuid4()
     trace = Trace(
         trace_id=uuid4(),
@@ -65,7 +65,7 @@ def test_trace_record_round_trip() -> None:
 
 
 def test_run_validation() -> None:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     trace_id = uuid4()
     valid_run = Run(
         run_id=uuid4(),
@@ -106,7 +106,7 @@ def test_run_validation() -> None:
 
 
 def test_baseline_validation() -> None:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     valid_baseline = Baseline(
         baseline_id=uuid4(),
         system_type="rag_agent",

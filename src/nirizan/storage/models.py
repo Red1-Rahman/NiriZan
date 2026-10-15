@@ -1,7 +1,6 @@
 # src/nirizan/storage/models.py
 import json
 from datetime import datetime
-from typing import Optional
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -15,14 +14,14 @@ class SpanRecord(BaseModel):
 
     span_id: str
     trace_id: str
-    parent_span_id: Optional[str] = None
+    parent_span_id: str | None = None
     kind: str
     name: str
     started_at: str
     ended_at: str
     attributes_json: str = "{}"
-    input_payload: Optional[str] = None
-    output_payload: Optional[str] = None
+    input_payload: str | None = None
+    output_payload: str | None = None
 
     @classmethod
     def from_span(cls, span: Span) -> "SpanRecord":
@@ -62,9 +61,9 @@ class TraceRecord(BaseModel):
     application_name: str
     created_at: str
     spans: list[SpanRecord] = Field(default_factory=list)
-    code_commit: Optional[str] = None
-    data_snapshot_id: Optional[str] = None
-    session_id: Optional[str] = None
+    code_commit: str | None = None
+    data_snapshot_id: str | None = None
+    session_id: str | None = None
 
     @classmethod
     def from_trace(cls, trace: Trace) -> "TraceRecord":
