@@ -43,7 +43,11 @@ def _warn_legacy_naive_once(stored_value: str) -> None:
     """Emit the legacy-row warning at most once per process."""
     if getattr(_warn_legacy_naive_once, "_warned", False):
         return
-    _warn_legacy_naive_once._warned = True
+    # The latch lives on the function rather than in a module global so that a
+    # test can reset it without touching module state other readers share.
+    # ``setattr`` is used because mypy does not allow attribute access on a
+    # plain function object.
+    setattr(_warn_legacy_naive_once, "_warned", True)
     logger.warning(
         "Stored timestamp %r has no timezone offset; reading it as UTC "
         "(legacy row, stored value left unchanged).",
