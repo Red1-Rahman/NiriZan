@@ -27,21 +27,6 @@ Redwan Rahman
 License
 -------
 Apache-2.0
-
-Citation
---------
-Rahman, R. NiriZan (Version 0.5.0) [Computer software].
-https://github.com/Red1-Rahman/NiriZan
-
-BibTeX
-------
-@software{Rahman_NiriZan,
-  author = {Rahman, Redwan},
-  license = {Apache-2.0},
-  title = {{NiriZan}},
-  url = {https://github.com/Red1-Rahman/NiriZan},
-  version = {0.5.0}
-}
 """
 
 __all__: list[str] = []

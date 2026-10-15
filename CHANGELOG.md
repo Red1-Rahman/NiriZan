@@ -24,6 +24,7 @@ considered stable.
 
 ### Changed
 
+- **Removed hardcoded BibTeX citation blocks** from all submodule `__init__.py` files (`instrumentation/`, `metrics/`, `gate/`, `regression/`, `trust/`, `orchestrator/`, `storage/`, `reporting/`). Version metadata is now maintained only in `pyproject.toml` and `src/nirizan/__init__.py`, eliminating a maintenance hazard where submodule citation versions drifted independently (e.g., `instrumentation/` cited `0.5.0`, `trust/` cited `0.3.0`, `orchestrator/` and `storage/` cited `0.1.0`, `reporting/` cited `0.2.0`).
 - **Content capture is disabled by default** in both OpenTelemetry export and ingestion. Prompt, completion, retrieval, tool, and planning content is withheld unless explicitly enabled.
 - **Stashed NiriZan identifiers are no longer trusted by default.** Set `trust_stashed_ids=True` to recover NiriZan IDs from OpenTelemetry attributes; otherwise, identifiers are derived from OpenTelemetry IDs.
 - **Trace and span integrity is enforced.** Missing parent links must be explicitly marked as synthetic. During ingestion, genuinely missing local parents can be represented by synthetic-parent metadata under `orphan_policy="emit"`; children of dropped spans are re-attached to surviving in-trace ancestors without being marked synthetic solely because of that re-attachment.
