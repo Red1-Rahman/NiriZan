@@ -95,3 +95,55 @@ def test_the_doc_guard_covers_every_otel_bridge_module() -> None:
     }
 
     assert on_disk == set(OTEL_BRIDGE_MODULES)
+
+
+def _release_section(document: str, version: str) -> str:
+    """The ``## ...version...`` section of ``document``, headings excluded."""
+    lines = document.splitlines()
+    start = next(
+        (
+            index
+            for index, line in enumerate(lines)
+            if line.startswith("## ") and version in line
+        ),
+        None,
+    )
+    assert start is not None, f"no release section for {version}"
+    end = next(
+        (index for index in range(start + 1, len(lines)) if lines[index].startswith("## ")),
+        len(lines),
+    )
+    return "\n".join(lines[start:end])
+
+
+def test_contracts_document_the_zero_five_zero_breaking_change() -> None:
+    """A breaking release needs a marked contracts section and a migration path.
+
+    The Versioning Rule at the bottom of ``docs/contracts.md`` requires three
+    things for a breaking change: a section titled with the release and marked
+    as a breaking change, a stated migration path, and a version bump. The
+    first two are checked here; the version bump is pinned by the release
+    documentation test above.
+    """
+    contracts = (ROOT / "docs" / "contracts.md").read_text(encoding="utf-8")
+    headings = [
+        line for line in contracts.splitlines() if line.startswith("#") and "0.5.0" in line
+    ]
+
+    assert headings, "docs/contracts.md has no section titled with release 0.5.0"
+    assert all("Breaking Change" in heading for heading in headings)
+    section = _release_section(contracts, "0.5.0")
+    assert "**Migration path for callers:**" in section
+    assert "**Migration path for persisted data:**" in section
+
+
+def test_changelog_marks_the_zero_five_zero_breaking_entries() -> None:
+    """The 0.5.0 changelog entry must label its breaking changes as breaking.
+
+    ``CHANGELOG.md`` states that breaking changes on a ``0.x`` release are a
+    minor bump and are called out explicitly, so a release that changes
+    contract behavior has to say so in the same words the rule uses.
+    """
+    changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+
+    assert "**Breaking:**" in _release_section(changelog, "0.5.0")

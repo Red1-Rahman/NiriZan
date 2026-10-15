@@ -117,6 +117,14 @@ flowchart TB
 - Content-bearing attributes are opt-in in both directions. Structural metadata
   is retained by default; prompts, completions, retrieval data, tool arguments,
   and planning content require an explicit capture setting.
+- **Design decision:** the bridge is an optional dependency group, not a
+  soft dependency. Core packages are forbidden from importing either
+  `opentelemetry` or the adapter, by import-linter contracts and by an AST
+  scan that also covers the root package. That is why
+  `SYNTHETIC_PARENT_ATTRIBUTE` and the other shared constants live in core and
+  the adapter imports them from there: a core-only install has to be able to
+  carry data the bridge produced (a synthetic-parent marker is plain core
+  data), so the marker cannot live in the adapter.
 - **Design decision:** persistence and OTel delivery are decoupled from the request/response cycle where the configured adapter supports queueing. The core `Tracer` does not create a background task automatically: it awaits its configured exporter inline when the root span closes.
 
 #### OpenTelemetry ingest and delivery flow
@@ -139,6 +147,32 @@ cross-trace spans and unmarked dangling parents. A missing local OTel parent is
 marked synthetic only when `orphan_policy="emit"`; children of dropped,
 unrecognized, duplicate, or unconvertible spans are re-attached to surviving
 ancestors without being marked synthetic solely because of that re-attachment.
+
+#### How OTel isolation is verified
+
+The optional extra is a promise about what a core-only install does, so it is
+verified as a set of independent layers rather than by a single test:
+
+| Layer | What it pins | Where |
+|---|---|---|
+| L1 | Every core module imports, and a full tracer to collector to SQLite pipeline runs, with `opentelemetry*` imports blocked in a subprocess; `to_otel` and `from_otel` raise a plain `ImportError` naming the missing package | `tests/test_otel_isolation.py` |
+| L2 | The *installed* distribution gates every OpenTelemetry requirement behind `extra == "otel"`, and the core requirement set is unchanged | `tests/test_otel_isolation.py` |
+| L3 | The orchestrator boundary is OpenTelemetry-blind: the collector, the thread-hop sink, and a real SQLite repository round trip a synthetic-parent trace on a real event loop, and closed-loop, failing-collector, and failing-repository paths stay isolated | `tests/orchestrator/test_otel_boundary_isolation.py`, `tests/orchestrator/test_loop_sink.py` |
+| L4 | Storage persists OTel-shaped traces (synthetic parents, provenance attributes, recovered session IDs) with no OpenTelemetry dependency | `tests/storage/test_otel_storage_boundary_isolation.py` |
+| L5 | Buffer caps and stats hold on every intake path, including the shutdown drain, and under eight concurrent producer threads | `tests/instrumentation/otel/test_processor_lifecycle_isolation.py` |
+| L6 | Round-trip fidelity: the two adapters are inverses on real trace shapes, and `capture_content=False` covers known content attributes without filtering custom ones | `tests/instrumentation/otel/test_conversion_roundtrip_isolation.py` |
+| L7 | With both directions on one provider there is no export/ingest feedback loop, the core trace shape is identical with the bridge active and unused, and export does not mutate its input | `tests/instrumentation/otel/test_tracer_exporter_isolation.py` |
+
+Two static layers sit alongside the dynamic ones: an AST scan of the core
+package for any import of `opentelemetry` or the adapter (independent of the
+linter contracts, so it also covers `nirizan/__init__.py`, which cannot be a
+contract source), and `import-linter`'s forbidden and layers contracts in
+`pyproject.toml`. CI runs the suite twice over: once with the extra installed
+and once without, on the minimum supported Python and the latest stable, and
+the core-only legs assert that `import opentelemetry` fails before running the
+suite. What the bridge *promises* is written down in
+[`contracts.md`](contracts.md#open-telemetry-adapter-contracts-instrumentationotel);
+this section covers only how the boundary is enforced.
 
 ### 3.2 Evaluator Orchestrator
 
@@ -180,12 +214,59 @@ This is intentionally modular so new metrics can be added without changing the o
 - Stores raw traces, inputs, intermediate retrieval steps, and final outputs.
 - Trace upserts preserve existing trace rows and update spans only when the
   existing span belongs to the same trace; a span ID collision across traces
-  raises instead of stealing or replacing the existing span.
+  raises instead of stealing or replacing the existing span. A save replaces
+  the trace's stored span set with the incoming one.
 - Parent links are integrity-checked at the model boundary. Missing parents
   are allowed only when an ingest adapter marks the link with the synthetic
   parent attribute.
 - Every run is versioned against a specific code commit and data/prompt configuration snapshot, so any two runs are comparable.
 - Maintains historical baselines used by the Regression Detector.
+
+#### Timestamp storage form
+
+**Why canonical UTC text.** Every timestamp is written as `datetime.isoformat()`
+of the value converted with `astimezone(UTC)`, so a stored row reads back as
+one canonical string regardless of the offset the writer happened to use. The
+write path rejects a naive datetime outright, because a naive value has no
+single correct interpretation and guessing one at write time is how a database
+ends up with two rows that claim to be at the same instant but are not.
+
+**Why `julianday()`.** SQLite has no native timestamp type, so ordering and
+range filtering on stored text depend on every writer using the same offset,
+which cannot be assumed for rows written before the canonical-UTC policy or by
+anything outside this code path. `julianday()` parses an ISO-8601 string into a
+Julian day number and normalizes the offset away, which gives SQL a true
+instant for both legacy and canonical rows, so listing and purge compare by
+instant rather than by string. Its cost is resolution: a Julian day number is a
+floating-point value whose precision is around one millisecond, so SQL can only
+separate spans whose starts differ by more than a millisecond. Reads therefore
+re-sort the fetched rows in Python on the exact instant, and the SQL ordering is
+only the coarse pre-sort. That two-stage ordering is a deliberate trade: correct
+instant semantics in both languages in exchange for one extra sort of the rows
+of a single trace.
+
+**Indexing.** `idx_traces_app_julianday` is an expression index on
+`(application_name, julianday(created_at))`, so the instant-ordered listing
+query is satisfied by the index rather than by scanning and sorting every trace
+row of the application. The span-level ordering has no expression index: it is
+scanned over the rows of one trace (bounded by `idx_spans_trace_id`), which is
+small enough that a scan plus a Python sort is cheaper than maintaining another
+index.
+
+**Malformed rows.** A stored timestamp that is not ISO-8601 at all is never
+guessed at. A read raises `ValueError` naming the stored text, because a
+silently dropped or coerced timestamp is indistinguishable from a correct one.
+Purge fails loudly for the same reason: `julianday()` returns NULL for such a
+row, and a NULL never compares less than a cutoff, so the row would survive
+every purge forever while looking protected.
+
+**Ordering tiebreaks.** Listing orders by instant descending, then by
+`trace_id` ascending, so pagination over traces that share a creation timestamp
+is a total order with no gaps and no duplicates. Spans order by start instant,
+then by parent depth (a parent precedes its children when a coarse clock gives
+them the same start), then by stored order. Stored order, not `span_id`, is the
+final tiebreak: it is the one key that is always defined, and it never invents
+a timestamp.
 
 ### 3.6 Regression Detection
 

@@ -145,9 +145,15 @@ class BaseTraceRepository(ABC):
 **Contract guarantees:**
 
 * `get` returns `None` for a missing trace, it does not raise. Callers that need "trace must exist" semantics wrap this themselves; the repository stays a dumb, honest store.
-* `list_by_application` returns descending creation-time results with limit/offset pagination.
-* `purge_older_than` requires a timezone-aware ISO-8601 timestamp, normalizes the cutoff to UTC, removes traces older than that instant, and returns the number of deleted trace rows. Legacy offset-bearing rows are compared by instant until they are migrated.
+* `list_by_application` returns descending creation-time results with limit/offset pagination. Ties on creation time are broken by `trace_id` ascending, so paginating a set of traces that share a timestamp returns a total, gap-free order.
+* `save` is a replacement, not a merge: the stored span set for a trace becomes exactly the span set of the incoming `Trace`, including the empty set. A `span_id` that already belongs to a different trace is rejected with `ValueError`, and the whole save is rolled back.
+* `save` and `purge_older_than` reject naive (offset-less) datetimes. Every timestamp written is canonical UTC ISO-8601 text (`datetime.isoformat()` of the value converted with `astimezone(UTC)`).
+* `purge_older_than` requires a timezone-aware ISO-8601 timestamp, normalizes the cutoff to UTC, removes traces strictly older than that instant (a trace exactly at the cutoff is kept), and returns the number of deleted trace rows.
+* Reads are tolerant: a stored timestamp with no offset is a legacy row, it is interpreted as UTC, returned as a timezone-aware UTC `datetime`, and logged once per process. A stored timestamp that is not ISO-8601 at all raises `ValueError` naming the stored text. A legacy row is never rewritten on read.
+* Legacy offset-bearing rows are compared by instant, not by string, everywhere: listing, span ordering, and purge.
 * No method here accepts or returns anything from `metrics/`, `regression/`, or `reporting/`. This is Phase 1's boundary and it stays that narrow.
+
+The 0.5.0 changes to these guarantees, and the migration path for existing databases, are recorded in the **Release 0.5.0 Breaking Change** section below.
 
 ### OpenTelemetry adapter contracts (`instrumentation/otel/`)
 
@@ -169,7 +175,11 @@ its own OTel trace.
 is exported, but prompt, completion, retrieval, tool, and planning content is
 withheld unless capture is explicitly enabled. Legacy semantic-convention
 aliases remain enabled by default and can be disabled with
-`emit_legacy_attributes=False`.
+`emit_legacy_attributes=False`. `capture_content=False` covers the known
+content attributes listed in `semconv.CONTENT_ATTRIBUTE_KEYS` and nothing
+else: an attribute NiriZan does not own is copied through unchanged whether
+capture is on or off, on both the export and the ingest side. A caller who
+puts prompt text under a custom attribute key is responsible for that key.
 
 #### `NiriZanSpanProcessor` and `ThreadSafeTraceSink`
 
@@ -190,6 +200,15 @@ provenance is recorded as `derived`. Stashed session IDs require both
 `trust_stashed_ids=True` and membership in the explicitly configured
 `trusted_session_ids` allowlist; a session ID supplied by an otherwise
 untrusted OTel producer is ignored.
+
+The processor buffers at most `max_buffered_traces` traces and
+`max_buffered_spans` spans at any moment, on every intake path: the live
+consumer loop and the drain that `shutdown` performs. A backlog that
+accumulated while the consumer was blocked is drained under the same cap, so
+the peak buffer size does not depend on how much was queued while the
+processor was not draining. Exceeding a cap evicts the oldest traces, which
+logs a warning and counts `evicted_open_trace`; `force_flush` requests are not
+buffered and therefore never cause an eviction.
 
 `LoopTraceSink` is the supported bridge from this synchronous sink to the
 async `TraceCollector`. It schedules `enqueue_trace` on the collector's event
@@ -957,6 +976,34 @@ class MultivariateComparator:
 * Permutation seeds are derived deterministically from `(run_id, baseline_id)`. The two methods use seeds `seed` and `seed + 1`, so two evaluations of the same comparison produce byte-identical results, including across process restarts.
 * `MetricResult` is only accepted through `compare_metric_results`, never `compare` directly. `compare` requires pre-built `ScoreMatrix` objects, since building them is the step that enforces the row-alignment the structure tests depend on.
 * The comparator is stateless apart from its frozen `MultivariateConfig`. Two instances constructed with the same config behave identically for the same inputs.
+
+---
+
+## Release 0.5.0 (2026-10-15): Breaking Change, canonical UTC storage, `save` replacement semantics, and marked synthetic parents
+
+This section documents the breaking changes made to the Phase 1 `Trace` contract and to `BaseTraceRepository` in release 0.5.0, per the Versioning Rule at the bottom of this document. The OpenTelemetry adapter contracts above are unchanged by this section.
+
+**What changed:**
+
+1. **Naive datetimes are rejected by `save`.** A `Trace` (or `Span`) whose `created_at`, `started_at`, or `ended_at` is naive, meaning it carries no UTC offset, raises `ValueError` before any row is written. The save is rejected whole: a naive span inside an otherwise valid trace leaves the database exactly as it was. Previously a naive value was written as text and read back as whatever the reader assumed its offset was.
+2. **`purge_older_than` requires a timezone-aware cutoff and normalizes it to UTC.** A cutoff with no offset raises `ValueError`; a cutoff that is not ISO-8601 at all raises `ValueError`. A trailing `Z` is accepted on every supported Python version. The normalized cutoff is compared by instant, so a trace exactly at the cutoff is kept and only strictly older traces are deleted.
+3. **Stored legacy rows without an offset are read as UTC.** A stored timestamp with no offset is interpreted as UTC (matching SQLite `julianday()` semantics for offset-less text), and the `datetime` handed back to a caller is timezone-aware UTC. This is a type change for consumers: code that previously read `trace.created_at` as a naive `datetime` and re-attached its own local offset now sees a value that is already UTC, so such code double-shifts its timestamps. One warning is logged per process the first time such a row is read. The stored row is never rewritten on read, and the read path does not re-validate the reconstructed `Trace`, so a legacy row with data a current validator would reject still reads successfully.
+4. **`save` replaces the stored span set and rejects a cross-trace span id collision.** Saving an existing trace now makes the stored spans exactly the incoming spans: mutable fields are updated and spans absent from the incoming trace are removed, including when the incoming trace has no spans at all. A `span_id` already stored under a different `trace_id` raises `ValueError` and rolls the whole save back, instead of silently overwriting the other trace's span. Previously `save` upserted and cascaded.
+5. **`Trace` accepts an out-of-trace parent only when it is marked synthetic.** A span whose `parent_span_id` is not among the trace's own spans is rejected by the model validator unless its attributes contain `SYNTHETIC_PARENT_ATTRIBUTE = "nirizan.parent.synthetic"` with the value `True`. This narrows what `Trace` accepts: a `Trace` that used to validate with an unmarked dangling parent now raises.
+
+**Why this is breaking, not additive:** the Versioning Rule treats a narrowed type, a changed field meaning, and a new failure mode as breaking even when no field was removed. Points 1, 2, 3, and 4 each turn a previously accepted input into a `ValueError` or change the value a caller reads back; point 5 rejects a shape the model previously accepted. None of them is reachable by a caller who already passes aware datetimes and single-owner spans, which is why they ship together as one documented policy rather than as silent behavior drift.
+
+**Migration path for callers:**
+
+- Callers must pass timezone-aware datetimes to `save`. Where a value is produced with `datetime.now()` or `datetime.utcnow()`, use `datetime.now(UTC)`. Where a value arrives as text, parse it and attach the offset the source actually means; if the source does not say, treat it as UTC, which is what the reader now does.
+- Callers must pass a timezone-aware cutoff to `purge_older_than`. `"2026-01-01T00:00:00Z"` and `"2026-01-01T00:00:00+00:00"` are both accepted and mean the same instant; `"2026-01-01T00:00:00"` is now an error.
+- Consumers that read `trace.created_at`, `span.started_at`, or `span.ended_at` from a repository must stop re-interpreting them as local time. The values are already UTC, so the migration is to delete the local-offset re-attachment, not to add one.
+- Callers that relied on `save` merging into an existing trace must send the full span set on every save. A partial save is a replacement, so a caller that saves an unrelated subset of spans will delete the rest.
+- Callers that assembled a `Trace` with a dangling parent must set `SYNTHETIC_PARENT_ATTRIBUTE` on the orphaned span, or re-attach the parent into the trace.
+
+**Migration path for persisted data:** existing databases need no migration step and no rewrite. Rows are read as they are: offset-bearing rows are compared and returned by instant, and offset-less rows are interpreted as UTC and returned aware. The canonical-UTC text form applies to rows written after this release; a stored legacy row keeps its stored text until the trace is saved again. Nothing is rewritten in the background, and no row is deleted by this release.
+
+**Version bump:** ships in 0.5.0.
 
 ---
 
