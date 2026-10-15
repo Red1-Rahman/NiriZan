@@ -11,11 +11,6 @@ from nirizan.metrics.base import MetricResult as MetricResult
 
 logger = get_logger(__name__)
 
-# One-shot flag so a process reading many legacy rows logs exactly one warning.
-# Reset via monkeypatch in tests; never reset in production paths.
-_LEGACY_NAIVE_WARNED: bool = False
-
-
 def _utc_isoformat(value: datetime) -> str:
     """Serialize an aware datetime in canonical UTC ISO-8601 form (write path, strict)."""
     if value.tzinfo is None or value.utcoffset() is None:
@@ -46,10 +41,9 @@ def _parse_utc_datetime(value: str) -> datetime:
 
 def _warn_legacy_naive_once(stored_value: str) -> None:
     """Emit the legacy-row warning at most once per process."""
-    global _LEGACY_NAIVE_WARNED
-    if _LEGACY_NAIVE_WARNED:
+    if getattr(_warn_legacy_naive_once, "_warned", False):
         return
-    _LEGACY_NAIVE_WARNED = True
+    _warn_legacy_naive_once._warned = True
     logger.warning(
         "Stored timestamp %r has no timezone offset; reading it as UTC "
         "(legacy row, stored value left unchanged).",
