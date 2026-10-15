@@ -75,6 +75,16 @@ async def test_save_many_stale_spans_under_low_variable_limit(
         pytest.skip("sqlite3.Connection.setlimit not available (Python < 3.11)")
 
     repository._conn.setlimit(sqlite3.SQLITE_LIMIT_VARIABLE_NUMBER, 999)
+    # Guard against a no-op setup: many SQLite builds default to 32766, so
+    # assert the limit is actually lowered before relying on it.
+    assert repository._conn.getlimit(sqlite3.SQLITE_LIMIT_VARIABLE_NUMBER) == 999
+
+    # Prove the lowered limit is enforced on this build: a statement binding
+    # 1,000 variables must fail, so the batched save below is genuinely
+    # exercising the batching rather than passing by default headroom.
+    too_many = ", ".join("?" for _ in range(1000))
+    with pytest.raises(sqlite3.OperationalError, match="too many SQL variables"):
+        repository._conn.execute(f"SELECT {too_many}", tuple(range(1000)))
 
     trace_id = uuid4()
     trace = make_trace_with_span_count(trace_id, 3000)
@@ -187,7 +197,7 @@ async def test_stale_delete_does_not_touch_other_traces(
 
 
 @pytest.mark.asyncio
-async def test_cross_trace_span_collision_rolls_back_stale_delete(
+async def test_cross_trace_span_collision_rolls_back_partial_save(
     repository: SQLiteTraceRepository,
 ) -> None:
     trace_a_id = uuid4()
@@ -198,10 +208,15 @@ async def test_cross_trace_span_collision_rolls_back_stale_delete(
     await repository.save(trace_a)
     await repository.save(trace_b)
 
-    stolen_span_id = trace_b.spans[0].span_id
-    kept_spans = trace_a.spans[:3]
-    stolen_span = make_span(trace_a_id, span_id=stolen_span_id, name="stolen")
-    updated_a = trace_a.model_copy(update={"spans": list(kept_spans) + [stolen_span]})
+    # The first incoming span updates an already-stored row (its name
+    # changes), so the upsert loop mutates the database before the failure.
+    # The stolen span comes last in the incoming list, so the collision is
+    # detected only after that earlier update has executed. The failed save
+    # must roll the earlier update back along with everything else.
+    changed = trace_a.spans[0].model_copy(update={"name": "changed"})
+    kept_spans = [changed, *trace_a.spans[1:3]]
+    stolen_span = make_span(trace_a_id, span_id=trace_b.spans[0].span_id, name="stolen")
+    updated_a = trace_a.model_copy(update={"spans": [*kept_spans, stolen_span]})
 
     with pytest.raises(ValueError, match="already belongs to another trace"):
         await repository.save(updated_a)
@@ -209,9 +224,12 @@ async def test_cross_trace_span_collision_rolls_back_stale_delete(
     stored_a = await repository.get(trace_a_id)
     stored_b = await repository.get(trace_b_id)
 
+    # All 5 original spans survive: the 2 stale spans were not deleted and
+    # the name change on span 0 was rolled back to its original value.
     assert stored_a is not None
     assert len(stored_a.spans) == 5
     assert {s.span_id for s in stored_a.spans} == {s.span_id for s in trace_a.spans}
+    assert {s.name for s in stored_a.spans} == {s.name for s in trace_a.spans}
 
     assert stored_b is not None
     assert len(stored_b.spans) == 5
