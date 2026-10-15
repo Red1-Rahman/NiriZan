@@ -26,7 +26,8 @@ pytest.importorskip("opentelemetry.sdk")
 import queue  # noqa: E402
 import threading  # noqa: E402
 import time  # noqa: E402
-from collections.abc import Callable  # noqa: E402
+from collections.abc import Callable, Iterator  # noqa: E402
+from contextlib import contextmanager  # noqa: E402
 from typing import Any  # noqa: E402
 from unittest.mock import patch  # noqa: E402
 
@@ -313,6 +314,42 @@ def test_the_drain_reads_the_current_queue_not_a_snapshot() -> None:
 # ---------------------------------------------------------------------------
 
 
+@contextmanager
+def record_thread_failures(into: list[BaseException]) -> Iterator[None]:
+    """Record anything a thread in this region dies of, Exception or not.
+
+    Collecting through ``threading.excepthook`` rather than an
+    ``except BaseException`` inside each worker keeps this from swallowing
+    ``KeyboardInterrupt`` and ``SystemExit``: the hook observes an exception
+    that escaped a thread, it does not decide to carry on after one.
+    """
+
+    def hook(args: object) -> None:
+        exc_value = getattr(args, "exc_value", None)
+        if isinstance(exc_value, BaseException):
+            into.append(exc_value)
+
+    previous = threading.excepthook
+    threading.excepthook = hook
+    try:
+        yield
+    finally:
+        threading.excepthook = previous
+
+
+def test_the_thread_failure_hook_records_an_escaping_exception() -> None:
+    """Guard the guard: the mechanism the concurrency test relies on records."""
+    failures: list[BaseException] = []
+
+    with record_thread_failures(failures):
+        worker = threading.Thread(target=lambda: 1 / 0)
+        worker.start()
+        worker.join(timeout=5)
+
+    assert not worker.is_alive()
+    assert [type(error) for error in failures] == [ZeroDivisionError]
+
+
 @pytest.mark.filterwarnings("error::ResourceWarning")
 def test_eight_producer_threads_keep_every_accounting_invariant() -> None:
     """Eight live producer threads: nothing escapes, and every count adds up.
@@ -346,32 +383,32 @@ def test_eight_producer_threads_keep_every_accounting_invariant() -> None:
         peak_buffers.append(len(processor._buffers))
 
     def produce(worker: int) -> None:
-        try:
-            for index in range(1, traces_each + 1):
-                trace_id = (worker << 32) | index
-                # A trace with an open span is never quiescent, so it stays
-                # buffered until the cap evicts it. That is what puts real
-                # pressure on the cap: without it the buffers would just grow
-                # to the size of the backlog.
-                processor.on_start(make_span(1, trace_id=trace_id))
-                processor.on_end(make_span(2, trace_id=trace_id))
-                # One span per trace carries an unrecognized kind: it is
-                # dropped, and dropped means counted, so the produced spans and
-                # the delivered-plus-counted spans are the same number.
-                processor.on_end(
-                    make_span(
-                        3,
-                        trace_id=trace_id,
-                        attributes={NIRIZAN_SPAN_KIND: "not-a-real-kind"},
-                    )
+        for index in range(1, traces_each + 1):
+            trace_id = (worker << 32) | index
+            # A trace with an open span is never quiescent, so it stays
+            # buffered until the cap evicts it. That is what puts real
+            # pressure on the cap: without it the buffers would just grow
+            # to the size of the backlog.
+            processor.on_start(make_span(1, trace_id=trace_id))
+            processor.on_end(make_span(2, trace_id=trace_id))
+            # One span per trace carries an unrecognized kind: it is
+            # dropped, and dropped means counted, so the produced spans and
+            # the delivered-plus-counted spans are the same number.
+            processor.on_end(
+                make_span(
+                    3,
+                    trace_id=trace_id,
+                    attributes={NIRIZAN_SPAN_KIND: "not-a-real-kind"},
                 )
-        except BaseException as err:  # noqa: BLE001 - the point is to catch it
-            failures.append(err)
+            )
 
     workers = [
         threading.Thread(target=produce, args=(worker,)) for worker in range(1, producer_count + 1)
     ]
-    with patch.object(processor, "_buffer_span", recording_buffer_span):
+    with (
+        record_thread_failures(failures),
+        patch.object(processor, "_buffer_span", recording_buffer_span),
+    ):
         for worker in workers:
             worker.start()
         for worker in workers:
