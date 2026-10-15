@@ -20,7 +20,7 @@ from uuid import UUID, uuid4
 import pytest
 
 from nirizan.instrumentation.spans import Span, SpanKind, Trace
-from nirizan.storage.models import TraceRecord
+from nirizan.storage.models import TraceRecord, _OnceLatch
 from nirizan.storage.trace_repository import SQLiteTraceRepository
 
 START = datetime(2026, 1, 1, tzinfo=UTC)
@@ -121,9 +121,8 @@ def raw_created_at(repository: SQLiteTraceRepository, trace_id: UUID) -> str | N
 async def test_get_reads_legacy_naive_row_as_utc_with_single_warning(
     repository: SQLiteTraceRepository,
     caplog: pytest.LogCaptureFixture,
-    monkeypatch: pytest.MonkeyPatch,
+    fresh_legacy_latch: _OnceLatch,
 ) -> None:
-    monkeypatch.setattr("nirizan.storage.models._legacy_naive_warned", False)
     trace_id = uuid4()
     span_id = uuid4()
     insert_trace_row(repository, trace_id, "2025-06-01T12:00:00")
@@ -161,9 +160,8 @@ async def test_get_reads_legacy_naive_row_as_utc_with_single_warning(
 @pytest.mark.asyncio
 async def test_list_reads_legacy_naive_row_as_utc(
     repository: SQLiteTraceRepository,
-    monkeypatch: pytest.MonkeyPatch,
+    fresh_legacy_latch: _OnceLatch,
 ) -> None:
-    monkeypatch.setattr("nirizan.storage.models._legacy_naive_warned", False)
     trace_id = uuid4()
     insert_trace_row(repository, trace_id, "2025-06-01T12:00:00")
     repository._conn.commit()
@@ -194,10 +192,9 @@ async def test_get_with_validate_false_keeps_legacy_naive_read_working() -> None
 @pytest.mark.asyncio
 async def test_legacy_naive_span_ordering_matches_instant_order(
     repository: SQLiteTraceRepository,
-    monkeypatch: pytest.MonkeyPatch,
+    fresh_legacy_latch: _OnceLatch,
 ) -> None:
     """Naive spans order among aware spans by their implied UTC instant."""
-    monkeypatch.setattr("nirizan.storage.models._legacy_naive_warned", False)
     trace_id = uuid4()
     naive_id = uuid4()
     aware_id = uuid4()

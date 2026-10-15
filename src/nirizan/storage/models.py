@@ -12,11 +12,36 @@ from nirizan.metrics.base import MetricResult as MetricResult
 
 logger = get_logger(__name__)
 
-# Latch for the once-per-process legacy-row warning; see
-# ``_warn_legacy_naive_once``. A test resets the flag (never the lock) to get a
-# clean warning count.
-_legacy_naive_warning_lock = threading.Lock()
-_legacy_naive_warned = False
+
+class _OnceLatch:
+    """A thread-safe latch that only the first caller can claim.
+
+    The legacy-row warning is emitted at most once per process, and a
+    repository is read from worker threads, so the check-and-set has to be a
+    single atomic step: two threads hitting a legacy row for the first time at
+    the same moment must not both warn. Holding the lock for the claim only
+    keeps the logging call itself outside the critical section.
+
+    The flag lives on an instance rather than in a module-level global so that
+    it cannot be read and written without the lock that protects it.
+    """
+
+    def __init__(self) -> None:
+        self.lock = threading.Lock()
+        self.claimed = False
+
+    def claim(self) -> bool:
+        """Return ``True`` for the first caller only, ``False`` for every later one."""
+        with self.lock:
+            if self.claimed:
+                return False
+            self.claimed = True
+            return True
+
+
+# A test resets the warning count by replacing this latch (never by mutating
+# ``claimed`` behind the lock's back).
+_legacy_naive_warning_latch = _OnceLatch()
 
 
 def _utc_isoformat(value: datetime) -> str:
@@ -48,19 +73,9 @@ def _parse_utc_datetime(value: str) -> datetime:
 
 
 def _warn_legacy_naive_once(stored_value: str) -> None:
-    """Emit the legacy-row warning at most once per process.
-
-    The latch is a module-level flag guarded by a lock rather than an attribute
-    on this function: a repository is read from worker threads, so two threads
-    hitting a legacy row for the first time at the same moment must not both
-    pass an unguarded check and warn twice. Holding the lock only for the
-    check-and-set keeps the logging call itself outside the critical section.
-    """
-    global _legacy_naive_warned
-    with _legacy_naive_warning_lock:
-        if _legacy_naive_warned:
-            return
-        _legacy_naive_warned = True
+    """Emit the legacy-row warning at most once per process."""
+    if not _legacy_naive_warning_latch.claim():
+        return
     logger.warning(
         "Stored timestamp %r has no timezone offset; reading it as UTC "
         "(legacy row, stored value left unchanged).",
