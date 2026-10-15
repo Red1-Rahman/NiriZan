@@ -25,6 +25,8 @@ pytest.importorskip("opentelemetry.sdk")
 
 import threading  # noqa: E402
 from dataclasses import dataclass  # noqa: E402
+from datetime import UTC, datetime  # noqa: E402
+from uuid import uuid4  # noqa: E402
 
 from opentelemetry.sdk.trace import ReadableSpan, TracerProvider  # noqa: E402
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor  # noqa: E402
@@ -32,6 +34,7 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import (  # noqa: E4
     InMemorySpanExporter,
 )
 
+from nirizan.instrumentation.exporters import BaseExporter, InMemoryExporter  # noqa: E402
 from nirizan.instrumentation.otel.from_otel import NiriZanSpanProcessor  # noqa: E402
 from nirizan.instrumentation.otel.semconv import (  # noqa: E402
     NIRIZAN_INSTRUMENTATION_SCOPE,
@@ -39,7 +42,7 @@ from nirizan.instrumentation.otel.semconv import (  # noqa: E402
     NIRIZAN_SPAN_KIND,
 )
 from nirizan.instrumentation.otel.to_otel import NiriZanToOTelExporter  # noqa: E402
-from nirizan.instrumentation.spans import SpanKind, Trace  # noqa: E402
+from nirizan.instrumentation.spans import Span, SpanKind, Trace  # noqa: E402
 from nirizan.instrumentation.tracer import Tracer as NiriZanTracer  # noqa: E402
 
 pytestmark = pytest.mark.otel
@@ -282,3 +285,126 @@ async def test_parenting_survives_the_shared_provider_round_trip(bridge: Bridge)
     assert by_name["retrieve"].parent.span_id == plan_id
     assert by_name["generate"].parent is not None
     assert by_name["generate"].parent.span_id == plan_id
+
+
+# ---------------------------------------------------------------------------
+# Core parity: attaching the bridge changes nothing about core tracing
+# ---------------------------------------------------------------------------
+
+
+def normalized_shape(trace: Trace) -> dict[str, object]:
+    """A trace reduced to the facts the bridge must not affect.
+
+    Identifiers and timestamps differ between two runs of the same program, so
+    parity is checked on the structure the core tracer produced: application
+    name, span names and kinds, the parent *name* of each span, and the
+    attribute keys. Nothing here is time- or id-dependent, so the comparison is
+    deterministic.
+    """
+    names = {span.span_id: span.name for span in trace.spans}
+    return {
+        "application_name": trace.application_name,
+        "has_session": trace.session_id is not None,
+        "spans": sorted(
+            (
+                span.name,
+                span.kind.value,
+                names.get(span.parent_span_id, "<root>"),
+                tuple(sorted(span.attributes)),
+                span.input_payload is not None,
+                span.output_payload is not None,
+            )
+            for span in trace.spans
+        ),
+    }
+
+
+class FanOutExporter(BaseExporter):
+    """Delivers each trace to several exporters, in order, like an app would."""
+
+    def __init__(self, *exporters: BaseExporter) -> None:
+        self._exporters = exporters
+
+    async def export(self, trace: Trace) -> None:
+        for exporter in self._exporters:
+            await exporter.export(trace)
+
+
+async def test_the_same_run_produces_the_same_shape_with_and_without_the_bridge() -> None:
+    """Core parity: an active bridge does not change what the core tracer emits.
+
+    The same three-span run is executed twice: once with the bridge wired to a
+    real provider next to an in-memory core exporter, and once with only the
+    core exporter. The trace handed to the core exporter must have the same
+    normalized shape both times, so an application that switches the bridge on
+    does not silently get different data out of the core tracer.
+    """
+    bridged = make_bridge(application_name="l7-parity")
+    recorder = InMemoryExporter()
+    parity_tracer = NiriZanTracer(
+        "l7-parity",
+        exporter=FanOutExporter(
+            recorder,
+            NiriZanToOTelExporter(
+                tracer=bridged.provider.get_tracer(NIRIZAN_INSTRUMENTATION_SCOPE, "parity")
+            ),
+        ),
+    )
+    try:
+        await run_trace(parity_tracer)
+    finally:
+        bridged.provider.shutdown()
+
+    plain_exporter = InMemoryExporter()
+    plain = NiriZanTracer("l7-parity", exporter=plain_exporter)
+    await run_trace(plain)
+
+    with_bridge = recorder.get_traces()
+    without_bridge = plain_exporter.get_traces()
+    assert len(with_bridge) == 1
+    assert len(without_bridge) == 1
+
+    assert normalized_shape(with_bridge[0]) == normalized_shape(without_bridge[0])
+    # The bridge really was active in the first run, so the equality above is
+    # a comparison of two different paths rather than of one path with itself.
+    assert bridged.processor.get_stats() == {"own_scope_skipped": 3}
+    assert len(bridged.finished()) == 3
+
+
+async def test_exporting_a_trace_does_not_mutate_the_input_trace(bridge: Bridge) -> None:
+    """The exporter treats the caller's ``Trace`` as read-only.
+
+    ``Trace`` is a shared value object that the caller may keep and reuse;
+    export writing into it (an ingest stamp, a normalized name) would corrupt
+    the caller's copy, so the model dump is compared before and after.
+    """
+    trace = _single_span_trace()
+    before = trace.model_dump(mode="json")
+
+    await bridge.exporter.export(trace)
+    assert bridge.flush() is True
+
+    assert trace.model_dump(mode="json") == before
+
+
+def _single_span_trace() -> Trace:
+    """A minimal trace built directly, without the core tracer's timing."""
+    trace_id = uuid4()
+    return Trace(
+        trace_id=trace_id,
+        application_name="l7-mutation",
+        created_at=datetime(2026, 1, 1, tzinfo=UTC),
+        spans=[
+            Span(
+                span_id=uuid4(),
+                trace_id=trace_id,
+                kind=SpanKind.GENERATION,
+                name="single",
+                started_at=datetime(2026, 1, 1, tzinfo=UTC),
+                ended_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC),
+                attributes={"key": "value"},
+                input_payload="in",
+                output_payload="out",
+            )
+        ],
+    )
