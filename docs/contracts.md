@@ -332,6 +332,14 @@ marked synthetic solely because of that re-attachment. A span whose parent is
 remote becomes a root. An unmarked dangling parent is rejected as a
 data-integrity error.
 
+A synthetic parent does not survive a full export-then-ingest round trip: the
+exporter anchors such a span under a synthetic *remote* OTel parent, and
+ingestion maps a remote parent back to a root, so the span returns as a root
+that still carries the marker. This is the documented consequence of the rule
+above, not data loss of the span or its marker; a consumer that needs to know
+the span was orphaned upstream must read the marker attribute, because the
+parent link is not the durable fact here.
+
 ---
 
 ## Phase 2 Contracts: RAG Triad Metrics
