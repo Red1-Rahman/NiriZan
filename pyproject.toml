@@ -105,6 +105,9 @@ forbidden_modules = ["nirizan.regression", "nirizan.gate", "nirizan.reporting", 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+markers = [
+    "otel: requires the optional opentelemetry extra; skipped when it is not installed (run with -m 'not otel' to deselect)",
+]
 
 [tool.mypy]
 python_version = "3.11"

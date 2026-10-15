@@ -1117,8 +1117,18 @@ class NiriZanSpanProcessor(SpanProcessor):
                 if _is_start_marker(item):
                     _, otel_trace_id, ts = item
                     self._guarded(self._mark_span_started, otel_trace_id, ts)
+                    # Same cap as the live path: a start marker creates a
+                    # buffer, so a drained backlog cannot grow the buffer
+                    # set unboundedly before the final flush.
+                    self._enforce_buffer_cap()
                     continue
                 self._guarded(self._buffer_span, item)
+                # Same cap as the live path: enforce after every drained span
+                # so a backlog that accumulated while the consumer was busy
+                # (or blocked) cannot push the buffers past max_buffered_traces
+                # / max_buffered_spans in one unbounded gulp. Evicted traces
+                # are flushed, not dropped, so nothing queued is lost.
+                self._enforce_buffer_cap()
 
             self._flush_all(reason="shutdown")
         finally:
