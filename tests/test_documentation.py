@@ -101,11 +101,7 @@ def _release_section(document: str, version: str) -> str:
     """The ``## ...version...`` section of ``document``, headings excluded."""
     lines = document.splitlines()
     start = next(
-        (
-            index
-            for index, line in enumerate(lines)
-            if line.startswith("## ") and version in line
-        ),
+        (index for index, line in enumerate(lines) if line.startswith("## ") and version in line),
         None,
     )
     assert start is not None, f"no release section for {version}"
@@ -126,9 +122,7 @@ def test_contracts_document_the_zero_five_zero_breaking_change() -> None:
     documentation test above.
     """
     contracts = (ROOT / "docs" / "contracts.md").read_text(encoding="utf-8")
-    headings = [
-        line for line in contracts.splitlines() if line.startswith("#") and "0.5.0" in line
-    ]
+    headings = [line for line in contracts.splitlines() if line.startswith("#") and "0.5.0" in line]
 
     assert headings, "docs/contracts.md has no section titled with release 0.5.0"
     assert all("Breaking Change" in heading for heading in headings)

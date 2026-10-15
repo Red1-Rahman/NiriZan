@@ -11,6 +11,7 @@ from nirizan.metrics.base import MetricResult as MetricResult
 
 logger = get_logger(__name__)
 
+
 def _utc_isoformat(value: datetime) -> str:
     """Serialize an aware datetime in canonical UTC ISO-8601 form (write path, strict)."""
     if value.tzinfo is None or value.utcoffset() is None:
@@ -45,9 +46,7 @@ def _warn_legacy_naive_once(stored_value: str) -> None:
         return
     # The latch lives on the function rather than in a module global so that a
     # test can reset it without touching module state other readers share.
-    # ``setattr`` is used because mypy does not allow attribute access on a
-    # plain function object.
-    setattr(_warn_legacy_naive_once, "_warned", True)
+    _warn_legacy_naive_once._warned = True  # type: ignore[attr-defined]  # mypy: a function object has no attributes
     logger.warning(
         "Stored timestamp %r has no timezone offset; reading it as UTC "
         "(legacy row, stored value left unchanged).",
