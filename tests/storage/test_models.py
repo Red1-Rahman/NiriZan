@@ -15,6 +15,7 @@ from nirizan.storage.models import (
     TraceRecord,
     _parse_utc_datetime,
     _utc_isoformat,
+    _warn_legacy_naive_once,
 )
 
 
@@ -179,7 +180,7 @@ def test_parse_utc_datetime_accepts_z_suffix() -> None:
 def test_parse_utc_datetime_reads_naive_as_utc(
     caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr("nirizan.storage.models._LEGACY_NAIVE_WARNED", False)
+    monkeypatch.setattr(_warn_legacy_naive_once, "_warned", False, raising=False)
 
     with caplog.at_level(logging.WARNING):
         parsed = _parse_utc_datetime("2025-06-01T12:00:00")
@@ -198,7 +199,7 @@ def test_parse_utc_datetime_reads_naive_as_utc(
 def test_parse_utc_datetime_warns_once_per_process(
     caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr("nirizan.storage.models._LEGACY_NAIVE_WARNED", False)
+    monkeypatch.setattr(_warn_legacy_naive_once, "_warned", False, raising=False)
 
     with caplog.at_level(logging.WARNING):
         _parse_utc_datetime("2025-06-01T12:00:00")
