@@ -272,6 +272,84 @@ async def test_purge_accepts_cutoff_with_trailing_z(
 
 
 @pytest.mark.asyncio
+async def test_purge_rejects_a_cutoff_that_is_not_an_iso_datetime(
+    repository: SQLiteTraceRepository,
+) -> None:
+    """A cutoff that is not a datetime at all is a ValueError, not a silent no-op.
+
+    ``purge_older_than`` parses the cutoff before touching the database, so an
+    unparseable string must leave every stored row exactly where it was.
+    """
+    trace_id = uuid4()
+    insert_trace_row(repository, trace_id, "2026-01-01T00:00:00+00:00")
+    repository._conn.commit()
+
+    with pytest.raises(ValueError, match="valid ISO-8601"):
+        await repository.purge_older_than("not-a-timestamp")
+
+    assert raw_created_at(repository, trace_id) == "2026-01-01T00:00:00+00:00"
+
+
+@pytest.mark.parametrize(
+    ("stored", "expected_utc_text"),
+    [
+        # +06:00, +05:30 (a half-hour offset) and -03:30 (a negative half-hour
+        # offset) all have to normalize to the same canonical UTC form.
+        ("2026-01-01T06:00:00+06:00", "2026-01-01T00:00:00+00:00"),
+        ("2026-01-01T05:30:00+05:30", "2026-01-01T00:00:00+00:00"),
+        ("2025-12-31T20:30:00-03:30", "2026-01-01T00:00:00+00:00"),
+        # A ``Z`` designator is the same instant written the other way; it is
+        # canonicalized to ``+00:00`` rather than stored verbatim.
+        ("2026-01-01T00:00:00Z", "2026-01-01T00:00:00+00:00"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_every_supported_offset_round_trips_to_canonical_utc_text(
+    repository: SQLiteTraceRepository,
+    stored: str,
+    expected_utc_text: str,
+) -> None:
+    """Each supported offset form is stored as canonical UTC text and read back.
+
+    The read-back assertions matter as much as the stored text: a row written
+    with an offset has to come back as the same instant in UTC, not as a
+    reinterpreted wall clock.
+    """
+    trace_id = uuid4()
+    insert_trace_row(repository, trace_id, stored)
+    insert_span_row(
+        repository,
+        trace_id,
+        uuid4(),
+        started_at=stored,
+        ended_at="2026-01-01T00:00:01+00:00",
+    )
+    repository._conn.commit()
+
+    read_back = await repository.get(trace_id)
+    assert read_back is not None
+    assert read_back.created_at == datetime(2026, 1, 1, tzinfo=UTC)
+    assert read_back.spans[0].started_at == datetime(2026, 1, 1, tzinfo=UTC)
+
+    local = datetime.fromisoformat(stored)
+    await repository.save(
+        Trace(
+            trace_id=trace_id,
+            application_name="timestamp-tests",
+            created_at=local,
+            spans=[make_span(trace_id, started_at=local, ended_at=local)],
+        )
+    )
+
+    assert raw_created_at(repository, trace_id) == expected_utc_text
+    stored_span_row = repository._conn.execute(
+        "SELECT started_at, ended_at FROM spans WHERE trace_id = ?", (str(trace_id),)
+    ).fetchone()
+    assert stored_span_row["started_at"] == expected_utc_text
+    assert stored_span_row["ended_at"] == expected_utc_text
+
+
+@pytest.mark.asyncio
 async def test_mixed_offset_rows_order_by_instant_not_string(
     repository: SQLiteTraceRepository,
 ) -> None:
@@ -614,3 +692,65 @@ async def test_list_pagination_breaks_created_at_ties_deterministically(
     # Equal created_at ties fall back to trace_id ascending, which is stable
     # regardless of SQLite's unspecified row order.
     assert observed == trace_ids
+
+
+@pytest.mark.asyncio
+async def test_equal_start_and_depth_keep_stored_insertion_order(
+    repository: SQLiteTraceRepository,
+) -> None:
+    """Sibling spans with the same start instant come back in stored order.
+
+    The SQL key cannot separate them (identical ``julianday`` and identical
+    text), and neither can parent depth, since they are all roots. The final
+    tiebreak is stored insertion order, so the read is still total and
+    deterministic; this pins that behavior so a future change to it is
+    deliberate.
+    """
+    trace_id = uuid4()
+    # Deliberately insert in an order that differs from span_id order.
+    span_ids = [
+        UUID("00000000-0000-0000-0000-0000000000ff"),
+        UUID("00000000-0000-0000-0000-0000000000aa"),
+        UUID("00000000-0000-0000-0000-000000000055"),
+    ]
+    insert_trace_row(repository, trace_id, "2026-01-01T00:00:00+00:00")
+    for span_id in span_ids:
+        insert_span_row(
+            repository,
+            trace_id,
+            span_id,
+            started_at="2026-01-01T00:00:00.000000+00:00",
+            ended_at="2026-01-01T00:00:01.000000+00:00",
+        )
+    repository._conn.commit()
+
+    first = await repository.get(trace_id)
+    second = await repository.get(trace_id)
+
+    assert first is not None and second is not None
+    assert [span.span_id for span in first.spans] == span_ids
+    assert [span.span_id for span in second.spans] == span_ids
+
+
+@pytest.mark.asyncio
+async def test_naive_trace_timestamp_is_rejected_before_any_row_is_written(
+    repository: SQLiteTraceRepository,
+) -> None:
+    """A naive ``created_at`` fails the write path before the transaction opens."""
+    trace_id = uuid4()
+
+    with pytest.raises(ValueError, match="timezone-aware"):
+        await repository.save(
+            Trace(
+                trace_id=trace_id,
+                application_name="timestamp-tests",
+                created_at=datetime(2026, 1, 1),
+                spans=[make_span(trace_id, name="valid")],
+            )
+        )
+
+    assert raw_created_at(repository, trace_id) is None
+    traces_left = repository._conn.execute("SELECT count(*) AS n FROM traces").fetchone()
+    spans_left = repository._conn.execute("SELECT count(*) AS n FROM spans").fetchone()
+    assert traces_left["n"] == 0
+    assert spans_left["n"] == 0
