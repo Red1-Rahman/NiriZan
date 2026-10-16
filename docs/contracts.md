@@ -1056,17 +1056,38 @@ This section documents the breaking changes made to the Phase 1 `Trace` contract
 
 ## Import Direction Rule (applies to every phase)
 
-To keep the "no circular dependency" requirement enforceable by tooling and not just by good intentions, imports flow in one direction only:
+To keep the "no circular dependency" requirement enforceable by tooling and not
+just by good intentions, `lint-imports` enforces the layer order declared in
+`pyproject.toml`. The order is listed from the most dependent layer to the
+least dependent layer; imports may flow only to the right:
 
 ```text
-instrumentation  →  orchestrator  →  metrics  →  trust
-                                            ↘         ↘
-                                             storage → regression → gate → reporting
+reporting → gate → regression → orchestrator → trust → storage → metrics → instrumentation
 ```
 
-A module may import from anything to its left in this chain. It may never import from anything to its right. `storage/models.py` is the one exception: because `Run` and `Baseline` embed `MetricResult`, `storage/models.py` is permitted to import the `MetricResult` type from `metrics/base.py` specifically, and nothing else from `metrics/`. If you find yourself importing `regression` from inside `metrics/`, or `reporting` from inside `storage/`, stop, that import is the circular dependency this rule exists to prevent, and the fix is to move the shared type into `storage/models.py` or `metrics/base.py`, not to add the import and suppress the warning.
+The `root` package and `_logging` are not layers in this import-linter
+contract. The generated dependency graph may show their actual edges, but
+those edges are not assertions made by the layer contract.
 
-Phase 6 additions respect this rule: `regression/multivariate.py` imports from `metrics/base.py`, `metrics/stats.py`, and `regression/comparator.py`, all of which sit to its left. It is imported by `gate/verdict.py` and `reporting/dashboard.py`, both of which sit to its right. No new edges cross the chain in the wrong direction.
+There is one additional, explicit import-linter contract for
+`storage.models`: it forbids imports of `regression`, `gate`, `reporting`, and
+`trust`. This is a separate forbidden-import rule, not an exception to the
+layer order. The current configuration permits `storage.models` to import
+modules in the lower `metrics` layer; it does not narrow that permission to
+`metrics.base` only. If that narrower boundary is desired, the
+`pyproject.toml` contract must be tightened.
+
+The OpenTelemetry boundaries are also enforced by separate forbidden-import
+contracts: core modules cannot import `opentelemetry` or
+`nirizan.instrumentation.otel`. If you find yourself importing `regression`
+from inside `metrics/`, or `reporting` from inside `storage/`, stop: those
+imports violate the layer contract.
+
+Phase 6 additions respect this rule: `regression/multivariate.py` imports from
+`metrics/base.py`, `metrics/stats.py`, and `regression/comparator.py`, all of
+which are to its right or in the same layer. It is imported by
+`gate/verdict.py` and `reporting/dashboard.py`, both of which are to its left.
+No new edges cross the enforced layer direction.
 
 `ruff`'s `TID` (flake8-tidy-imports) rules are configured in `pyproject.toml` to ban relative imports project-wide, which forces every cross-module import to be explicit and absolute (`from nirizan.metrics.base import Metric`), making violations of this rule easy to spot in review rather than hidden behind `from ..metrics import base`.
 
