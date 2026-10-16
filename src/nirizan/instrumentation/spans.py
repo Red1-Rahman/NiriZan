@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from enum import Enum
+from enum import StrEnum
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -22,7 +22,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 SYNTHETIC_PARENT_ATTRIBUTE: str = "nirizan.parent.synthetic"
 
 
-class SpanKind(str, Enum):
+class SpanKind(StrEnum):
     """The functional role of an execution span."""
 
     PLANNING = "planning"

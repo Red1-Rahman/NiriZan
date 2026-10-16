@@ -1,7 +1,7 @@
 # src/nirizan/regression/comparator.py
 from __future__ import annotations
 
-from enum import Enum
+from enum import StrEnum
 from uuid import UUID
 
 import numpy as np
@@ -21,7 +21,7 @@ from nirizan.regression.thresholds import (
 logger = get_logger(__name__)
 
 
-class RegressionSeverity(str, Enum):
+class RegressionSeverity(StrEnum):
     NONE = "none"
     WARNING = "warning"
     BLOCKING = "blocking"

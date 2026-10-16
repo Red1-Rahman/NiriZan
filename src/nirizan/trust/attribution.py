@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from enum import Enum
+from enum import StrEnum
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
@@ -15,7 +15,7 @@ from nirizan.metrics.stats import (
 )
 
 
-class DriftAttribution(str, Enum):
+class DriftAttribution(StrEnum):
     NONE = "none"
     SYSTEM_DRIFT = "system_drift"
     JUDGE_DRIFT = "judge_drift"

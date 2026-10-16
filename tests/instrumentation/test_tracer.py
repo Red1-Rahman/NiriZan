@@ -11,9 +11,9 @@ async def test_tracer_parent_child_linking() -> None:
     tracer = Tracer(application_name="test_tracer_app", exporter=exporter)
 
     async with tracer.start_span("root_span", SpanKind.PLANNING) as root_handle:
-        async with tracer.start_span("child_span_1", SpanKind.RETRIEVAL) as child1_handle:
+        async with tracer.start_span("child_span_1", SpanKind.RETRIEVAL):
             pass
-        async with tracer.start_span("child_span_2", SpanKind.GENERATION) as child2_handle:
+        async with tracer.start_span("child_span_2", SpanKind.GENERATION):
             pass
 
     traces = exporter.get_traces()

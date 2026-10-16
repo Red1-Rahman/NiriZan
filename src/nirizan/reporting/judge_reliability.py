@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from enum import Enum
+from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -14,7 +14,7 @@ logger = get_logger(__name__)
 DEFAULT_JUDGE_DRIFT_RATE_WARNING = 0.10
 
 
-class JudgeReliabilityStatus(str, Enum):
+class JudgeReliabilityStatus(StrEnum):
     """Coarse status for the Judge Reliability Panel, analogous to RegressionSeverity."""
 
     STABLE = "stable"

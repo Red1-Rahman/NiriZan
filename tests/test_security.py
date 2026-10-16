@@ -35,8 +35,7 @@ BANNED_NETWORK_MODULES = {"socket", "urllib", "urllib3", "requests", "httpx", "a
 
 
 def _iter_python_files():
-    for p in ROOT.rglob("*.py"):
-        yield p
+    yield from ROOT.rglob("*.py")
 
 
 def _get_call_name(node):

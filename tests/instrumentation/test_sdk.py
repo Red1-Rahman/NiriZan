@@ -74,8 +74,8 @@ async def test_sdk_convenience_decorators_and_payloads(
 
     async with start_session() as session_id:
         p = await do_plan("how to test")
-        r = await fetch("doc123")
-        t = await calc("1+1")
+        await fetch("doc123")
+        await calc("1+1")
         g = await generate(prompt=p)
 
     assert g == "final answer"
