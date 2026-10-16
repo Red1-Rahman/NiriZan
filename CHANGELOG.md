@@ -10,6 +10,12 @@ While NiriZan is on a `0.x` version, breaking changes are reflected in a
 jump to `1.0.0` is reserved for the point the public contract surface is
 considered stable.
 
+## [0.5.1] - 2026-10-16
+
+### Changed
+
+- Bumped the package version to `0.5.1` to make the CI happy.
+
 ## [0.5.0] - 2026-10-16
 
 ### Added
@@ -240,5 +246,6 @@ published on 2026-08-23.
 - Security-focused CI/CD and supply-chain controls; PyPI publishing via
   GitHub Actions Trusted Publishing.
 
+[0.5.1]: https://github.com/Red1-Rahman/NiriZan/releases/tag/v0.5.1
 [0.5.0]: https://github.com/Red1-Rahman/NiriZan/releases/tag/v0.5.0
 [0.1.0]: https://github.com/Red1-Rahman/NiriZan/releases/tag/v0.1.0
