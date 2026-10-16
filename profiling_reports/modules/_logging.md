@@ -1,15 +1,15 @@
 # Profile: `src/nirizan/_logging.py`
 
 - Functions executed: **4**
-- Total internal time: **0.000053 s**
+- Total internal time: **0.000052 s**
 
 ## Executed functions (sorted by cumulative time)
 
 | Function | Line | ncalls | tottime (s) | tottime/call | cumtime (s) | cumtime/call | Top external callees (cumtime) |
 | :--- | ---: | ---: | ---: | ---: | ---: | ---: | :--- |
-| `get_logger` | 23 | 13 | 0.000028 | 0.000002 | 0.000378 | 0.000029 | stdlib:logging 0.000350s |
-| `<module> (import time)` | 1 | 1 | 0.000025 | 0.000025 | 0.000163 | 0.000163 | stdlib:typing 0.000069s, built-ins (C) 0.000038s, stdlib:logging 0.000032s |
-| `NiriZanFormatter` | 31 | 1 | 0.000000 | 0.000000 | 0.000000 | 0.000000 | - |
+| `get_logger` | 23 | 14 | 0.000028 | 0.000002 | 0.000374 | 0.000027 | stdlib:logging 0.000346s |
+| `<module> (import time)` | 1 | 1 | 0.000023 | 0.000023 | 0.000142 | 0.000142 | stdlib:typing 0.000051s, built-ins (C) 0.000036s, stdlib:logging 0.000032s |
+| `NiriZanFormatter` | 31 | 1 | 0.000001 | 0.000001 | 0.000001 | 0.000001 | - |
 | `_NiriZanStreamHandler` | 15 | 1 | 0.000000 | 0.000000 | 0.000000 | 0.000000 | - |
 
 ## Functions never executed by the tests

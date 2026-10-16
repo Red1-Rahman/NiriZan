@@ -1,23 +1,23 @@
 # Profile: `src/nirizan/orchestrator/collector.py`
 
 - Functions executed: **13**
-- Total internal time: **0.000211 s**
+- Total internal time: **0.000652 s**
 
 ## Executed functions (sorted by cumulative time)
 
 | Function | Line | ncalls | tottime (s) | tottime/call | cumtime (s) | cumtime/call | Top external callees (cumtime) |
 | :--- | ---: | ---: | ---: | ---: | ---: | ---: | :--- |
-| `TraceCollector._process_queue` | 84 | 24 | 0.000066 | 0.000003 | 0.004796 | 0.000200 | stdlib:asyncio 0.000330s, stdlib:_weakrefset 0.000004s |
-| `TraceCollector.__init__` | 45 | 5 | 0.000034 | 0.000007 | 0.003475 | 0.000695 | stdlib:asyncio 0.000046s |
-| `_resolve_code_commit` | 14 | 5 | 0.000025 | 0.000005 | 0.003379 | 0.000676 | stdlib:subprocess 0.003336s, frozen/internal 0.000017s |
-| `CollectorExporter.export` | 103 | 7 | 0.000009 | 0.000001 | 0.000177 | 0.000025 | - |
-| `TraceCollector.enqueue_trace` | 74 | 7 | 0.000021 | 0.000003 | 0.000168 | 0.000024 | pydantic 0.000092s, stdlib:asyncio 0.000054s |
-| `<module> (import time)` | 1 | 1 | 0.000021 | 0.000021 | 0.000132 | 0.000132 | built-ins (C) 0.000082s, stdlib:logging 0.000026s, stdlib:typing 0.000002s |
-| `TraceCollector.start` | 56 | 5 | 0.000013 | 0.000003 | 0.000071 | 0.000014 | stdlib:asyncio 0.000058s |
-| `TraceCollector.stop` | 63 | 10 | 0.000013 | 0.000001 | 0.000030 | 0.000003 | built-ins (C) 0.000015s, stdlib:asyncio 0.000001s |
-| `_resolve_data_snapshot_id` | 31 | 5 | 0.000004 | 0.000001 | 0.000016 | 0.000003 | frozen/internal 0.000012s |
-| `CollectorExporter.__init__` | 100 | 5 | 0.000003 | 0.000001 | 0.000003 | 0.000001 | - |
-| `TraceCollector` | 42 | 1 | 0.000001 | 0.000001 | 0.000001 | 0.000001 | - |
+| `TraceCollector.__init__` | 45 | 17 | 0.000085 | 0.000005 | 0.023038 | 0.001355 | stdlib:asyncio 0.000095s |
+| `_resolve_code_commit` | 14 | 17 | 0.000114 | 0.000007 | 0.022751 | 0.001338 | stdlib:subprocess 0.022547s, frozen/internal 0.000086s, built-ins (C) 0.000004s |
+| `TraceCollector._process_queue` | 84 | 57 | 0.000241 | 0.000004 | 0.008626 | 0.000151 | stdlib:asyncio 0.001294s, other 0.000677s, stdlib:logging 0.000412s |
+| `TraceCollector.enqueue_trace` | 74 | 26 | 0.000064 | 0.000002 | 0.000606 | 0.000023 | pydantic 0.000323s, stdlib:asyncio 0.000219s |
+| `CollectorExporter.export` | 103 | 18 | 0.000022 | 0.000001 | 0.000475 | 0.000026 | - |
+| `TraceCollector.start` | 56 | 16 | 0.000038 | 0.000002 | 0.000300 | 0.000019 | stdlib:asyncio 0.000262s |
+| `TraceCollector.stop` | 63 | 32 | 0.000041 | 0.000001 | 0.000170 | 0.000005 | stdlib:asyncio 0.000093s, built-ins (C) 0.000036s |
+| `<module> (import time)` | 1 | 1 | 0.000021 | 0.000021 | 0.000130 | 0.000130 | built-ins (C) 0.000087s, stdlib:logging 0.000020s, stdlib:typing 0.000002s |
+| `_resolve_data_snapshot_id` | 31 | 17 | 0.000018 | 0.000001 | 0.000107 | 0.000006 | frozen/internal 0.000089s |
+| `CollectorExporter.__init__` | 100 | 12 | 0.000005 | 0.000000 | 0.000005 | 0.000000 | - |
+| `TraceCollector` | 42 | 1 | 0.000002 | 0.000002 | 0.000002 | 0.000002 | - |
 | `CollectorExporter` | 97 | 1 | 0.000001 | 0.000001 | 0.000001 | 0.000001 | - |
 | `TraceSink` | 36 | 1 | 0.000001 | 0.000001 | 0.000001 | 0.000001 | - |
 
