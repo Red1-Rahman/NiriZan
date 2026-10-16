@@ -405,7 +405,19 @@ class SQLiteTraceRepository(BaseTraceRepository):
         return [r.to_trace(validate=False) for r in records]
 
     async def purge_older_than(self, created_before_iso: str) -> int:
+        """Delete every trace strictly older than the cutoff instant, exactly.
+
+        The delete is a two-stage comparison in one transaction. Stage one is
+        the SQL range delete on ``julianday()``, which is the only comparison
+        SQLite can make that resolves the offset away for legacy rows, and it
+        is exact for every row more than a millisecond away from the cutoff.
+        Stage two takes the rows that tie with the cutoff's millisecond, where
+        ``julianday()`` can no longer separate them, and compares their full
+        stored precision in Python. A trace exactly at the cutoff survives
+        stage one and is not strictly older in stage two, so it is kept.
+        """
         normalized_cutoff = _normalize_cutoff_to_utc(created_before_iso)
+        cutoff_instant = _parse_utc_datetime(normalized_cutoff)
 
         def _delete() -> int:
             with self._conn_lock, self._conn:
@@ -424,11 +436,43 @@ class SQLiteTraceRepository(BaseTraceRepository):
                         "Cannot purge: stored created_at values are not valid "
                         f"ISO-8601 datetimes: {offenders}."
                     )
-                cursor = self._conn.execute(
+                coarse = self._conn.execute(
                     "DELETE FROM traces WHERE julianday(created_at) < julianday(?)",
                     (normalized_cutoff,),
                 )
-                return cursor.rowcount
+                deleted = coarse.rowcount
+
+                # Rows whose instant lands in the cutoff's own millisecond are
+                # indistinguishable from the cutoff here, so the exact
+                # comparison happens in Python on the full stored precision.
+                # Reading them is cheap: the equality is the same expression
+                # idx_traces_app_julianday is built on.
+                tied = self._conn.execute(
+                    "SELECT trace_id, created_at FROM traces "
+                    "WHERE julianday(created_at) = julianday(?)",
+                    (normalized_cutoff,),
+                ).fetchall()
+                # A tied row that is not a parseable ISO-8601 datetime raises
+                # the same clear ValueError the read path raises, rather than
+                # being kept or deleted on a guess.
+                stale_ids = [
+                    row["trace_id"]
+                    for row in tied
+                    if _parse_utc_datetime(row["created_at"]) < cutoff_instant
+                ]
+                # Batched like the stale-span delete, so no statement binds
+                # more than _STALE_DELETE_BATCH_SIZE variables however many
+                # rows tie. Spans of a deleted trace go with it through the
+                # schema's ON DELETE CASCADE.
+                for start in range(0, len(stale_ids), _STALE_DELETE_BATCH_SIZE):
+                    batch = stale_ids[start : start + _STALE_DELETE_BATCH_SIZE]
+                    placeholders = ", ".join("?" for _ in batch)
+                    deleted += self._conn.execute(
+                        f"DELETE FROM traces WHERE trace_id IN ({placeholders})",
+                        tuple(batch),
+                    ).rowcount
+
+                return deleted
 
         return await asyncio.to_thread(_delete)
 

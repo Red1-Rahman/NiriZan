@@ -21,7 +21,7 @@ import pytest
 
 from nirizan.instrumentation.spans import Span, SpanKind, Trace
 from nirizan.storage.models import TraceRecord, _OnceLatch
-from nirizan.storage.trace_repository import SQLiteTraceRepository
+from nirizan.storage.trace_repository import _STALE_DELETE_BATCH_SIZE, SQLiteTraceRepository
 
 START = datetime(2026, 1, 1, tzinfo=UTC)
 MODELS_LOGGER = "nirizan.storage.models"
@@ -496,6 +496,145 @@ async def test_purge_cascades_span_delete_verified_by_query(
         "SELECT count(*) AS n FROM spans WHERE trace_id = ?", (str(trace_id),)
     ).fetchone()
     assert remaining["n"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Sub-millisecond purge
+# ---------------------------------------------------------------------------
+
+
+def _cutoff_millisecond() -> tuple[str, str, str, str]:
+    """Cutoff plus the three canonical timestamps that share its millisecond."""
+    return (
+        "2026-01-01T00:00:00.001000+00:00",
+        "2026-01-01T00:00:00.000999+00:00",
+        "2026-01-01T00:00:00.001000+00:00",
+        "2026-01-01T00:00:00.001001+00:00",
+    )
+
+
+@pytest.mark.asyncio
+async def test_purge_removes_a_canonical_trace_less_than_a_millisecond_older(
+    repository: SQLiteTraceRepository,
+) -> None:
+    """A trace 1 microsecond inside the cutoff's millisecond is still purged.
+
+    ``julianday()`` resolves to about a millisecond, so a coarse range delete
+    cannot separate 00:00:00.000999Z from a cutoff of 00:00:00.001000Z. The
+    tie has to be resolved exactly, otherwise a trace that is strictly older
+    survives a purge that promised to remove exactly those traces.
+    """
+    cutoff, just_older, at_cutoff, just_newer = _cutoff_millisecond()
+    older_id, boundary_id, newer_id = uuid4(), uuid4(), uuid4()
+    for trace_id, created_at in (
+        (older_id, just_older),
+        (boundary_id, at_cutoff),
+        (newer_id, just_newer),
+    ):
+        insert_trace_row(repository, trace_id, created_at)
+    repository._conn.commit()
+
+    deleted = await repository.purge_older_than(cutoff)
+
+    assert deleted == 1
+    assert await repository.get(older_id) is None
+    # The exact boundary and the newer row both survive.
+    assert await repository.get(boundary_id) is not None
+    assert await repository.get(newer_id) is not None
+
+
+@pytest.mark.asyncio
+async def test_purge_resolves_legacy_rows_tied_with_the_cutoff_millisecond(
+    repository: SQLiteTraceRepository,
+    fresh_legacy_latch: _OnceLatch,
+) -> None:
+    """Legacy offset-bearing and offset-less rows purge by their exact instant.
+
+    Both rows are one microsecond inside the cutoff's millisecond, so neither is
+    separable by ``julianday()``; both are strictly older, so both go. The
+    offset-less row is the read path's legacy case, read as UTC.
+    """
+    cutoff, _, at_cutoff, _ = _cutoff_millisecond()
+    offset_id, naive_id, boundary_id = uuid4(), uuid4(), uuid4()
+    for trace_id, created_at in (
+        (offset_id, "2026-01-01T01:00:00.000999+01:00"),
+        (naive_id, "2026-01-01T00:00:00.000999"),
+        (boundary_id, at_cutoff),
+    ):
+        insert_trace_row(repository, trace_id, created_at)
+    repository._conn.commit()
+
+    deleted = await repository.purge_older_than(cutoff)
+
+    assert deleted == 2
+    assert await repository.get(offset_id) is None
+    assert await repository.get(naive_id) is None
+    assert await repository.get(boundary_id) is not None
+
+
+@pytest.mark.asyncio
+async def test_purge_counts_both_stages_and_cascades_spans_from_the_tied_stage(
+    repository: SQLiteTraceRepository,
+) -> None:
+    """The return value sums the coarse delete and the tied-row delete.
+
+    One trace is older by days (stage one, in SQL) and one is older by a
+    microsecond (stage two, in Python). Both stages must be reported, and the
+    spans of the stage-two trace must go with it through the cascade.
+    """
+    cutoff, just_older, _, _ = _cutoff_millisecond()
+    coarse_id, tied_id = uuid4(), uuid4()
+    coarse_span, tied_span = uuid4(), uuid4()
+    insert_trace_row(repository, coarse_id, "2025-01-01T00:00:00+00:00")
+    insert_trace_row(repository, tied_id, just_older)
+    for trace_id, span_id in ((coarse_id, coarse_span), (tied_id, tied_span)):
+        insert_span_row(
+            repository,
+            trace_id,
+            span_id,
+            started_at="2025-01-01T00:00:00+00:00",
+            ended_at="2025-01-01T00:00:01+00:00",
+        )
+    repository._conn.commit()
+
+    deleted = await repository.purge_older_than(cutoff)
+
+    assert deleted == 2
+    assert await repository.get(coarse_id) is None
+    assert await repository.get(tied_id) is None
+    for span_id in (coarse_span, tied_span):
+        remaining = repository._conn.execute(
+            "SELECT count(*) AS n FROM spans WHERE span_id = ?", (str(span_id),)
+        ).fetchone()
+        assert remaining["n"] == 0
+
+
+@pytest.mark.asyncio
+async def test_purge_deletes_more_tied_rows_than_one_delete_batch_holds(
+    repository: SQLiteTraceRepository,
+) -> None:
+    """More tied rows than one batch can bind are all deleted.
+
+    The tied set is resolved in Python and then deleted in bounded batches, so
+    the statement never binds more than the batch size (which keeps it inside
+    SQLite's variable limit) while still purging the whole set. Each row here is
+    one microsecond inside the cutoff's millisecond, so every one of them needs
+    the exact comparison.
+    """
+    cutoff, just_older, _, _ = _cutoff_millisecond()
+    tied_count = _STALE_DELETE_BATCH_SIZE * 2 + 200
+    trace_ids = [uuid4() for _ in range(tied_count)]
+    for trace_id in trace_ids:
+        insert_trace_row(repository, trace_id, just_older)
+    repository._conn.commit()
+
+    deleted = await repository.purge_older_than(cutoff)
+
+    assert deleted == tied_count
+    remaining = repository._conn.execute("SELECT count(*) AS n FROM traces").fetchone()
+    assert remaining["n"] == 0
+    for trace_id in trace_ids[::200]:
+        assert await repository.get(trace_id) is None
 
 
 @pytest.mark.asyncio

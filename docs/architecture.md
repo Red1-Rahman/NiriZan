@@ -254,6 +254,17 @@ same millisecond are therefore separated by the SQL tiebreaks (stored text, then
 canonical-UTC policy that distinction is a formality: stored text order and
 instant order agree for canonical UTC rows, so the tiebreak never reorders them.
 
+Purge is the third case, and the reason the millisecond limit is not a purge
+guarantee. A purge is a decision, not an ordering, so it can afford a second
+pass: `julianday()` does the coarse range delete, and the rows that tie with the
+cutoff's own millisecond are then compared at full stored precision in Python,
+in the same transaction, and only the strictly older ones are deleted. Rounding
+is monotonic, so the coarse comparison can only ever under-delete, never
+over-delete, which is what makes it safe as the first stage. Purge precision is
+therefore not limited to a millisecond for canonical or legacy rows, and the
+tied-row delete is batched like the stale-span delete so it cannot outgrow
+SQLite's variable limit.
+
 **Indexing.** `idx_traces_app_julianday` is an expression index on
 `(application_name, julianday(created_at))`, so the instant-ordered listing
 query is satisfied by the index rather than by scanning and sorting every trace
@@ -267,7 +278,11 @@ guessed at. A read raises `ValueError` naming the stored text, because a
 silently dropped or coerced timestamp is indistinguishable from a correct one.
 Purge fails loudly for the same reason: `julianday()` returns NULL for such a
 row, and a NULL never compares less than a cutoff, so the row would survive
-every purge forever while looking protected.
+every purge forever while looking protected. The guard runs before any delete,
+so a database with an unreadable `created_at` purges nothing at all rather than
+purging part of itself. A row that SQLite's `julianday()` can parse but Python
+cannot would pass that guard and then fail the exact comparison; the same clear
+`ValueError` is raised rather than the row being kept or deleted on a guess.
 
 **Ordering tiebreaks.** Listing orders by instant descending, then by stored
 `created_at` text descending, then by `trace_id` ascending. Stored text is a
