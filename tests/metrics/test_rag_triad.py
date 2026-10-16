@@ -1,6 +1,7 @@
 # tests/metrics/test_rag_triad.py
 import logging
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
+from unittest.mock import Mock, call
 from uuid import uuid4
 
 import pytest
@@ -114,3 +115,56 @@ async def test_rag_triad_empty_trace(caplog: pytest.LogCaptureFixture) -> None:
     assert len(results) == 0
     assert "Missing RAG triad fields" in caplog.text
     assert f"completed for trace_id={trace.trace_id}: computed 0 metrics" in caplog.text
+
+
+@pytest.mark.parametrize(
+    ("query", "context", "answer", "expected_names", "expected_pairs", "missing"),
+    [
+        (
+            "query",
+            "context",
+            "answer",
+            ["context_relevance", "groundedness", "answer_relevance"],
+            [("query", "context"), ("context", "answer"), ("query", "answer")],
+            "",
+        ),
+        (None, "context", "answer", ["groundedness"], [("context", "answer")], "query"),
+        ("query", None, "answer", ["answer_relevance"], [("query", "answer")], "context"),
+        ("query", "context", None, ["context_relevance"], [("query", "context")], "answer"),
+        (
+            "",
+            "",
+            "",
+            ["context_relevance", "groundedness", "answer_relevance"],
+            [("", ""), ("", ""), ("", "")],
+            "",
+        ),
+    ],
+    ids=["complete", "missing-query", "missing-context", "missing-answer", "empty-payloads"],
+)
+@pytest.mark.asyncio
+async def test_rag_results_share_current_utc_timestamp(
+    query: str | None,
+    context: str | None,
+    answer: str | None,
+    expected_names: list[str],
+    expected_pairs: list[tuple[str, str]],
+    missing: str,
+) -> None:
+    trace = build_test_trace(query=query, context=context, answer=answer)
+    scorer = Mock(side_effect=[0.2, 0.4, 0.6])
+    metric = RAGTriadMetric(scorer=scorer)
+
+    before = datetime.now(UTC)
+    results = await metric.evaluate(trace)
+    after = datetime.now(UTC)
+
+    assert [result.metric_name for result in results] == expected_names
+    assert [result.score for result in results] == [0.2, 0.4, 0.6][: len(expected_names)]
+    assert scorer.call_args_list == [call(*pair) for pair in expected_pairs]
+    assert len({result.computed_at for result in results}) == 1
+    for result in results:
+        assert result.trace_id == trace.trace_id
+        assert result.computed_at.utcoffset() == timedelta(0)
+        assert before <= result.computed_at <= after
+        assert result.details == ({"missing_fields": missing} if missing else {})

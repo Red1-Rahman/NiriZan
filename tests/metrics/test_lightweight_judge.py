@@ -1,5 +1,6 @@
 # tests/metrics/test_lightweight_judge.py
 import logging
+from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 import pytest
@@ -20,8 +21,8 @@ def test_lightweight_judge_safe(caplog: pytest.LogCaptureFixture) -> None:
     assert res.metric_name == "lightweight_quality_score"
     assert res.trace_id == trace_id
     assert (
-        f"Evaluating LightweightJudge metric_name='lightweight_quality_score' for trace_id={trace_id}"
-        in caplog.text
+        "Evaluating LightweightJudge metric_name='lightweight_quality_score' "
+        f"for trace_id={trace_id}" in caplog.text
     )
     assert "evaluated score=1.0000" in caplog.text
 
@@ -38,8 +39,8 @@ def test_lightweight_judge_toxic(caplog: pytest.LogCaptureFixture) -> None:
     assert res.score < 1.0
     assert res.trace_id == trace_id
     assert (
-        f"Evaluating LightweightJudge metric_name='lightweight_quality_score' for trace_id={trace_id}"
-        in caplog.text
+        "Evaluating LightweightJudge metric_name='lightweight_quality_score' "
+        f"for trace_id={trace_id}" in caplog.text
     )
 
 
@@ -55,3 +56,17 @@ def test_lightweight_judge_empty_text(caplog: pytest.LogCaptureFixture) -> None:
         "Empty or whitespace-only text provided for metric_name='lightweight_quality_score'"
         in caplog.text
     )
+
+
+@pytest.mark.parametrize("text", ["Helpful response", "hate kill toxic bad", "", " \t\n"])
+def test_lightweight_result_timestamp_is_current_utc(text: str) -> None:
+    judge = LightweightJudge()
+    trace_id = uuid4()
+
+    before = datetime.now(UTC)
+    result = judge.evaluate_text(text, trace_id=trace_id)
+    after = datetime.now(UTC)
+
+    assert result.trace_id == trace_id
+    assert result.computed_at.utcoffset() == timedelta(0)
+    assert before <= result.computed_at <= after

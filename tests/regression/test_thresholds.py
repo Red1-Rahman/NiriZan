@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+from types import MappingProxyType
 
 import numpy as np
 import pytest
@@ -85,3 +86,20 @@ def test_mann_whitney_empty_baseline_also_raises() -> None:
     candidate = np.array([0.1, 0.2, 0.3])
     with pytest.raises(ValueError, match="Both distributions must contain observations"):
         mann_whitney_regression(candidate, np.array([]))
+
+
+@pytest.mark.parametrize(
+    ("p_values", "expected"),
+    [
+        ({}, {}),
+        ({"second": 0.05, "first": 0.025}, {"first": True, "second": True}),
+        ({"first": 0.026, "second": 0.04}, {"first": False, "second": False}),
+    ],
+)
+def test_holm_bonferroni_accepts_read_only_mapping(
+    p_values: dict[str, float], expected: dict[str, bool]
+) -> None:
+    original = p_values.copy()
+
+    assert holm_bonferroni(MappingProxyType(p_values), alpha=0.05) == expected
+    assert p_values == original

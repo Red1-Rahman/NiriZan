@@ -1,3 +1,4 @@
+import json
 from datetime import UTC, datetime
 from uuid import uuid4
 
@@ -88,3 +89,26 @@ def test_trace_spans_of_kind_filtering() -> None:
 
     planning_spans = trace.spans_of_kind(SpanKind.PLANNING)
     assert len(planning_spans) == 0
+
+
+@pytest.mark.parametrize(
+    ("kind", "wire_value"),
+    [
+        (SpanKind.PLANNING, "planning"),
+        (SpanKind.RETRIEVAL, "retrieval"),
+        (SpanKind.TOOL_USE, "tool_use"),
+        (SpanKind.GENERATION, "generation"),
+    ],
+)
+def test_span_kind_string_and_json_representation(kind: SpanKind, wire_value: str) -> None:
+    assert str(kind) == wire_value
+    assert f"{kind:>16}" == wire_value.rjust(16)
+    assert json.loads(json.dumps({"kind": kind})) == {"kind": wire_value}
+    assert SpanKind(wire_value) is kind
+    assert {kind: "selected"}[wire_value] == "selected"
+
+
+@pytest.mark.parametrize("value", ["", "PLANNING", "unknown"])
+def test_span_kind_rejects_invalid_wire_value(value: str) -> None:
+    with pytest.raises(ValueError):
+        SpanKind(value)

@@ -52,6 +52,23 @@ async def test_get_nonexistent_baseline_returns_none(
 
 
 @pytest.mark.asyncio
+async def test_missing_baseline_in_populated_repository_returns_none(
+    baseline_repo: SQLiteBaselineRepository,
+) -> None:
+    baseline = Baseline(
+        baseline_id=uuid4(),
+        system_type="rag",
+        run_ids=[uuid4()],
+        established_at=datetime.now(UTC),
+        label="baseline-v1",
+    )
+    await baseline_repo.save_baseline(baseline)
+
+    assert await baseline_repo.get_baseline(uuid4()) is None
+    assert await baseline_repo.get_baseline(baseline.baseline_id) == baseline
+
+
+@pytest.mark.asyncio
 async def test_list_baselines_filtering_and_ordering(
     baseline_repo: SQLiteBaselineRepository,
 ) -> None:
