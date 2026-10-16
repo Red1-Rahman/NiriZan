@@ -67,6 +67,24 @@ async def test_get_nonexistent_run_returns_none(experiment_store: SQLiteExperime
 
 
 @pytest.mark.asyncio
+async def test_missing_run_in_populated_store_returns_none(
+    experiment_store: SQLiteExperimentStore,
+) -> None:
+    run = Run(
+        run_id=uuid4(),
+        trace_id=uuid4(),
+        code_commit="test-commit",
+        data_snapshot_id="snapshot-v1",
+        metric_results=[],
+        created_at=datetime.now(UTC),
+    )
+    await experiment_store.record_run(run)
+
+    assert await experiment_store.get_run(uuid4()) is None
+    assert await experiment_store.get_run(run.run_id) == run
+
+
+@pytest.mark.asyncio
 async def test_diff_runs(experiment_store: SQLiteExperimentStore) -> None:
     run_a_id = uuid4()
     run_b_id = uuid4()

@@ -1,4 +1,5 @@
 # tests/regression/test_comparator.py
+import json
 import logging
 from uuid import UUID, uuid4
 
@@ -18,6 +19,30 @@ from nirizan.regression.comparator import (
 @pytest.fixture
 def sample_ids() -> tuple[UUID, UUID]:
     return uuid4(), uuid4()
+
+
+@pytest.mark.parametrize(
+    ("severity", "wire_value"),
+    [
+        (RegressionSeverity.NONE, "none"),
+        (RegressionSeverity.WARNING, "warning"),
+        (RegressionSeverity.BLOCKING, "blocking"),
+    ],
+)
+def test_severity_string_and_json_representation(
+    severity: RegressionSeverity, wire_value: str
+) -> None:
+    assert str(severity) == wire_value
+    assert f"{severity:>16}" == wire_value.rjust(16)
+    assert json.loads(json.dumps({"severity": severity})) == {"severity": wire_value}
+    assert RegressionSeverity(wire_value) is severity
+    assert {severity: "selected"}[wire_value] == "selected"
+
+
+@pytest.mark.parametrize("value", ["", "BLOCKING", "unknown"])
+def test_severity_rejects_invalid_wire_value(value: str) -> None:
+    with pytest.raises(ValueError):
+        RegressionSeverity(value)
 
 
 # ---------------------------------------------------------------------------

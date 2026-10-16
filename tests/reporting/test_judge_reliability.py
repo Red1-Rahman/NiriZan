@@ -1,4 +1,5 @@
 # tests/reporting/test_judge_reliability.py
+import json
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -11,6 +12,26 @@ from nirizan.reporting.judge_reliability import (
     system_score_delta_series,
 )
 from nirizan.trust.attribution import AttributionVerdict, DriftAttribution
+
+
+@pytest.mark.parametrize(
+    ("status", "wire_value"),
+    [(JudgeReliabilityStatus.STABLE, "stable"), (JudgeReliabilityStatus.UNSTABLE, "unstable")],
+)
+def test_reliability_status_string_and_json_representation(
+    status: JudgeReliabilityStatus, wire_value: str
+) -> None:
+    assert str(status) == wire_value
+    assert f"{status:>16}" == wire_value.rjust(16)
+    assert json.loads(json.dumps({"status": status})) == {"status": wire_value}
+    assert JudgeReliabilityStatus(wire_value) is status
+    assert {status: "selected"}[wire_value] == "selected"
+
+
+@pytest.mark.parametrize("value", ["", "STABLE", "unknown"])
+def test_reliability_status_rejects_invalid_wire_value(value: str) -> None:
+    with pytest.raises(ValueError):
+        JudgeReliabilityStatus(value)
 
 
 def _make_verdict(

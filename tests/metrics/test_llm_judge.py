@@ -1,5 +1,7 @@
 # tests/metrics/test_llm_judge.py
 import logging
+from datetime import UTC, datetime, timedelta
+from unittest.mock import Mock
 from uuid import uuid4
 
 import pytest
@@ -55,3 +57,36 @@ def test_llm_judge_parse_failure_logging(caplog: pytest.LogCaptureFixture) -> No
     assert res.score == 0.0
     assert "Failed to parse judge output" in str(res.details["reasoning"])
     assert "Failed to parse LLMJudge output for metric_name='groundedness'" in caplog.text
+
+
+@pytest.mark.parametrize(
+    ("completion", "expected_score"),
+    [
+        ('{"score": 0.85, "reasoning": "grounded"}', 0.85),
+        ('{"score": -1}', 0.0),
+        ('{"score": 2}', 1.0),
+        ("invalid json", 0.0),
+        ('{"reasoning": "missing score"}', 0.0),
+        ('{"score": "invalid"}', 0.0),
+    ],
+)
+def test_llm_result_timestamp_is_current_utc(completion: str, expected_score: float) -> None:
+    completion_fn = Mock(return_value=completion)
+    judge = LLMJudge(
+        metric_name="groundedness",
+        prompt_template="{input}|{output}|{context}",
+        completion_fn=completion_fn,
+    )
+    trace_id = uuid4()
+
+    before = datetime.now(UTC)
+    result = judge.evaluate(
+        input_text="query", output_text="answer", context="source", trace_id=trace_id
+    )
+    after = datetime.now(UTC)
+
+    assert result.trace_id == trace_id
+    assert result.score == expected_score
+    assert result.computed_at.utcoffset() == timedelta(0)
+    assert before <= result.computed_at <= after
+    completion_fn.assert_called_once_with("query|answer|source")

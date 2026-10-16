@@ -1,6 +1,7 @@
 # tests/metrics/test_behavioral_anchor.py
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
+from unittest.mock import Mock
 
 import numpy as np
 import pytest
@@ -72,3 +73,43 @@ async def test_behavioral_anchor_metric_drifted(sample_trace):
     res = results[0]
     assert res.score < 0.85
     assert res.details["band"] == "deviation"
+
+
+@pytest.mark.parametrize(
+    ("target", "embedding", "threshold", "score", "band"),
+    [
+        ([1.0, 0.0], [1.0, 0.0], 1.0, 1.0, "aligned"),
+        ([1.0, 0.0], [0.6, 0.8], 0.85, 0.6, "neutral"),
+        ([1.0, 0.0], [-1.0, 0.0], 0.85, 0.0, "deviation"),
+        ([1.0, 0.0], [0.0, 0.0], 0.85, 0.0, "deviation"),
+        ([0.0, 0.0], [1.0, 0.0], 0.85, 0.0, "deviation"),
+    ],
+    ids=["threshold-boundary", "neutral", "negative-similarity", "zero-output", "zero-target"],
+)
+@pytest.mark.asyncio
+async def test_anchor_results_have_current_utc_timestamps(
+    sample_trace: Trace,
+    target: list[float],
+    embedding: list[float],
+    threshold: float,
+    score: float,
+    band: str,
+) -> None:
+    embedding_fn = Mock(return_value=np.array(embedding))
+    metric = BehavioralAnchorMetric(
+        np.array(target), threshold=threshold, embedding_fn=embedding_fn
+    )
+
+    before = datetime.now(UTC)
+    results = await metric.evaluate(sample_trace)
+    after = datetime.now(UTC)
+
+    assert len(results) == 1
+    result = results[0]
+    assert result.score == pytest.approx(score)
+    assert result.details["band"] == band
+    assert result.details["span_id"] == str(sample_trace.spans[0].span_id)
+    assert result.trace_id == sample_trace.trace_id
+    assert result.computed_at.utcoffset() == timedelta(0)
+    assert before <= result.computed_at <= after
+    embedding_fn.assert_called_once_with(sample_trace.spans[0].output_payload)

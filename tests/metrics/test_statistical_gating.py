@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+from types import MappingProxyType
 
 import numpy as np
 import pytest
@@ -105,3 +106,20 @@ def test_sample_size_and_calibration(caplog: pytest.LogCaptureFixture) -> None:
 
     with pytest.raises(ValueError, match="same shape"):
         calibrate_gold_set(np.array([0.8]), np.array([0.85, 0.95]))
+
+
+@pytest.mark.parametrize(
+    ("p_values", "expected"),
+    [
+        ({}, {}),
+        ({"second": 0.05, "first": 0.025}, {"first": True, "second": True}),
+        ({"first": 0.026, "second": 0.04}, {"first": False, "second": False}),
+    ],
+)
+def test_holm_bonferroni_accepts_read_only_mapping(
+    p_values: dict[str, float], expected: dict[str, bool]
+) -> None:
+    original = p_values.copy()
+
+    assert holm_bonferroni(MappingProxyType(p_values), alpha=0.05) == expected
+    assert p_values == original

@@ -1,7 +1,8 @@
 # tests/trust/test_attribution.py
 from __future__ import annotations
 
-from datetime import UTC, datetime
+import json
+from datetime import UTC, datetime, timedelta
 from unittest.mock import patch
 
 import numpy as np
@@ -12,6 +13,32 @@ from nirizan.trust.attribution import (
     AttributionVerdict,
     DriftAttribution,
 )
+
+
+@pytest.mark.parametrize(
+    ("attribution", "wire_value"),
+    [
+        (DriftAttribution.NONE, "none"),
+        (DriftAttribution.SYSTEM_DRIFT, "system_drift"),
+        (DriftAttribution.JUDGE_DRIFT, "judge_drift"),
+        (DriftAttribution.JOINT_DRIFT, "joint_drift"),
+        (DriftAttribution.INCONCLUSIVE, "inconclusive"),
+    ],
+)
+def test_attribution_string_and_json_representation(
+    attribution: DriftAttribution, wire_value: str
+) -> None:
+    assert str(attribution) == wire_value
+    assert f"{attribution:>16}" == wire_value.rjust(16)
+    assert json.loads(json.dumps({"attribution": attribution})) == {"attribution": wire_value}
+    assert DriftAttribution(wire_value) is attribution
+    assert {attribution: "selected"}[wire_value] == "selected"
+
+
+@pytest.mark.parametrize("value", ["", "JOINT_DRIFT", "unknown"])
+def test_attribution_rejects_invalid_wire_value(value: str) -> None:
+    with pytest.raises(ValueError):
+        DriftAttribution(value)
 
 
 @pytest.fixture
@@ -846,6 +873,43 @@ def test_evaluated_at_is_timezone_aware_utc(
     assert verdict.evaluated_at.utcoffset() is not None
     assert verdict.evaluated_at.utcoffset() == UTC.utcoffset(verdict.evaluated_at)
     assert verdict.evaluated_at <= datetime.now(UTC)
+
+
+@pytest.mark.parametrize(
+    "invalid_group",
+    [
+        "anchor_ref_scores",
+        "anchor_rescored_scores",
+        "prod_baseline_scores",
+        "prod_candidate_scores",
+    ],
+)
+@pytest.mark.parametrize("invalid_scores", [[], [float("nan")], [float("inf")]])
+def test_inconclusive_timestamp_is_current_utc(
+    engine: AttributionEngine,
+    stable_scores: list[float],
+    invalid_group: str,
+    invalid_scores: list[float],
+) -> None:
+    scores = {
+        name: stable_scores.copy()
+        for name in (
+            "anchor_ref_scores",
+            "anchor_rescored_scores",
+            "prod_baseline_scores",
+            "prod_candidate_scores",
+        )
+    }
+    scores[invalid_group] = invalid_scores
+
+    before = datetime.now(UTC)
+    verdict = engine.analyze(anchor_set_id="anchor-v1", **scores)
+    after = datetime.now(UTC)
+
+    assert verdict.attribution == DriftAttribution.INCONCLUSIVE
+    assert invalid_group in verdict.explanation
+    assert verdict.evaluated_at.utcoffset() == timedelta(0)
+    assert before <= verdict.evaluated_at <= after
 
 
 # ---------------------------------------------------------------------------
