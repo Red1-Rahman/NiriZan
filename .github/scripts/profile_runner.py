@@ -349,7 +349,10 @@ def render_summary(reports: list[ModuleReport], top: int, src_name: str, exit_co
 def truncate(text: str, limit: int) -> str:
     if len(text) <= limit:
         return text
-    return text[:limit].rsplit("\n", 1)[0] + "\n\n_…truncated; see the workflow artifact for the full report._\n"
+    return (
+        text[:limit].rsplit("\n", 1)[0]
+        + "\n\n_…truncated; see the workflow artifact for the full report._\n"
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -362,7 +365,9 @@ def parse_args(argv: list[str]) -> tuple[argparse.Namespace, list[str]]:
     else:
         own, pytest_extra = argv, []
 
-    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    p = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     p.add_argument("--src", default="src/nirizan", help="Package directory to report on.")
     p.add_argument("--tests", default="tests", help="Test path passed to pytest.")
     p.add_argument("--out", default="profiling_reports", help="Output directory.")

@@ -104,11 +104,9 @@ from abc import ABC, abstractmethod
 
 class BaseExporter(ABC):
     @abstractmethod
-    async def export(self, trace: Trace) -> None:
-        ...
+    async def export(self, trace: Trace) -> None: ...
 
-    async def shutdown(self) -> None:
-        ...
+    async def shutdown(self) -> None: ...
 ```
 
 **Contract guarantees:**
@@ -976,6 +974,7 @@ def classify_structure_severity(
     warning_effect: float,
     blocking_effect: float,
 ) -> RegressionSeverity: ...
+
 
 def apply_mode(
     severity: RegressionSeverity,
