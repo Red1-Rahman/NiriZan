@@ -145,12 +145,12 @@ class BaseTraceRepository(ABC):
 **Contract guarantees:**
 
 * `get` returns `None` for a missing trace, it does not raise. Callers that need "trace must exist" semantics wrap this themselves; the repository stays a dumb, honest store.
-* `list_by_application` returns descending creation-time results with limit/offset pagination. Ties on creation time are broken by `trace_id` ascending, so paginating a set of traces that share a timestamp returns a total, gap-free order.
+* `list_by_application` returns descending creation-time results with limit/offset pagination. Instants are compared at millisecond resolution, and a tie is broken by stored `created_at` text descending, then by `trace_id` ascending, so paginating a set of traces whose creation instants land in the same millisecond still returns a total, gap-free order with no duplicates across pages.
 * `save` is a replacement, not a merge: the stored span set for a trace becomes exactly the span set of the incoming `Trace`, including the empty set. A `span_id` that already belongs to a different trace is rejected with `ValueError`, and the whole save is rolled back.
 * `save` and `purge_older_than` reject naive (offset-less) datetimes. Every timestamp written is canonical UTC ISO-8601 text (`datetime.isoformat()` of the value converted with `astimezone(UTC)`).
 * `purge_older_than` requires a timezone-aware ISO-8601 timestamp, normalizes the cutoff to UTC, removes traces strictly older than that instant (a trace exactly at the cutoff is kept), and returns the number of deleted trace rows.
 * Reads are tolerant: a stored timestamp with no offset is a legacy row, it is interpreted as UTC, returned as a timezone-aware UTC `datetime`, and logged once per process. A stored timestamp that is not ISO-8601 at all raises `ValueError` naming the stored text. A legacy row is never rewritten on read.
-* Legacy offset-bearing rows are compared by instant, not by string, everywhere: listing, span ordering, and purge.
+* Legacy offset-bearing rows are compared by instant rather than by string, at millisecond resolution, in listing and in purge: two legacy rows whose instants land in the same millisecond fall back to stored text order and then `trace_id`. Spans of one trace are ordered by the exact instant, so span ordering is not subject to that limit. Rows written since 0.5.0 are canonical UTC, where text order equals instant order, so every comparison is exact for them.
 * No method here accepts or returns anything from `metrics/`, `regression/`, or `reporting/`. This is Phase 1's boundary and it stays that narrow.
 
 The 0.5.0 changes to these guarantees, and the migration path for existing databases, are recorded in the **Release 0.5.0 Breaking Change** section below.
@@ -1009,7 +1009,7 @@ This section documents the breaking changes made to the Phase 1 `Trace` contract
 - Callers that relied on `save` merging into an existing trace must send the full span set on every save. A partial save is a replacement, so a caller that saves an unrelated subset of spans will delete the rest.
 - Callers that assembled a `Trace` with a dangling parent must set `SYNTHETIC_PARENT_ATTRIBUTE` on the orphaned span, or re-attach the parent into the trace.
 
-**Migration path for persisted data:** existing databases need no migration step and no rewrite. Rows are read as they are: offset-bearing rows are compared and returned by instant, and offset-less rows are interpreted as UTC and returned aware. The canonical-UTC text form applies to rows written after this release; a stored legacy row keeps its stored text until the trace is saved again. Nothing is rewritten in the background, and no row is deleted by this release.
+**Migration path for persisted data:** existing databases need no migration step and no rewrite. Rows are read as they are: offset-bearing rows are compared and returned by instant at millisecond resolution, so two legacy rows whose instants land in the same millisecond are ordered by stored text and then `trace_id` rather than by their exact instants, and offset-less rows are interpreted as UTC and returned aware. The canonical-UTC text form applies to rows written after this release; a stored legacy row keeps its stored text until the trace is saved again. Opening an existing database creates the `idx_traces_app_julianday` expression index if it is absent, which is a schema addition only: no row is rewritten or deleted. Normalizing legacy rows to canonical UTC text is an optional migration tracked separately in #84, and nothing in this release depends on it.
 
 **Version bump:** ships in 0.5.0.
 

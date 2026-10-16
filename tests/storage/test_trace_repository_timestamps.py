@@ -692,6 +692,94 @@ async def test_list_pagination_breaks_created_at_ties_deterministically(
 
 
 @pytest.mark.asyncio
+async def test_legacy_mixed_offset_rows_within_one_millisecond_paginate_deterministically(
+    repository: SQLiteTraceRepository,
+) -> None:
+    """Characterization of the millisecond ordering limit for legacy rows.
+
+    ``julianday()`` resolves to about a millisecond, and trace listing is
+    ordered and paginated entirely in SQL, so two legacy rows whose instants
+    land in the same millisecond cannot be separated by their exact instants:
+    the stored text decides, then ``trace_id``. The order is still total, so
+    pagination returns each row exactly once with no gaps.
+
+    An implementation that compares exact instants instead of ``julianday()``
+    would flip the tied pair here (the ``+01:00`` row is 999 microseconds
+    *earlier* than the ``+00:00`` row but sorts later as text). A change like
+    that is a behavior change, not a refactor, so it has to update this test
+    deliberately rather than discover it in production.
+    """
+    tied_offset_text = "2026-01-01T01:00:00.000999+01:00"
+    tied_utc_text = "2026-01-01T00:00:00.001000+00:00"
+    later_text = "2026-01-01T02:00:00+00:00"
+
+    # Premise, checked against SQLite directly: the two legacy values must
+    # resolve to the same Julian day number, otherwise this test is not about
+    # what it claims to be about.
+    resolved = repository._conn.execute(
+        "SELECT julianday(?), julianday(?)", (tied_offset_text, tied_utc_text)
+    ).fetchone()
+    assert resolved[0] is not None, "julianday() returned NULL for a legacy offset timestamp"
+    assert resolved[0] == resolved[1], (
+        "premise failed on this SQLite build: "
+        f"julianday({tied_offset_text!r})={resolved[0]!r} and "
+        f"julianday({tied_utc_text!r})={resolved[1]!r} are not equal, so the rows do "
+        "not tie within a millisecond and this characterization does not apply"
+    )
+
+    # trace_id values chosen so that neither tiebreak agrees with insertion
+    # order or with the other tiebreak: dropping either from the ORDER BY
+    # changes the result, which is what makes this test able to detect it.
+    later_id = UUID("00000000-0000-0000-0000-0000000000c0")
+    tied_offset_id = UUID("00000000-0000-0000-0000-00000000ff00")
+    tied_utc_id = UUID("00000000-0000-0000-0000-000000000000")
+    for trace_id, created_at in (
+        (tied_utc_id, tied_utc_text),
+        (tied_offset_id, tied_offset_text),
+        (later_id, later_text),
+    ):
+        insert_trace_row(repository, trace_id, created_at)
+    repository._conn.commit()
+
+    # Documented rule: instant descending (the later row first), then stored
+    # text descending for rows that tie inside a millisecond. Text descending
+    # puts the 01:00 row ahead of the 00:00 row, even though it is the earlier
+    # instant.
+    assert tied_offset_text > tied_utc_text
+    expected = [str(later_id), str(tied_offset_id), str(tied_utc_id)]
+
+    paged: list[str] = []
+    for offset in range(3):
+        page = await repository.list_by_application("timestamp-tests", limit=1, offset=offset)
+        assert len(page) == 1
+        paged.extend(str(trace.trace_id) for trace in page)
+
+    assert paged == expected
+    assert len(set(paged)) == 3, "a trace id appeared on more than one page"
+    assert paged[0] == str(later_id)
+    assert paged[1:] == [str(tied_offset_id), str(tied_utc_id)]
+
+    single_call = await repository.list_by_application("timestamp-tests", limit=3)
+    assert [str(trace.trace_id) for trace in single_call] == expected
+
+    # The remaining tiebreak: rows with the same instant and the same stored
+    # text are separated only by trace_id ascending. Six of them, inserted in a
+    # seeded order that matches neither trace_id order nor reverse order,
+    # because a smaller set can come back sorted by accident when the term is
+    # missing from the ORDER BY.
+    twins = [UUID(f"00000000-0000-0000-0001-0000000000{index:02x}") for index in range(6)]
+    insertion_order = twins[:]
+    random.Random(7).shuffle(insertion_order)
+    for twin in insertion_order:
+        insert_trace_row(repository, twin, "2026-01-01T03:00:00.000500+00:00", "twin-tests")
+    repository._conn.commit()
+
+    listed_twins = await repository.list_by_application("twin-tests")
+
+    assert [str(trace.trace_id) for trace in listed_twins] == sorted(str(twin) for twin in twins)
+
+
+@pytest.mark.asyncio
 async def test_equal_start_and_depth_keep_stored_insertion_order(
     repository: SQLiteTraceRepository,
 ) -> None:

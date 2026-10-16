@@ -239,11 +239,20 @@ Julian day number and normalizes the offset away, which gives SQL a true
 instant for both legacy and canonical rows, so listing and purge compare by
 instant rather than by string. Its cost is resolution: a Julian day number is a
 floating-point value whose precision is around one millisecond, so SQL can only
-separate spans whose starts differ by more than a millisecond. Reads therefore
-re-sort the fetched rows in Python on the exact instant, and the SQL ordering is
-only the coarse pre-sort. That two-stage ordering is a deliberate trade: correct
-instant semantics in both languages in exchange for one extra sort of the rows
-of a single trace.
+separate two rows whose instants differ by more than a millisecond. That limit
+applies to traces and to spans alike, but the two are handled differently.
+
+Spans of one trace are re-sorted in Python on the exact instant, so span
+ordering is exact and the SQL ordering is only a coarse pre-sort. That two-stage
+ordering is a deliberate trade: exact span semantics in exchange for one extra
+sort of the rows of a single trace.
+
+Trace listing is ordered and paginated entirely in SQL, with SQL `LIMIT`/`OFFSET`,
+so it has no second pass to re-sort in. Two traces whose instants land in the
+same millisecond are therefore separated by the SQL tiebreaks (stored text, then
+`trace_id`) rather than by their exact instants. For rows written since the
+canonical-UTC policy that distinction is a formality: stored text order and
+instant order agree for canonical UTC rows, so the tiebreak never reorders them.
 
 **Indexing.** `idx_traces_app_julianday` is an expression index on
 `(application_name, julianday(created_at))`, so the instant-ordered listing
@@ -260,13 +269,19 @@ Purge fails loudly for the same reason: `julianday()` returns NULL for such a
 row, and a NULL never compares less than a cutoff, so the row would survive
 every purge forever while looking protected.
 
-**Ordering tiebreaks.** Listing orders by instant descending, then by
-`trace_id` ascending, so pagination over traces that share a creation timestamp
-is a total order with no gaps and no duplicates. Spans order by start instant,
+**Ordering tiebreaks.** Listing orders by instant descending, then by stored
+`created_at` text descending, then by `trace_id` ascending. Stored text is a
+sound tiebreak for the rows this repository writes, because canonical UTC
+ISO-8601 text sorts in the same order as the instants it represents, so the
+tiebreak never reorders a canonical row; it only decides the order of legacy
+rows that share a millisecond. The resulting order is total, so pagination
+returns every trace exactly once with no gaps. Spans order by start instant,
 then by parent depth (a parent precedes its children when a coarse clock gives
 them the same start), then by stored order. Stored order, not `span_id`, is the
 final tiebreak: it is the one key that is always defined, and it never invents
-a timestamp.
+a timestamp. The guarantees these tiebreaks produce for callers are stated in
+[`contracts.md`](contracts.md#basetracerepository-interface-storagetrace_repositorypy),
+not restated here.
 
 ### 3.6 Regression Detection
 

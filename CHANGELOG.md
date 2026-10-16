@@ -28,9 +28,8 @@ considered stable.
 - **Breaking:** Trace timestamps are now stored and compared as instants. `save` rejects a naive (offset-less) `created_at`, `started_at`, or `ended_at` with `ValueError` before writing any row, and `purge_older_than` requires a timezone-aware cutoff, accepting a trailing `Z`. Every timestamp written is canonical UTC ISO-8601 text.
 - **Breaking:** Timestamps read back from storage are always timezone-aware. A stored row without an offset is a legacy row: it is read as UTC, returned as an aware UTC `datetime`, and logged once per process. Consumers that re-attached a local offset to repository output must stop doing so.
 - **Breaking:** `Trace` rejects an out-of-trace parent link unless the span is marked with `nirizan.parent.synthetic=True`.
-- **Breaking:** The CI test installation now includes the optional OpenTelemetry dependencies so the integration is exercised in the test suite.
 - Trace persistence now replaces the stored span set for a trace. Saving an existing trace updates mutable span fields and removes spans absent from the incoming trace, including when the incoming trace contains no spans. Cross-trace span-ID collisions are rejected instead of overwriting another trace's data.
-- List ordering and purge compare by instant rather than by stored text, and ties are broken deterministically (`trace_id` for traces, then parent depth and stored order for spans), so pagination over traces that share a creation timestamp returns a total, gap-free order.
+- List ordering and purge compare by instant rather than by stored text. Instants compare at millisecond resolution, so two legacy rows whose instants land in the same millisecond are ordered by stored text and then `trace_id`; rows written since 0.5.0 are canonical UTC and therefore compare exactly. Spans of one trace are ordered by exact instant. Pagination stays deterministic in every case: a total order with no gaps or duplicates. Normalizing legacy rows to canonical UTC text is an optional migration tracked separately in #84.
 - **Removed hardcoded BibTeX citation blocks** from all submodule `__init__.py` files (`instrumentation/`, `metrics/`, `gate/`, `regression/`, `trust/`, `orchestrator/`, `storage/`, `reporting/`). Version metadata is now maintained only in `pyproject.toml` and `src/nirizan/__init__.py`, eliminating a maintenance hazard where submodule citation versions drifted independently (e.g., `instrumentation/` cited `0.5.0`, `trust/` cited `0.3.0`, `orchestrator/` and `storage/` cited `0.1.0`, `reporting/` cited `0.2.0`).
 - **Content capture is disabled by default** in both OpenTelemetry export and ingestion. Prompt, completion, retrieval, tool, and planning content is withheld unless explicitly enabled. This covers the known content attributes only; an arbitrary custom attribute passes through unchanged in both directions.
 - **Stashed NiriZan identifiers are no longer trusted by default.** Set `trust_stashed_ids=True` to recover NiriZan IDs from OpenTelemetry attributes; otherwise, identifiers are derived from OpenTelemetry IDs.
@@ -240,6 +239,5 @@ published on 2026-08-23.
 - Security-focused CI/CD and supply-chain controls; PyPI publishing via
   GitHub Actions Trusted Publishing.
 
-[Unreleased]: https://github.com/Red1-Rahman/NiriZan/compare/v0.5.0...HEAD
 [0.5.0]: https://github.com/Red1-Rahman/NiriZan/releases/tag/v0.5.0
 [0.1.0]: https://github.com/Red1-Rahman/NiriZan/releases/tag/v0.1.0
