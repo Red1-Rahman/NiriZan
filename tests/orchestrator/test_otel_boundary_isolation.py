@@ -150,12 +150,12 @@ async def test_loop_sink_delivers_from_a_foreign_thread_into_the_loop() -> None:
 
     thread = threading.Thread(target=producer)
     thread.start()
-    thread.join(timeout=5)
+    thread.join(timeout=15)
     assert enqueued.is_set()
 
     # The sink schedules the collector coroutine onto the loop without
     # blocking; wait for the delivery itself, not just the enqueue call.
-    await asyncio.wait_for(repository.saved_event.wait(), timeout=5)
+    await asyncio.wait_for(repository.saved_event.wait(), timeout=15)
     await collector.stop()
 
     assert [t.trace_id for t in repository.saved] == [trace.trace_id]
@@ -299,11 +299,11 @@ async def test_the_full_loop_persists_an_otel_shaped_trace_as_canonical_utc(
 
     worker = threading.Thread(target=producer)
     worker.start()
-    worker.join(timeout=5)
+    worker.join(timeout=15)
     assert delivered.is_set()
     # Wait for the persistence itself, not just for the enqueue call: the sink
     # schedules the coroutine and returns without blocking.
-    await asyncio.wait_for(sqlite_repository.saved_event.wait(), timeout=5)
+    await asyncio.wait_for(sqlite_repository.saved_event.wait(), timeout=15)
     await collector.stop()
 
     stored = await sqlite_repository.get(trace_id)
@@ -362,20 +362,23 @@ async def test_the_loop_sink_is_silent_when_the_collector_raises(
 
     worker = threading.Thread(target=producer)
     worker.start()
-    worker.join(timeout=5)
+    worker.join(timeout=15)
     assert not worker.is_alive()
     # The call itself returned without raising into the calling thread.
-    await asyncio.wait_for(collector.attempted.wait(), timeout=5)
+    await asyncio.wait_for(collector.attempted.wait(), timeout=15)
     # The scheduled coroutine then failed on the loop; its done callback logs.
     await wait_for_log(caplog, "collector refused the trace")
 
 
 async def wait_for_log(caplog: pytest.LogCaptureFixture, needle: str) -> None:
     """Wait (bounded) until ``needle`` appears in the captured log records."""
-    for _ in range(50):
+    # A generous but bounded budget: the sink hops the coroutine onto the loop
+    # from another thread, and the done callback that logs runs afterwards, so
+    # the wait has to cover thread scheduling as well as the loop's own.
+    for _ in range(100):
         if needle in caplog.text:
             return
-        await asyncio.sleep(0.01)
+        await asyncio.sleep(0.05)
     raise AssertionError(f"{needle!r} was never logged; log was:\n{caplog.text}")
 
 

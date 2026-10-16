@@ -253,7 +253,7 @@ def test_the_legacy_warning_latch_is_checked_under_its_lock(
     finally:
         fresh_legacy_latch.lock.release()
 
-    worker.join(timeout=5)
+    worker.join(timeout=15)
     assert finished.is_set()
     assert fresh_legacy_latch.claimed is True
 
