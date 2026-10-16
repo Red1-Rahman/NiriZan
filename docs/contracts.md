@@ -987,7 +987,7 @@ class MultivariateComparator:
 
 ---
 
-## Release 0.5.0 (2026-10-15): Breaking Change, canonical UTC storage, `save` replacement semantics, and marked synthetic parents
+## Release 0.5.0 (2026-10-16): Breaking Change, canonical UTC storage, `save` replacement semantics, and marked synthetic parents
 
 This section documents the breaking changes made to the Phase 1 `Trace` contract and to `BaseTraceRepository` in release 0.5.0, per the Versioning Rule at the bottom of this document. The OpenTelemetry adapter contracts above are unchanged by this section.
 

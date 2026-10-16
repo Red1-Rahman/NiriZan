@@ -18,7 +18,7 @@ This policy describes the current security posture and reporting process. It wil
 
 NiriZan currently has a single branch, `main`. There are no separate long-term maintenance or long-term-support branches.
 
-The latest released version is `0.5.0` (released 2026-10-15). The `CHANGELOG.md` is the authoritative record of NiriZan's released versions and changes.
+The latest released version is `0.5.0` (released 2026-10-16). The `CHANGELOG.md` is the authoritative record of NiriZan's released versions and changes.
 
 `main` may contain changes that have not yet been released. Security fixes are developed on `main` and incorporated into subsequent releases as appropriate.
 
