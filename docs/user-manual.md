@@ -1,7 +1,7 @@
 # NiriZan User Manual
 
 *Continuous evaluation infrastructure for production AI systems.*
-> version: `0.5.1`
+> version: `0.5.2`
 
 ---
 
@@ -118,7 +118,7 @@ The installed version is available as a plain string attribute on the package:
 import nirizan
 
 print(nirizan.__version__)
-# "0.5.1"
+# "0.5.2"
 ```
 
 There is currently no separate version-checking function; read `nirizan.__version__` directly, or use `importlib.metadata.version("nirizan")` from the standard library.
@@ -4488,5 +4488,5 @@ Closes the underlying SQLite connection. **Synchronous.**
 # End of User Manual
 
 <div align="center">
-Rahman, R. NiriZan (Version 0.5.1) [Computer software]. https://github.com/Red1-Rahman/NiriZan
+Rahman, R. NiriZan (Version 0.5.2) [Computer software]. https://github.com/Red1-Rahman/NiriZan
 </div>

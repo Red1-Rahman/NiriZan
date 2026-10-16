@@ -46,9 +46,9 @@ def test_current_release_version_is_consistent_in_release_docs() -> None:
     changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
     user_manual = (ROOT / "docs" / "user-manual.md").read_text(encoding="utf-8")
 
-    assert 'version = "0.5.1"' in pyproject
-    assert "## [0.5.1]" in changelog
-    assert "> version: `0.5.1`" in user_manual
+    assert 'version = "0.5.2"' in pyproject
+    assert "## [0.5.2]" in changelog
+    assert "> version: `0.5.2`" in user_manual
 
 
 def test_bootstrap_documentation_distinguishes_canonical_api_and_gate_shim() -> None:

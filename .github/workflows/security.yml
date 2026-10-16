@@ -178,7 +178,11 @@ jobs:
       - run: python -m build
       - run: pip install dist/*.whl
       - run: |
-          pip freeze > requirements-frozen.txt
+          # The local wheel is not published to PyPI until the separate
+          # publish workflow_run completes, so pip-audit cannot resolve it
+          # from the package index yet. Audit its third-party dependencies;
+          # the wheel itself is covered by the build and malware scans above.
+          pip freeze | sed -E '/^[Nn][Ii][Rr][Ii][Zz][Aa][Nn]([= @]|$)/d' > requirements-frozen.txt
           pip-audit -r requirements-frozen.txt --strict
 
   osv-scanner:
