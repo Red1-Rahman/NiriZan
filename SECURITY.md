@@ -2,7 +2,7 @@
 
 ## Project Status
 
-NiriZan is an independent open-source project. The latest released version is `0.5.2`, (see `CHANGELOG.md`). The package is publicly available on PyPI and can be installed with:
+NiriZan is an independent open-source project. The latest released version is `0.5.3`, (see `CHANGELOG.md`). The package is publicly available on PyPI and can be installed with:
 
 ```bash
 pip install nirizan
@@ -18,14 +18,14 @@ This policy describes the current security posture and reporting process. It wil
 
 NiriZan currently has a single branch, `main`. There are no separate long-term maintenance or long-term-support branches.
 
-The latest released version is `0.5.2` (released 2026-10-16). The `CHANGELOG.md` is the authoritative record of NiriZan's released versions and changes.
+The latest released version is `0.5.3` (released 2026-10-16). The `CHANGELOG.md` is the authoritative record of NiriZan's released versions and changes.
 
 `main` may contain changes that have not yet been released. Security fixes are developed on `main` and incorporated into subsequent releases as appropriate.
 
 | Version / Branch                      | Supported                         |
 | ------------------------------------- | --------------------------------- |
 | `main` (including unreleased changes) | Yes, best effort                  |
-| `0.5.2` (latest released version)     | Yes, best effort                  |
+| `0.5.3` (latest released version)     | Yes, best effort                  |
 | Older releases                        | No, upgrade to the latest release |
 
 Because NiriZan is pre-1.0, there is currently no formal long-term-support policy.
