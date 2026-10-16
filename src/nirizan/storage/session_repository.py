@@ -1,7 +1,7 @@
 # src\nirizan\storage\session_repository.py
 from __future__ import annotations
 
-from typing import Optional, Protocol
+from typing import Protocol
 from uuid import UUID
 
 from nirizan.instrumentation.sessions import Session
@@ -11,7 +11,7 @@ class SessionRepository(Protocol):
     """Minimal Session persistence; get_session returns None for missing, never raises."""
 
     async def save_session(self, session: Session) -> None: ...
-    async def get_session(self, session_id: UUID) -> Optional[Session]: ...
+    async def get_session(self, session_id: UUID) -> Session | None: ...
 
 
 class InMemorySessionRepository:
@@ -23,5 +23,5 @@ class InMemorySessionRepository:
     async def save_session(self, session: Session) -> None:
         self._sessions[session.session_id] = session
 
-    async def get_session(self, session_id: UUID) -> Optional[Session]:
+    async def get_session(self, session_id: UUID) -> Session | None:
         return self._sessions.get(session_id)

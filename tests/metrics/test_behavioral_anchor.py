@@ -1,6 +1,7 @@
 # tests/metrics/test_behavioral_anchor.py
-from datetime import datetime, timezone
 import uuid
+from datetime import UTC, datetime
+
 import numpy as np
 import pytest
 
@@ -11,7 +12,7 @@ from nirizan.metrics.behavioral_anchor import BehavioralAnchorMetric
 @pytest.fixture
 def sample_trace():
     trace_id = uuid.uuid4()
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     gen_span = Span(
         span_id=uuid.uuid4(),
         trace_id=trace_id,

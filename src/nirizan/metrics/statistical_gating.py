@@ -21,17 +21,21 @@ under the `bootstrap_delta_ci` name at package level.
 
 from __future__ import annotations
 
-from typing import Mapping
+from collections.abc import Mapping
 
 import numpy as np
 
 from nirizan._logging import get_logger
 from nirizan.metrics.stats import (
     bootstrap_delta_ci as stats_bootstrap_delta_ci,
+)
+from nirizan.metrics.stats import (
     calculate_sample_size,
     compute_calibration_metrics,
     compute_holm_bonferroni,
     compute_mann_whitney_u,
+)
+from nirizan.metrics.stats import (
     validate_scores as stats_validate_scores,
 )
 

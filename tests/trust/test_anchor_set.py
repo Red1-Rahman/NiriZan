@@ -1,5 +1,6 @@
 # tests/trust/test_anchor_set.py
-from datetime import datetime, timezone
+from datetime import UTC, datetime
+
 import pytest
 from pydantic import ValidationError
 
@@ -45,7 +46,7 @@ def test_anchor_set_creation_and_min_length():
         human_label=0.9,
     )
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     anchor_set = AnchorSet(
         anchor_set_id="v1-gold-set",
         items=[valid_item],

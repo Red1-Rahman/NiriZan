@@ -5,7 +5,7 @@ import asyncio
 import json
 import sqlite3
 from datetime import datetime
-from typing import Optional, Protocol, cast
+from typing import Protocol, cast
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict
@@ -25,7 +25,7 @@ class RunDiff(BaseModel):
 
 class ExperimentStore(Protocol):
     async def record_run(self, run: Run) -> None: ...
-    async def get_run(self, run_id: UUID) -> Optional[Run]: ...
+    async def get_run(self, run_id: UUID) -> Run | None: ...
     async def diff(self, run_a: UUID, run_b: UUID) -> RunDiff: ...
 
 
@@ -80,14 +80,14 @@ class SQLiteExperimentStore:
 
         await asyncio.to_thread(_insert)
 
-    async def get_run(self, run_id: UUID) -> Optional[Run]:
+    async def get_run(self, run_id: UUID) -> Run | None:
         run_id_str = str(run_id)
 
-        def _query() -> Optional[sqlite3.Row]:
+        def _query() -> sqlite3.Row | None:
             row = self._conn.execute(
                 "SELECT * FROM runs WHERE run_id = ?", (run_id_str,)
             ).fetchone()
-            return cast(Optional[sqlite3.Row], row)
+            return cast(sqlite3.Row | None, row)
 
         row = await asyncio.to_thread(_query)
         if row is None:

@@ -1,7 +1,7 @@
 # src/nirizan/trust/attribution.py
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from enum import Enum
 from typing import Literal
 
@@ -172,7 +172,7 @@ class AttributionEngine:
                     anchor_set_id=anchor_set_id,
                     system_score_delta=0.0,
                     judge_score_delta=0.0,
-                    evaluated_at=datetime.now(timezone.utc),
+                    evaluated_at=datetime.now(UTC),
                     explanation=(
                         f"Inconclusive attribution: '{name}' is empty or "
                         "contains non-finite values."
@@ -253,6 +253,6 @@ class AttributionEngine:
             anchor_set_id=anchor_set_id,
             system_score_delta=system_delta,
             judge_score_delta=judge_delta,
-            evaluated_at=datetime.now(timezone.utc),
+            evaluated_at=datetime.now(UTC),
             explanation=explanation,
         )

@@ -1109,7 +1109,7 @@ class TestCompareHolmCorrectionWithPinnedPValues:
             run_id=uuid4(),
         )
         for v in verdicts:
-            assert f"significant_after_holm=True" in v.explanation
+            assert "significant_after_holm=True" in v.explanation
 
     def test_neither_survives_holm_when_both_large(self, monkeypatch: pytest.MonkeyPatch) -> None:
         config = _fast_config(structure_alpha=0.05, warning_effect=0.05, blocking_effect=0.5)

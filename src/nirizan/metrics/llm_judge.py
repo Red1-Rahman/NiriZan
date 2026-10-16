@@ -2,8 +2,8 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
-from typing import Callable
+from collections.abc import Callable
+from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -84,6 +84,6 @@ class LLMJudge(BaseModel):
             metric_name=self.metric_name,
             trace_id=actual_trace_id,
             score=score,
-            computed_at=datetime.now(timezone.utc),
+            computed_at=datetime.now(UTC),
             details={"reasoning": reasoning, "prompt": prompt},
         )

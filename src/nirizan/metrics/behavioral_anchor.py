@@ -1,8 +1,9 @@
 # src/nirizan/metrics/behavioral_anchor.py
 from __future__ import annotations
 
-from datetime import datetime, timezone
-from typing import Callable
+from collections.abc import Callable
+from datetime import UTC, datetime
+
 import numpy as np
 
 from nirizan.instrumentation.spans import SpanKind, Trace
@@ -64,7 +65,7 @@ class BehavioralAnchorMetric:
                         "threshold": self.threshold,
                         "span_id": str(span.span_id),
                     },
-                    computed_at=datetime.now(timezone.utc),
+                    computed_at=datetime.now(UTC),
                 )
             )
 

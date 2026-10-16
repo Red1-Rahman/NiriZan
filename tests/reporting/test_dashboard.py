@@ -17,7 +17,6 @@ from nirizan.reporting.dashboard import (
 from nirizan.reporting.judge_reliability import JudgeReliabilityStatus
 from nirizan.trust.attribution import AttributionVerdict, DriftAttribution
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

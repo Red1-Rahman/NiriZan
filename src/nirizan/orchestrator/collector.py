@@ -3,7 +3,7 @@ import asyncio
 import logging
 import os
 import subprocess
-from typing import Optional, Protocol
+from typing import Protocol
 
 from nirizan.instrumentation.exporters import BaseExporter
 from nirizan.instrumentation.spans import Trace
@@ -11,7 +11,7 @@ from nirizan.instrumentation.spans import Trace
 logger = logging.getLogger(__name__)
 
 
-def _resolve_code_commit() -> Optional[str]:
+def _resolve_code_commit() -> str | None:
     """GIT_COMMIT_SHA env var first, then `git rev-parse HEAD`, else None (never fabricated)."""
     env_value = os.environ.get("GIT_COMMIT_SHA")
     if env_value:
@@ -28,7 +28,7 @@ def _resolve_code_commit() -> Optional[str]:
         return None
 
 
-def _resolve_data_snapshot_id() -> Optional[str]:
+def _resolve_data_snapshot_id() -> str | None:
     """NIRIZAN_DATA_SNAPSHOT_ID env var only; no generic fallback exists, so None is honest if unset."""
     return os.environ.get("NIRIZAN_DATA_SNAPSHOT_ID")
 
@@ -45,7 +45,7 @@ class TraceCollector:
     def __init__(self, repository: TraceSink) -> None:
         self.repository = repository
         self.queue: asyncio.Queue[Trace] = asyncio.Queue()
-        self._worker_task: Optional[asyncio.Task[None]] = None
+        self._worker_task: asyncio.Task[None] | None = None
         self._running = False
         # Resolved once per collector, not per-trace: the running commit and
         # data snapshot don't change mid-process, and a git subprocess call
@@ -87,7 +87,7 @@ class TraceCollector:
                 trace = await asyncio.wait_for(self.queue.get(), timeout=0.1)
                 await self.repository.save(trace)
                 self.queue.task_done()
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 continue
             except Exception as err:
                 logger.error("Error persisting trace in collector worker: %s", err)

@@ -1,7 +1,7 @@
 # src/nirizan/metrics/rag_triad.py
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from nirizan._logging import get_logger
 from nirizan.instrumentation.spans import SpanKind, Trace
@@ -34,7 +34,7 @@ class RAGTriadMetric:
         logger.info("Evaluating RAGTriadMetric for trace_id=%s", trace.trace_id)
         fields = self._extract_rag_fields(trace)
         query, context, answer = fields["query"], fields["context"], fields["answer"]
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         results: list[MetricResult] = []
 
         missing = [k for k, v in fields.items() if v is None]

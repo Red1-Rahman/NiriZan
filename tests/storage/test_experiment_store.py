@@ -1,5 +1,5 @@
 # tests/storage/test_experiment_store.py
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 
@@ -22,7 +22,7 @@ def experiment_store(tmp_path: Path) -> SQLiteExperimentStore:
 async def test_record_and_get_run(experiment_store: SQLiteExperimentStore) -> None:
     run_id = uuid4()
     trace_id = uuid4()
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     run = Run(
         run_id=run_id,
@@ -72,7 +72,7 @@ async def test_diff_runs(experiment_store: SQLiteExperimentStore) -> None:
     run_b_id = uuid4()
     trace_a_id = uuid4()
     trace_b_id = uuid4()
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     run_a = Run(
         run_id=run_a_id,
@@ -154,7 +154,7 @@ async def test_diff_missing_run_raises_value_error(experiment_store: SQLiteExper
         code_commit="commit_1234567",
         data_snapshot_id="snap_1",
         metric_results=[],
-        created_at=datetime.now(timezone.utc),
+        created_at=datetime.now(UTC),
     )
     await experiment_store.record_run(run)
 

@@ -7,6 +7,7 @@ import logging
 from uuid import uuid4
 
 import pytest
+
 from nirizan.gate.ci import (
     format_gate_summary,
     gate_exit_code,
@@ -19,7 +20,6 @@ from nirizan.regression.multivariate import (
     MultivariateMethod,
     MultivariateVerdict,
 )
-
 
 # ---------------------------------------------------------------------------
 # Fixtures

@@ -5,7 +5,7 @@ import asyncio
 import json
 import sqlite3
 from datetime import datetime
-from typing import Optional, Protocol, cast
+from typing import Protocol, cast
 from uuid import UUID
 
 from nirizan.storage.models import Baseline
@@ -13,7 +13,7 @@ from nirizan.storage.models import Baseline
 
 class BaselineRepository(Protocol):
     async def save_baseline(self, baseline: Baseline) -> None: ...
-    async def get_baseline(self, baseline_id: UUID) -> Optional[Baseline]: ...
+    async def get_baseline(self, baseline_id: UUID) -> Baseline | None: ...
     async def list_baselines(self, system_type: str) -> list[Baseline]: ...
 
 
@@ -64,14 +64,14 @@ class SQLiteBaselineRepository:
 
         await asyncio.to_thread(_insert)
 
-    async def get_baseline(self, baseline_id: UUID) -> Optional[Baseline]:
+    async def get_baseline(self, baseline_id: UUID) -> Baseline | None:
         baseline_id_str = str(baseline_id)
 
-        def _query() -> Optional[sqlite3.Row]:
+        def _query() -> sqlite3.Row | None:
             row = self._conn.execute(
                 "SELECT * FROM baselines WHERE baseline_id = ?", (baseline_id_str,)
             ).fetchone()
-            return cast(Optional[sqlite3.Row], row)
+            return cast(sqlite3.Row | None, row)
 
         row = await asyncio.to_thread(_query)
         if row is None:

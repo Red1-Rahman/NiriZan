@@ -96,9 +96,9 @@ def scan_file(file_path: str):
             f"--{boundary}\r\n"
             f'Content-Disposition: form-data; name="file"; filename="{os.path.basename(file_path)}"\r\n'
             f"Content-Type: application/octet-stream\r\n\r\n"
-        ).encode("utf-8")
+        ).encode()
         + file_bytes
-        + f"\r\n--{boundary}--\r\n".encode("utf-8")
+        + f"\r\n--{boundary}--\r\n".encode()
     )
 
     status, resp = make_vt_request(

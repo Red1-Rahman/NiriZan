@@ -1,11 +1,9 @@
 # tests/reporting/test_judge_reliability.py
-from datetime import datetime, timedelta, timezone
-from uuid import uuid4
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
 from nirizan.reporting.judge_reliability import (
-    DEFAULT_JUDGE_DRIFT_RATE_WARNING,
     JudgeReliabilityMetrics,
     JudgeReliabilityStatus,
     compute_judge_reliability,
@@ -28,7 +26,7 @@ def _make_verdict(
         anchor_set_id=anchor_set_id,
         system_score_delta=system_score_delta,
         judge_score_delta=judge_score_delta,
-        evaluated_at=evaluated_at or datetime.now(timezone.utc),
+        evaluated_at=evaluated_at or datetime.now(UTC),
         explanation="Test verdict",
     )
 
@@ -46,7 +44,7 @@ def test_compute_judge_reliability_mixed_anchor_sets_raises():
 
 
 def test_compute_judge_reliability_stable_status():
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     verdicts = [
         _make_verdict(
             attribution=DriftAttribution.NONE,
@@ -79,7 +77,7 @@ def test_compute_judge_reliability_stable_status():
 
 
 def test_compute_judge_reliability_unstable_status():
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     # 2 out of 5 verdicts have JUDGE_DRIFT (40% > 10% warning threshold)
     verdicts = [
         _make_verdict(
@@ -101,7 +99,7 @@ def test_compute_judge_reliability_unstable_status():
 
 
 def test_compute_judge_reliability_custom_warning_threshold():
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     # 1 out of 4 verdicts has JUDGE_DRIFT (25%)
     verdicts = [
         _make_verdict(attribution=DriftAttribution.JUDGE_DRIFT, evaluated_at=now),
@@ -144,9 +142,9 @@ def test_compute_judge_reliability_calibration_mae():
 
 
 def test_judge_score_delta_series_sorting():
-    t0 = datetime.now(timezone.utc) - timedelta(hours=2)
-    t1 = datetime.now(timezone.utc) - timedelta(hours=1)
-    t2 = datetime.now(timezone.utc)
+    t0 = datetime.now(UTC) - timedelta(hours=2)
+    t1 = datetime.now(UTC) - timedelta(hours=1)
+    t2 = datetime.now(UTC)
 
     # Pass in unsorted order
     verdicts = [
@@ -160,8 +158,8 @@ def test_judge_score_delta_series_sorting():
 
 
 def test_system_score_delta_series_sorting():
-    t0 = datetime.now(timezone.utc) - timedelta(hours=2)
-    t1 = datetime.now(timezone.utc)
+    t0 = datetime.now(UTC) - timedelta(hours=2)
+    t1 = datetime.now(UTC)
 
     verdicts = [
         _make_verdict(system_score_delta=-0.3, evaluated_at=t1),

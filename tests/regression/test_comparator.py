@@ -4,6 +4,7 @@ from uuid import UUID, uuid4
 
 import numpy as np
 import pytest
+
 from nirizan.regression.comparator import (
     BaselineComparator,
     RegressionSeverity,

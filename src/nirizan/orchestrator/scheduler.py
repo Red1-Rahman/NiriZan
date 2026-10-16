@@ -1,7 +1,7 @@
 # src/nirizan/orchestrator/scheduler.py
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Protocol
 from uuid import uuid4
 
@@ -65,7 +65,7 @@ class RunScheduler:
                 code_commit=_UNVERSIONED_COMMIT,
                 data_snapshot_id=_UNVERSIONED_SNAPSHOT,
                 metric_results=metric_results,
-                created_at=datetime.now(timezone.utc),
+                created_at=datetime.now(UTC),
             )
 
             await self.run_repository.save_run(run)

@@ -1,5 +1,5 @@
 # tests/storage/test_baselines.py
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import uuid4
 
@@ -22,7 +22,7 @@ async def test_save_and_get_baseline(baseline_repo: SQLiteBaselineRepository) ->
     baseline_id = uuid4()
     run_1_id = uuid4()
     run_2_id = uuid4()
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     baseline = Baseline(
         baseline_id=baseline_id,
@@ -55,7 +55,7 @@ async def test_get_nonexistent_baseline_returns_none(
 async def test_list_baselines_filtering_and_ordering(
     baseline_repo: SQLiteBaselineRepository,
 ) -> None:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     b1 = Baseline(
         baseline_id=uuid4(),

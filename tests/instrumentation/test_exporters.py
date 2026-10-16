@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from uuid import uuid4
 
 import pytest
@@ -10,7 +10,7 @@ from nirizan.instrumentation.spans import Span, SpanKind, Trace
 @pytest.fixture
 def sample_trace() -> Trace:
     trace_id = uuid4()
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     span = Span(
         span_id=uuid4(),
         trace_id=trace_id,

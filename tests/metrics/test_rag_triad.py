@@ -1,6 +1,6 @@
 # tests/metrics/test_rag_triad.py
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from uuid import uuid4
 
 import pytest
@@ -20,7 +20,7 @@ def build_test_trace(
     answer: str | None = "The capital of France is Paris.",
 ) -> Trace:
     trace_id = uuid4()
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     spans: list[Span] = []
 
     if query is not None:

@@ -1,6 +1,6 @@
 # src\nirizan\instrumentation\exporters.py
-from abc import ABC, abstractmethod
 import logging
+from abc import ABC, abstractmethod
 
 from nirizan.instrumentation.spans import Trace
 

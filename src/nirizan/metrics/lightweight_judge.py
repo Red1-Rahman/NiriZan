@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import re
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any, Protocol
 from uuid import UUID, uuid4
 
@@ -83,5 +83,5 @@ class LightweightJudge(BaseModel):
             metric_name=self.metric_name,
             trace_id=actual_trace_id,
             score=score,
-            computed_at=datetime.now(timezone.utc),
+            computed_at=datetime.now(UTC),
         )

@@ -1,7 +1,7 @@
 # src/nirizan/regression/thresholds.py
 from __future__ import annotations
 
-from typing import Mapping
+from collections.abc import Mapping
 
 import numpy as np
 
@@ -9,6 +9,8 @@ from nirizan._logging import get_logger
 from nirizan.metrics.stats import (
     compute_holm_bonferroni,
     compute_mann_whitney_u,
+)
+from nirizan.metrics.stats import (
     validate_scores as stats_validate_scores,
 )
 

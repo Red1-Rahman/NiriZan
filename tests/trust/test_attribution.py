@@ -1,7 +1,7 @@
 # tests/trust/test_attribution.py
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from unittest.mock import patch
 
 import numpy as np
@@ -64,7 +64,7 @@ def test_attribution_no_drift(
     assert verdict.system_score_delta == pytest.approx(0.0)
     assert verdict.judge_score_delta == pytest.approx(0.0)
     assert verdict.evaluated_at.tzinfo is not None
-    assert verdict.evaluated_at.utcoffset() == timezone.utc.utcoffset(verdict.evaluated_at)
+    assert verdict.evaluated_at.utcoffset() == UTC.utcoffset(verdict.evaluated_at)
     assert verdict.explanation
 
 
@@ -844,8 +844,8 @@ def test_evaluated_at_is_timezone_aware_utc(
 
     assert verdict.evaluated_at.tzinfo is not None
     assert verdict.evaluated_at.utcoffset() is not None
-    assert verdict.evaluated_at.utcoffset() == timezone.utc.utcoffset(verdict.evaluated_at)
-    assert verdict.evaluated_at <= datetime.now(timezone.utc)
+    assert verdict.evaluated_at.utcoffset() == UTC.utcoffset(verdict.evaluated_at)
+    assert verdict.evaluated_at <= datetime.now(UTC)
 
 
 # ---------------------------------------------------------------------------

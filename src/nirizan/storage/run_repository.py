@@ -1,7 +1,7 @@
 # src\nirizan\storage\run_repository.py
 from __future__ import annotations
 
-from typing import Optional, Protocol
+from typing import Protocol
 from uuid import UUID
 
 from nirizan.storage.models import Run
@@ -11,7 +11,7 @@ class RunRepository(Protocol):
     """Minimal, additive Run persistence, narrower than Phase 3's ExperimentStore."""
 
     async def save_run(self, run: Run) -> None: ...
-    async def get_run(self, run_id: UUID) -> Optional[Run]: ...
+    async def get_run(self, run_id: UUID) -> Run | None: ...
 
 
 class InMemoryRunRepository:
@@ -23,5 +23,5 @@ class InMemoryRunRepository:
     async def save_run(self, run: Run) -> None:
         self._runs[run.run_id] = run
 
-    async def get_run(self, run_id: UUID) -> Optional[Run]:
+    async def get_run(self, run_id: UUID) -> Run | None:
         return self._runs.get(run_id)

@@ -1,5 +1,4 @@
 # tests/reporting/test_health_score.py
-import pytest
 from nirizan.reporting.health_score import compute_system_health_score
 from nirizan.trust.attribution import DriftAttribution
 
