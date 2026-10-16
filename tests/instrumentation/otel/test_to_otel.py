@@ -135,6 +135,7 @@ _ids = itertools.count(1_000)
 
 
 def next_id() -> UUID:
+    """Return the next deterministic UUID for a span fixture."""
     return UUID(int=next(_ids))
 
 
@@ -167,6 +168,7 @@ def nspan(
 
 
 def ntrace(*spans: Span, session_id: UUID | None = None, trace_id: UUID = TRACE_UUID) -> Trace:
+    """Build a trace from spans using fixed application metadata and an optional session."""
     return Trace(
         trace_id=trace_id,
         application_name="test-app",
@@ -185,16 +187,20 @@ class OTel:
     tracer: Tracer
 
     def spans(self) -> list[ReadableSpan]:
+        """Return a list of spans captured by the in-memory exporter."""
         return list(self.memory.get_finished_spans())
 
     def by_name(self) -> dict[str, ReadableSpan]:
+        """Index captured OTel spans by name."""
         return {s.name: s for s in self.spans()}
 
     def by_nirizan_id(self) -> dict[str, ReadableSpan]:
+        """Index captured OTel spans by their stashed NiriZan span ID."""
         return {str(s.attributes[NIRIZAN_SPAN_ID]): s for s in self.spans() if s.attributes}
 
 
 def _make_otel(**provider_kwargs: Any) -> OTel:
+    """Create an SDK provider with synchronous in-memory export and the NiriZan scope."""
     memory = InMemorySpanExporter()
     provider = TracerProvider(shutdown_on_exit=False, **provider_kwargs)
     provider.add_span_processor(SimpleSpanProcessor(memory))
@@ -203,18 +209,21 @@ def _make_otel(**provider_kwargs: Any) -> OTel:
 
 @pytest.fixture
 def otel() -> Iterator[OTel]:
+    """Provide an in-memory SDK pipeline and shut its provider down after the test."""
     sdk = _make_otel()
     yield sdk
     sdk.provider.shutdown()
 
 
 def span_context_of(span: ReadableSpan) -> SpanContext:
+    """Return a readable span's context, asserting that it exists."""
     ctx = span.get_span_context()
     assert ctx is not None
     return ctx
 
 
 def attr_values(spans: list[ReadableSpan]) -> list[str]:
+    """Collect attribute values as strings for content disclosure assertions."""
     return [str(v) for s in spans for v in (s.attributes or {}).values()]
 
 
@@ -224,6 +233,7 @@ def attr_values(spans: list[ReadableSpan]) -> list[str]:
 
 
 def test_config_defaults_are_privacy_first_and_backward_compatible() -> None:
+    """Verify that defaults withhold content while retaining legacy metadata and root linking."""
     config = OTelExporterConfig()
 
     assert config.capture_content is False
@@ -232,6 +242,7 @@ def test_config_defaults_are_privacy_first_and_backward_compatible() -> None:
 
 
 def test_config_is_immutable() -> None:
+    """Verify that exporter configuration fields cannot be reassigned."""
     config = OTelExporterConfig()
     field = "capture_content"
     with pytest.raises(ValidationError):
@@ -244,16 +255,19 @@ def test_config_is_immutable() -> None:
     ids=["str", "int", "none"],
 )
 def test_config_is_strict_about_types(kwargs: dict[str, Any]) -> None:
+    """Verify that strict exporter configuration rejects incompatible types."""
     with pytest.raises(ValidationError):
         OTelExporterConfig(**kwargs)
 
 
 def test_config_rejects_unknown_settings_so_typos_are_not_silently_ignored() -> None:
+    """Verify that unknown exporter settings fail validation rather than hiding typos."""
     with pytest.raises(ValidationError):
         OTelExporterConfig(capture_contents=True)  # type: ignore[call-arg]
 
 
 def test_exporter_exposes_the_config_it_was_built_with() -> None:
+    """Verify that exporters expose the supplied configuration or the default settings."""
     config = OTelExporterConfig(capture_content=True)
 
     assert NiriZanToOTelExporter(tracer=MagicMock(), config=config).config == config
@@ -266,23 +280,28 @@ def test_exporter_exposes_the_config_it_was_built_with() -> None:
 
 
 def test_to_nanoseconds_returns_none_for_none() -> None:
+    """Verify that a missing timestamp remains None."""
     assert _to_nanoseconds(None) is None
 
 
 def test_to_nanoseconds_passes_through_an_int() -> None:
+    """Verify that integer nanosecond timestamps pass through unchanged."""
     assert _to_nanoseconds(1000) == 1000
 
 
 @pytest.mark.parametrize("value", ["invalid", 1.5, True, False, b"1", [1]])
 def test_to_nanoseconds_returns_none_for_unsupported_types(value: object) -> None:
+    """Verify that unsupported timestamp types produce None."""
     assert _to_nanoseconds(value) is None  # type: ignore[arg-type]
 
 
 def test_to_nanoseconds_treats_a_naive_datetime_as_utc() -> None:
+    """Verify that naive datetimes are interpreted as UTC during export."""
     assert _to_nanoseconds(datetime(2020, 1, 1)) == 1_577_836_800_000_000_000
 
 
 def test_to_nanoseconds_converts_an_aware_datetime() -> None:
+    """Verify that aware UTC datetimes convert to the expected nanosecond count."""
     assert _to_nanoseconds(datetime(2020, 1, 1, tzinfo=UTC)) == 1_577_836_800_000_000_000
 
 
@@ -300,10 +319,12 @@ def test_to_nanoseconds_is_exact_for_microseconds() -> None:
 
 
 def test_to_nanoseconds_handles_times_before_the_epoch() -> None:
+    """Verify that pre-epoch datetimes produce negative nanosecond timestamps."""
     assert _to_nanoseconds(datetime(1969, 12, 31, 23, 59, 59, 500_000, tzinfo=UTC)) == -500_000_000
 
 
 def test_to_nanoseconds_honors_the_timezone_offset() -> None:
+    """Verify that equivalent instants with different timezone offsets convert equally."""
     plus_530 = timezone(timedelta(hours=5, minutes=30))
 
     assert _to_nanoseconds(datetime(2020, 1, 1, 5, 30, tzinfo=plus_530)) == _to_nanoseconds(
@@ -327,15 +348,18 @@ def test_to_nanoseconds_round_trips_through_the_ingest_conversion() -> None:
 
 
 def test_format_payload_value_passes_none_through() -> None:
+    """Verify that absent payload text remains None."""
     assert _format_payload_value(None) is None
 
 
 def test_format_payload_value_leaves_short_text_alone() -> None:
+    """Verify that short and empty payload strings remain unchanged."""
     assert _format_payload_value("hello") == "hello"
     assert _format_payload_value("") == ""
 
 
 def test_format_payload_value_truncates_at_the_attribute_limit() -> None:
+    """Verify exact-fit payloads and truncation of text that exceeds the attribute limit."""
     exactly = "a" * MAX_ATTR_VALUE_LENGTH
     over = "a" * (MAX_ATTR_VALUE_LENGTH + 1)
 
@@ -347,6 +371,7 @@ def test_format_payload_value_truncates_at_the_attribute_limit() -> None:
 
 
 def test_format_payload_value_preserves_non_ascii_text() -> None:
+    """Verify that payload formatting preserves non-ASCII text."""
     assert _format_payload_value("আপনি কেমন আছেন?") == "আপনি কেমন আছেন?"
 
 
@@ -356,6 +381,7 @@ def test_format_payload_value_preserves_non_ascii_text() -> None:
 
 
 def test_attributes_always_carry_identifiers_kind_and_provenance() -> None:
+    """Verify that exported attributes include NiriZan IDs, span kind, and provenance."""
     span = nspan(kind=SpanKind.PLANNING)
 
     attrs = convert_span_to_otel_attributes(span)
@@ -378,6 +404,7 @@ def test_attributes_always_carry_identifiers_kind_and_provenance() -> None:
     ],
 )
 def test_attributes_name_every_span_kind(kind: SpanKind, expected: str) -> None:
+    """Verify the exported kind string for every NiriZan span kind."""
     assert convert_span_to_otel_attributes(nspan(kind=kind))[NIRIZAN_SPAN_KIND] == expected
 
 
@@ -388,6 +415,7 @@ def test_span_kind_table_covers_every_span_kind() -> None:
 
 
 def test_attributes_propagate_a_derived_provenance_marker() -> None:
+    """Verify that derived ID provenance is preserved during export."""
     span = nspan(
         attributes={
             NIRIZAN_SPAN_ID_SOURCE: ID_SOURCE_DERIVED,
@@ -403,6 +431,7 @@ def test_attributes_propagate_a_derived_provenance_marker() -> None:
 
 @pytest.mark.parametrize("junk", ["bogus", "", 7, True])
 def test_attributes_treat_unknown_provenance_as_roundtrip(junk: str | int | bool) -> None:
+    """Verify that unknown ID provenance defaults to roundtrip."""
     span = nspan(attributes={NIRIZAN_SPAN_ID_SOURCE: junk, NIRIZAN_TRACE_ID_SOURCE: junk})
 
     attrs = convert_span_to_otel_attributes(span)
@@ -412,6 +441,7 @@ def test_attributes_treat_unknown_provenance_as_roundtrip(junk: str | int | bool
 
 
 def test_attributes_carry_the_session_id_as_text() -> None:
+    """Verify that UUID and string session IDs are exported as text."""
     session = UUID("12345678-1234-5678-1234-567812345678")
 
     from_uuid = convert_span_to_otel_attributes(nspan(), session_id=session)
@@ -423,10 +453,12 @@ def test_attributes_carry_the_session_id_as_text() -> None:
 
 @pytest.mark.parametrize("empty", [None, ""])
 def test_attributes_omit_an_absent_session_id(empty: str | None) -> None:
+    """Verify that absent or empty session IDs produce no session attribute."""
     assert NIRIZAN_SESSION_ID not in convert_span_to_otel_attributes(nspan(), session_id=empty)
 
 
 def test_attributes_are_always_valid_otel_attribute_values() -> None:
+    """Verify that converted attributes contain only supported OTel scalar value types."""
     span = nspan(
         kind=SpanKind.GENERATION,
         attributes={"s": "v", "i": 1, "f": 1.5, "b": True, "model": "m", "prompt_tokens": 3},
@@ -446,6 +478,7 @@ def test_attributes_are_always_valid_otel_attribute_values() -> None:
 
 @pytest.mark.parametrize("kind", list(SpanKind))
 def test_content_is_not_exported_by_default(kind: SpanKind) -> None:
+    """Verify that default conversion omits known content keys and supplied secret payloads."""
     span = nspan(kind=kind, input_payload="SECRET-IN", output_payload="SECRET-OUT")
 
     attrs = convert_span_to_otel_attributes(span)
@@ -456,6 +489,7 @@ def test_content_is_not_exported_by_default(kind: SpanKind) -> None:
 
 @pytest.mark.parametrize("kind", list(SpanKind))
 def test_content_is_exported_when_capture_is_on(kind: SpanKind) -> None:
+    """Verify that enabling capture exports the payload keys for each span kind."""
     in_key, out_key = EXPECTED_PAYLOAD_KEYS[kind]
     span = nspan(kind=kind, input_payload="the input", output_payload="the output")
 
@@ -467,6 +501,7 @@ def test_content_is_exported_when_capture_is_on(kind: SpanKind) -> None:
 
 @pytest.mark.parametrize("kind", list(SpanKind))
 def test_content_attributes_are_omitted_for_missing_payloads(kind: SpanKind) -> None:
+    """Verify that missing payloads produce no corresponding content attributes."""
     in_key, out_key = EXPECTED_PAYLOAD_KEYS[kind]
 
     only_input = convert_span_to_otel_attributes(
@@ -483,6 +518,7 @@ def test_content_attributes_are_omitted_for_missing_payloads(kind: SpanKind) -> 
 
 
 def test_content_is_truncated_and_keeps_non_ascii_text() -> None:
+    """Verify that captured content is length limited while preserving non-ASCII text."""
     span = nspan(input_payload="আ" * (MAX_ATTR_VALUE_LENGTH + 5), output_payload="কেমন আছেন")
 
     attrs = convert_span_to_otel_attributes(span, config=CONTENT_ON)
@@ -492,6 +528,7 @@ def test_content_is_truncated_and_keeps_non_ascii_text() -> None:
 
 
 def test_structure_is_exported_even_when_content_is_withheld() -> None:
+    """Verify that structural metadata survives content filtering."""
     generation = nspan(
         kind=SpanKind.GENERATION,
         attributes={"provider": "openai", "model": "gpt-4", "prompt_tokens": 10},
@@ -531,6 +568,7 @@ def test_withheld_content_does_not_leak_through_copied_span_attributes() -> None
 
 
 def test_only_well_known_content_keys_are_withheld() -> None:
+    """Verify that content filtering preserves custom keys outside the shared content set."""
     span = nspan(attributes={"prompt": "user-defined-key", "gen_ai.prompt.extra": "other"})
 
     attrs = convert_span_to_otel_attributes(span)
@@ -545,6 +583,7 @@ def test_only_well_known_content_keys_are_withheld() -> None:
 
 
 def test_generation_maps_provider_model_tokens_and_operation() -> None:
+    """Verify generation provider, model, token usage, operation, and legacy attribute mappings."""
     span = nspan(
         attributes={
             "provider": "openai",
@@ -568,6 +607,7 @@ def test_generation_maps_provider_model_tokens_and_operation() -> None:
 
 
 def test_generation_legacy_names_can_be_switched_off() -> None:
+    """Verify that legacy generation aliases can be disabled without losing canonical metadata."""
     span = nspan(attributes={"provider": "openai", "prompt_tokens": 10, "completion_tokens": 20})
 
     attrs = convert_span_to_otel_attributes(
@@ -595,6 +635,7 @@ def test_generation_zero_token_counts_are_exported() -> None:
 
 
 def test_generation_zero_is_not_skipped_in_favor_of_a_later_key() -> None:
+    """Verify that zero token usage takes precedence over later fallback keys."""
     attrs = convert_span_to_otel_attributes(
         nspan(attributes={"prompt_tokens": 0, GEN_AI_USAGE_INPUT_TOKENS: 99})
     )
@@ -603,6 +644,7 @@ def test_generation_zero_is_not_skipped_in_favor_of_a_later_key() -> None:
 
 
 def test_generation_reads_the_canonical_token_names_written_by_ingest() -> None:
+    """Verify that canonical token keys from ingestion can be exported again."""
     attrs = convert_span_to_otel_attributes(
         nspan(attributes={GEN_AI_USAGE_INPUT_TOKENS: 7, GEN_AI_USAGE_OUTPUT_TOKENS: 9})
     )
@@ -614,6 +656,7 @@ def test_generation_reads_the_canonical_token_names_written_by_ingest() -> None:
 
 
 def test_generation_reads_the_legacy_token_names_too() -> None:
+    """Verify that legacy token keys also populate canonical usage attributes."""
     attrs = convert_span_to_otel_attributes(
         nspan(attributes={GEN_AI_USAGE_PROMPT_TOKENS: 3, GEN_AI_USAGE_COMPLETION_TOKENS: 4})
     )
@@ -623,6 +666,7 @@ def test_generation_reads_the_legacy_token_names_too() -> None:
 
 
 def test_generation_token_precedence_is_short_name_then_canonical_then_legacy() -> None:
+    """Verify token lookup precedence from short names through canonical and legacy names."""
     attrs = convert_span_to_otel_attributes(
         nspan(
             attributes={
@@ -638,6 +682,7 @@ def test_generation_token_precedence_is_short_name_then_canonical_then_legacy() 
 
 @pytest.mark.parametrize("bad", [True, False, 1.5, "10"])
 def test_generation_ignores_token_values_that_are_not_integers(bad: bool | float | str) -> None:
+    """Verify that noninteger token counts do not become usage attributes."""
     attrs = convert_span_to_otel_attributes(nspan(attributes={"prompt_tokens": bad}))
 
     assert GEN_AI_USAGE_INPUT_TOKENS not in attrs
@@ -645,6 +690,7 @@ def test_generation_ignores_token_values_that_are_not_integers(bad: bool | float
 
 
 def test_generation_omits_usage_provider_and_model_when_unknown() -> None:
+    """Verify that unknown generation metadata is omitted and the operation defaults to chat."""
     attrs = convert_span_to_otel_attributes(nspan())
 
     for key in (
@@ -661,6 +707,7 @@ def test_generation_omits_usage_provider_and_model_when_unknown() -> None:
 
 @pytest.mark.parametrize("source_key", ["provider", GEN_AI_PROVIDER_NAME, GEN_AI_SYSTEM])
 def test_generation_reads_the_provider_from_any_known_key(source_key: str) -> None:
+    """Verify that each supported provider key supplies canonical and legacy provider names."""
     attrs = convert_span_to_otel_attributes(nspan(attributes={source_key: "anthropic"}))
 
     assert attrs[GEN_AI_PROVIDER_NAME] == "anthropic"
@@ -669,6 +716,7 @@ def test_generation_reads_the_provider_from_any_known_key(source_key: str) -> No
 
 @pytest.mark.parametrize("source_key", ["model_name", "model", GEN_AI_REQUEST_MODEL])
 def test_generation_reads_the_model_from_any_known_key(source_key: str) -> None:
+    """Verify that each supported model key supplies request and default response models."""
     attrs = convert_span_to_otel_attributes(nspan(attributes={source_key: "gpt-4"}))
 
     assert attrs[GEN_AI_REQUEST_MODEL] == "gpt-4"
@@ -676,6 +724,7 @@ def test_generation_reads_the_model_from_any_known_key(source_key: str) -> None:
 
 
 def test_generation_keeps_a_distinct_response_model_when_known() -> None:
+    """Verify that an explicit response model remains distinct from the request model."""
     attrs = convert_span_to_otel_attributes(
         nspan(attributes={"model": "gpt-4", GEN_AI_RESPONSE_MODEL: "gpt-4-0613"})
     )
@@ -685,6 +734,7 @@ def test_generation_keeps_a_distinct_response_model_when_known() -> None:
 
 
 def test_generation_operation_name_can_be_set_by_the_span() -> None:
+    """Verify that a custom generation operation overrides the chat default."""
     attrs = convert_span_to_otel_attributes(nspan(attributes={GEN_AI_OPERATION_NAME: "embeddings"}))
 
     assert attrs[GEN_AI_OPERATION_NAME] == "embeddings"
@@ -692,6 +742,7 @@ def test_generation_operation_name_can_be_set_by_the_span() -> None:
 
 @pytest.mark.parametrize("kind", [SpanKind.RETRIEVAL, SpanKind.TOOL_USE, SpanKind.PLANNING])
 def test_generation_attributes_are_only_added_to_generation_spans(kind: SpanKind) -> None:
+    """Verify that generation-specific attributes are not computed for other span kinds."""
     attrs = convert_span_to_otel_attributes(
         nspan(kind=kind, attributes={"model": "gpt-4", "prompt_tokens": 1})
     )
@@ -707,6 +758,7 @@ def test_generation_attributes_are_only_added_to_generation_spans(kind: SpanKind
 
 @pytest.mark.parametrize("source_key", ["top_k", NIRIZAN_RETRIEVAL_TOP_K])
 def test_retrieval_top_k_is_read_from_either_key(source_key: str) -> None:
+    """Verify retrieval top-k lookup from either supported attribute name."""
     attrs = convert_span_to_otel_attributes(
         nspan(kind=SpanKind.RETRIEVAL, attributes={source_key: 5})
     )
@@ -715,6 +767,7 @@ def test_retrieval_top_k_is_read_from_either_key(source_key: str) -> None:
 
 
 def test_retrieval_top_k_of_zero_is_exported() -> None:
+    """Verify that zero is exported as a valid retrieval top-k value."""
     attrs = convert_span_to_otel_attributes(nspan(kind=SpanKind.RETRIEVAL, attributes={"top_k": 0}))
 
     assert attrs[NIRIZAN_RETRIEVAL_TOP_K] == 0
@@ -722,6 +775,7 @@ def test_retrieval_top_k_of_zero_is_exported() -> None:
 
 @pytest.mark.parametrize("bad", [True, 2.5, "5"])
 def test_retrieval_top_k_must_be_an_integer(bad: bool | float | str) -> None:
+    """Verify that noninteger top-k values remain custom attributes without canonical mapping."""
     attrs = convert_span_to_otel_attributes(
         nspan(kind=SpanKind.RETRIEVAL, attributes={"top_k": bad})
     )
@@ -732,6 +786,7 @@ def test_retrieval_top_k_must_be_an_integer(bad: bool | float | str) -> None:
 
 @pytest.mark.parametrize("source_key", ["tool_name", "name", NIRIZAN_TOOL_NAME])
 def test_tool_name_is_read_from_any_known_key(source_key: str) -> None:
+    """Verify that either supported tool name key supplies the canonical name."""
     attrs = convert_span_to_otel_attributes(
         nspan(kind=SpanKind.TOOL_USE, attributes={source_key: "search"})
     )
@@ -740,6 +795,7 @@ def test_tool_name_is_read_from_any_known_key(source_key: str) -> None:
 
 
 def test_tool_name_is_absent_when_unknown() -> None:
+    """Verify that an unknown tool name is omitted."""
     assert NIRIZAN_TOOL_NAME not in convert_span_to_otel_attributes(nspan(kind=SpanKind.TOOL_USE))
 
 
@@ -749,6 +805,7 @@ def test_tool_name_is_absent_when_unknown() -> None:
 
 
 def test_other_attributes_are_carried_over_with_their_types() -> None:
+    """Verify that unrelated scalar attributes preserve their values and types."""
     span = nspan(attributes={"s": "v", "i": 3, "f": 1.5, "b": True, "z": 0, "e": ""})
 
     attrs = convert_span_to_otel_attributes(span)
@@ -762,6 +819,7 @@ def test_other_attributes_are_carried_over_with_their_types() -> None:
 
 
 def test_long_attribute_strings_are_truncated() -> None:
+    """Verify that oversized custom strings receive the standard truncation marker."""
     attrs = convert_span_to_otel_attributes(
         nspan(attributes={"note": "x" * (MAX_ATTR_VALUE_LENGTH + 50)})
     )
@@ -771,18 +829,21 @@ def test_long_attribute_strings_are_truncated() -> None:
 
 
 def test_sequence_encoded_attributes_pass_through_unchanged() -> None:
+    """Verify that already encoded sequence attributes pass through unchanged."""
     span = nspan(attributes={f"{SEQ_ATTR_PREFIX}tags": '["a", "b"]'})
 
     assert convert_span_to_otel_attributes(span)[f"{SEQ_ATTR_PREFIX}tags"] == '["a", "b"]'
 
 
 def test_non_ascii_attribute_values_are_preserved() -> None:
+    """Verify that non-ASCII custom attribute text is preserved."""
     attrs = convert_span_to_otel_attributes(nspan(attributes={"greeting": "আপনি কেমন আছেন?"}))
 
     assert attrs["greeting"] == "আপনি কেমন আছেন?"
 
 
 def test_an_attribute_cannot_overwrite_a_computed_one() -> None:
+    """Verify that custom attributes cannot replace computed IDs, kinds, or payload attributes."""
     span = nspan(
         kind=SpanKind.GENERATION,
         attributes={
@@ -803,6 +864,7 @@ def test_an_attribute_cannot_overwrite_a_computed_one() -> None:
 
 
 def test_conversion_does_not_mutate_the_span() -> None:
+    """Verify that conversion leaves the source span and its attributes unchanged."""
     span = nspan(attributes={"model": "m", "n": 1}, input_payload="p")
     before = (dict(span.attributes), span.input_payload, span.model_dump())
 
@@ -812,6 +874,7 @@ def test_conversion_does_not_mutate_the_span() -> None:
 
 
 def test_conversion_is_idempotent() -> None:
+    """Verify that repeated conversion produces identical attribute dictionaries."""
     span = nspan(attributes={"model": "m"}, input_payload="p", output_payload="c")
 
     assert convert_span_to_otel_attributes(
@@ -848,6 +911,7 @@ def test_conversion_is_idempotent() -> None:
 def test_status_is_rebuilt_from_the_captured_otel_attributes(
     attrs: dict[str, str | int], code: StatusCode, description: str | None
 ) -> None:
+    """Verify status reconstruction from captured OTel code and description attributes."""
     status = _status_from_attributes(attrs)
 
     assert status is not None
@@ -869,6 +933,7 @@ def test_status_is_rebuilt_from_the_captured_otel_attributes(
 def test_no_status_is_set_for_unset_unknown_or_malformed_codes(
     attrs: dict[str, str | int | bool],
 ) -> None:
+    """Verify that unset, unknown, and malformed status codes produce no explicit status."""
     assert _status_from_attributes(attrs) is None
 
 
@@ -878,6 +943,7 @@ def test_no_status_is_set_for_unset_unknown_or_malformed_codes(
 
 
 def test_export_span_produces_a_real_otel_span_with_the_expected_fields(otel: OTel) -> None:
+    """Verify real SDK span export preserves timing, name, kind, scope, and attributes."""
     span = nspan(
         name="my-span",
         kind=SpanKind.GENERATION,
@@ -905,6 +971,7 @@ def test_export_span_produces_a_real_otel_span_with_the_expected_fields(otel: OT
 
 
 def test_export_span_without_a_parent_starts_a_new_trace(otel: OTel) -> None:
+    """Verify that exporting a parentless span starts a valid new OTel trace."""
     export_span_to_otel(nspan(), tracer=otel.tracer)
 
     [exported] = otel.spans()
@@ -925,6 +992,7 @@ def test_export_span_never_attaches_to_the_active_otel_span(otel: OTel) -> None:
 
 
 def test_export_span_links_to_the_given_parent_context(otel: OTel) -> None:
+    """Verify that an explicit context determines the exported parent and trace."""
     parent = SpanContext(
         trace_id=0x1234567890ABCDEF1234567890ABCDEF,
         span_id=0xABC,
@@ -942,6 +1010,7 @@ def test_export_span_links_to_the_given_parent_context(otel: OTel) -> None:
 def test_export_span_warns_when_a_declared_parent_has_no_context(
     otel: OTel, caplog: pytest.LogCaptureFixture
 ) -> None:
+    """Verify that an unresolved declared parent is logged and the span exports as a root."""
     missing_parent = next_id()
     span = nspan(name="child", parent=missing_parent)
 
@@ -953,6 +1022,7 @@ def test_export_span_warns_when_a_declared_parent_has_no_context(
 
 
 def test_export_span_passes_the_session_id_through(otel: OTel) -> None:
+    """Verify that span export propagates the supplied session UUID."""
     session = UUID("12345678-1234-5678-1234-567812345678")
 
     export_span_to_otel(nspan(), tracer=otel.tracer, session_id=session)
@@ -963,6 +1033,7 @@ def test_export_span_passes_the_session_id_through(otel: OTel) -> None:
 
 
 def test_export_span_rebuilds_error_status_from_attributes(otel: OTel) -> None:
+    """Verify that captured error status and description are restored in the exported span."""
     span = nspan(attributes={OTEL_STATUS_CODE: "error", OTEL_STATUS_DESCRIPTION: "upstream failed"})
 
     export_span_to_otel(span, tracer=otel.tracer)
@@ -973,6 +1044,7 @@ def test_export_span_rebuilds_error_status_from_attributes(otel: OTel) -> None:
 
 
 def test_export_span_rebuilds_ok_status_and_leaves_others_unset(otel: OTel) -> None:
+    """Verify that OK status is restored while absent and unset statuses remain unset."""
     export_span_to_otel(nspan(name="ok", attributes={OTEL_STATUS_CODE: "ok"}), tracer=otel.tracer)
     export_span_to_otel(nspan(name="plain"), tracer=otel.tracer)
     export_span_to_otel(
@@ -986,6 +1058,7 @@ def test_export_span_rebuilds_ok_status_and_leaves_others_unset(otel: OTel) -> N
 
 
 def test_export_span_always_ends_the_span_even_if_setting_the_status_fails() -> None:
+    """Verify that exported spans end even if restoring their status raises."""
     otel_span = MagicMock()
     otel_span.set_status.side_effect = RuntimeError("status failure")
     tracer = MagicMock()
@@ -1002,6 +1075,7 @@ def test_export_span_always_ends_the_span_even_if_setting_the_status_fails() -> 
 
 
 def test_export_span_ends_the_span_exactly_once_with_its_end_time() -> None:
+    """Verify that span export ends the SDK span exactly once at its recorded end time."""
     otel_span = MagicMock()
     tracer = MagicMock()
     tracer.start_span.return_value = otel_span
@@ -1012,6 +1086,7 @@ def test_export_span_ends_the_span_exactly_once_with_its_end_time() -> None:
 
 
 def test_export_span_hands_the_tracer_an_explicit_empty_context() -> None:
+    """Verify that span export supplies an explicit empty context to avoid ambient parenting."""
     tracer = MagicMock()
 
     export_span_to_otel(nspan(), tracer=tracer)
@@ -1029,6 +1104,7 @@ def test_export_span_propagates_a_tracer_failure_to_its_caller() -> None:
 
 
 def test_export_span_honors_the_content_setting(otel: OTel) -> None:
+    """Verify that span export applies the configured content capture setting."""
     export_span_to_otel(nspan(name="a", input_payload="SECRET"), tracer=otel.tracer)
     export_span_to_otel(
         nspan(name="b", input_payload="SECRET"), tracer=otel.tracer, config=CONTENT_ON
@@ -1047,9 +1123,11 @@ def test_export_span_honors_the_content_setting(otel: OTel) -> None:
 def test_default_tracer_uses_the_nirizan_scope_and_package_version(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Verify that the default tracer uses the NiriZan scope and package version."""
     calls: list[tuple[str, str | None]] = []
 
     def fake_get_tracer(name: str, version: str | None = None) -> Tracer:
+        """Record tracer lookup arguments and return a tracer-shaped mock."""
         calls.append((name, version))
         return MagicMock(spec=Tracer)
 
@@ -1065,6 +1143,7 @@ def test_default_tracer_uses_the_nirizan_scope_and_package_version(
 def test_default_tracer_falls_back_to_installed_package_metadata(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Verify that version lookup falls back to installed distribution metadata."""
     monkeypatch.delattr(nirizan, "__version__", raising=False)
     monkeypatch.setattr(importlib.metadata, "version", lambda name: "1.2.3")
 
@@ -1074,7 +1153,10 @@ def test_default_tracer_falls_back_to_installed_package_metadata(
 def test_default_tracer_has_no_version_when_none_can_be_found(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Verify that unavailable version sources yield no tracer version."""
+
     def not_installed(name: str) -> str:
+        """Simulate a missing installed distribution during package version lookup."""
         raise importlib.metadata.PackageNotFoundError(name)
 
     monkeypatch.delattr(nirizan, "__version__", raising=False)
@@ -1087,6 +1169,7 @@ def test_default_tracer_has_no_version_when_none_can_be_found(
 def test_package_version_ignores_an_unusable_version_attribute(
     monkeypatch: pytest.MonkeyPatch, bad: object
 ) -> None:
+    """Verify that an unusable package version attribute falls back to distribution metadata."""
     monkeypatch.setattr(nirizan, "__version__", bad, raising=False)
     monkeypatch.setattr(importlib.metadata, "version", lambda name: "4.5.6")
 
@@ -1096,6 +1179,7 @@ def test_package_version_ignores_an_unusable_version_attribute(
 def test_export_span_uses_the_default_tracer_when_none_is_given(
     otel: OTel, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """Verify that exporting without an explicit tracer uses the default tracer."""
     monkeypatch.setattr(otel_trace, "get_tracer", lambda name, version=None: otel.tracer)
 
     export_span_to_otel(nspan(name="via-default"))
@@ -1109,10 +1193,12 @@ def test_export_span_uses_the_default_tracer_when_none_is_given(
 
 
 def names(spans: list[Span]) -> list[str]:
+    """Return span names in their current order for sorting assertions."""
     return [s.name for s in spans]
 
 
 def test_topological_sort_puts_parents_before_children() -> None:
+    """Verify that topological sorting places every parent before its descendants."""
     root = nspan(name="root")
     child = nspan(name="child", parent=root.span_id)
     grandchild = nspan(name="grandchild", parent=child.span_id)
@@ -1125,16 +1211,19 @@ def test_topological_sort_puts_parents_before_children() -> None:
 
 
 def test_topological_sort_of_nothing_is_nothing() -> None:
+    """Verify that sorting an empty span list returns an empty list."""
     assert _topological_sort_spans([]) == []
 
 
 def test_topological_sort_treats_a_span_with_an_unknown_parent_as_a_root() -> None:
+    """Verify that sorting retains a span whose parent is outside the supplied set."""
     orphan = nspan(name="orphan", parent=next_id())
 
     assert names(_topological_sort_spans([orphan])) == ["orphan"]
 
 
 def test_topological_sort_keeps_every_span_of_a_cycle() -> None:
+    """Verify that sorting a cycle retains all participating spans."""
     a_id, b_id = next_id(), next_id()
     a = nspan(name="a", span_id=a_id, parent=b_id)
     b = nspan(name="b", span_id=b_id, parent=a_id)
@@ -1143,6 +1232,7 @@ def test_topological_sort_keeps_every_span_of_a_cycle() -> None:
 
 
 def test_topological_sort_keeps_sibling_insertion_order() -> None:
+    """Verify that topological sorting preserves sibling insertion order."""
     root = nspan(name="r")
     c1 = nspan(name="c1", parent=root.span_id)
     c2 = nspan(name="c2", parent=root.span_id)
@@ -1164,6 +1254,7 @@ def test_topological_sort_returns_each_span_once_even_when_span_ids_repeat() -> 
 
 
 def test_topological_sort_orders_every_random_forest_parents_first() -> None:
+    """Verify parent-first ordering and span retention across random forests."""
     rng = random.Random(11)
     for _ in range(100):
         count = rng.randrange(1, 25)
@@ -1192,6 +1283,7 @@ OTEL_TRACE_ID = uuid_to_otel_trace_id(TRACE_UUID)
 
 
 def test_every_span_of_a_nirizan_trace_lands_in_one_otel_trace_with_the_same_id(otel: OTel) -> None:
+    """Verify that every exported span shares the mapped NiriZan trace ID."""
     root = nspan(name="root")
     left = nspan(name="left", parent=root.span_id)
     right = nspan(name="right", parent=root.span_id)
@@ -1221,6 +1313,7 @@ def test_a_trace_with_several_roots_stays_in_one_otel_trace(otel: OTel) -> None:
 
 
 def test_parent_and_child_are_linked_through_real_otel_span_ids(otel: OTel) -> None:
+    """Verify that child links use the SDK IDs assigned to their exported parents."""
     root = nspan(name="root")
     child = nspan(name="child", parent=root.span_id)
     grandchild = nspan(name="grandchild", parent=child.span_id)
@@ -1236,6 +1329,7 @@ def test_parent_and_child_are_linked_through_real_otel_span_ids(otel: OTel) -> N
 
 
 def test_roots_hang_off_a_synthetic_remote_parent_that_is_sampled(otel: OTel) -> None:
+    """Verify that linked roots use a sampled synthetic remote parent in the mapped trace."""
     export_trace_to_otel(ntrace(nspan(name="root")), tracer=otel.tracer)
 
     [root] = otel.spans()
@@ -1249,6 +1343,7 @@ def test_roots_hang_off_a_synthetic_remote_parent_that_is_sampled(otel: OTel) ->
 def test_orphans_are_anchored_to_the_trace_and_reported(
     otel: OTel, caplog: pytest.LogCaptureFixture
 ) -> None:
+    """Verify that orphan export logs the missing parent and anchors to the mapped trace."""
     missing = next_id()
     orphan = nspan(
         name="orphan",
@@ -1266,6 +1361,7 @@ def test_orphans_are_anchored_to_the_trace_and_reported(
 
 
 def test_a_trace_is_never_attached_to_the_active_otel_span(otel: OTel) -> None:
+    """Verify that exporting a trace ignores an active ambient SDK span."""
     root = nspan(name="root")
     child = nspan(name="child", parent=root.span_id)
 
@@ -1279,6 +1375,7 @@ def test_a_trace_is_never_attached_to_the_active_otel_span(otel: OTel) -> None:
 
 
 def test_linking_can_be_turned_off_so_each_root_starts_its_own_trace(otel: OTel) -> None:
+    """Verify that unlinked roots get separate traces and retain their child links."""
     root_a = nspan(name="root-a")
     root_b = nspan(name="root-b")
     child = nspan(name="child", parent=root_a.span_id)
@@ -1299,6 +1396,7 @@ def test_linking_can_be_turned_off_so_each_root_starts_its_own_trace(otel: OTel)
 def test_unlinked_roots_are_not_given_a_synthetic_parent_even_when_ambient_spans_exist(
     otel: OTel,
 ) -> None:
+    """Verify that unlinked roots remain parentless even with an ambient span."""
     with otel.provider.get_tracer("app").start_as_current_span("ambient"):
         export_trace_to_otel(
             ntrace(nspan(name="root")),
@@ -1331,6 +1429,7 @@ def test_anchored_spans_are_recorded_even_when_the_root_sampler_would_drop_them(
 def test_a_nil_trace_id_cannot_anchor_and_falls_back_to_separate_traces(
     otel: OTel, caplog: pytest.LogCaptureFixture
 ) -> None:
+    """Verify that a nil NiriZan trace UUID logs a warning and exports without an anchor."""
     nil = UUID(int=0)
     root = nspan(name="root", trace_id=nil)
 
@@ -1343,6 +1442,7 @@ def test_a_nil_trace_id_cannot_anchor_and_falls_back_to_separate_traces(
 
 
 def test_a_bare_sequence_of_spans_is_accepted_and_anchored_by_its_first_span(otel: OTel) -> None:
+    """Verify that exporting a bare span sequence anchors using its first span's trace ID."""
     root = nspan(name="root")
     child = nspan(name="child", parent=root.span_id)
 
@@ -1353,6 +1453,7 @@ def test_a_bare_sequence_of_spans_is_accepted_and_anchored_by_its_first_span(ote
 
 
 def test_exporting_nothing_returns_nothing_and_touches_no_tracer() -> None:
+    """Verify that empty trace inputs return no spans without calling the tracer."""
     tracer = MagicMock()
 
     assert export_trace_to_otel([], tracer=tracer) == []
@@ -1364,6 +1465,7 @@ def test_exporting_nothing_returns_nothing_and_touches_no_tracer() -> None:
 def test_export_trace_uses_the_default_tracer_when_none_is_given(
     otel: OTel, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """Verify that trace export uses the default tracer when none is supplied."""
     monkeypatch.setattr(otel_trace, "get_tracer", lambda name, version=None: otel.tracer)
 
     export_trace_to_otel(ntrace(nspan(name="via-default")))
@@ -1372,6 +1474,7 @@ def test_export_trace_uses_the_default_tracer_when_none_is_given(
 
 
 def test_spans_are_exported_parents_first_whatever_the_input_order(otel: OTel) -> None:
+    """Verify that trace export emits ancestors before children regardless of input order."""
     root = nspan(name="root")
     child = nspan(name="child", parent=root.span_id)
     grandchild = nspan(name="grandchild", parent=child.span_id)
@@ -1383,6 +1486,7 @@ def test_spans_are_exported_parents_first_whatever_the_input_order(otel: OTel) -
 
 
 def test_the_session_id_is_attached_to_every_span(otel: OTel) -> None:
+    """Verify that trace-level session metadata reaches every exported span."""
     session = UUID("12345678-1234-5678-1234-567812345678")
     root = nspan(name="root")
     child = nspan(name="child", parent=root.span_id)
@@ -1393,12 +1497,14 @@ def test_the_session_id_is_attached_to_every_span(otel: OTel) -> None:
 
 
 def test_a_trace_without_a_session_gets_no_session_attribute(otel: OTel) -> None:
+    """Verify that a trace without a session adds no session attribute."""
     export_trace_to_otel(ntrace(nspan()), tracer=otel.tracer)
 
     assert NIRIZAN_SESSION_ID not in (otel.spans()[0].attributes or {})
 
 
 def test_repeated_span_ids_do_not_export_a_span_twice(otel: OTel) -> None:
+    """Verify that repeated input span IDs are exported only once."""
     shared = next_id()
     first = nspan(name="first", span_id=shared)
     second = nspan(name="second", span_id=shared)
@@ -1411,6 +1517,7 @@ def test_repeated_span_ids_do_not_export_a_span_twice(otel: OTel) -> None:
 
 
 def test_a_cyclic_trace_is_exported_without_losing_spans(otel: OTel) -> None:
+    """Verify that exporting cyclic parent links still retains every span."""
     a_id, b_id = next_id(), next_id()
 
     exported = export_trace_to_otel(
@@ -1424,6 +1531,7 @@ def test_a_cyclic_trace_is_exported_without_losing_spans(otel: OTel) -> None:
 
 
 def test_a_very_deep_trace_is_exported_without_recursion(otel: OTel) -> None:
+    """Verify that deeply nested trace export avoids the recursion limit and retains links."""
     depth = 1_500
     spans: list[Span] = []
     parent: UUID | None = None
@@ -1440,6 +1548,7 @@ def test_a_very_deep_trace_is_exported_without_recursion(otel: OTel) -> None:
 
 
 def test_exported_content_follows_the_config_for_a_whole_trace(otel: OTel) -> None:
+    """Verify that trace-wide content capture follows the exporter configuration."""
     root = nspan(name="root", kind=SpanKind.PLANNING, input_payload="SECRET-PLAN")
     child = nspan(name="child", parent=root.span_id, input_payload="SECRET-PROMPT")
 
@@ -1455,10 +1564,12 @@ def test_exported_content_follows_the_config_for_a_whole_trace(otel: OTel) -> No
 
 
 def test_payload_attributes_are_covered_by_the_shared_content_allowlist() -> None:
+    """Verify that the shared content key set covers every payload attribute mapping."""
     assert ALL_CONTENT_KEYS <= CONTENT_ATTRIBUTE_KEYS
 
 
 def test_shared_content_attributes_are_withheld_when_capture_is_off(otel: OTel) -> None:
+    """Verify that disabling capture removes all shared content attributes from SDK export."""
     attributes = {key: f"SECRET-{index}" for index, key in enumerate(CONTENT_ATTRIBUTE_KEYS)}
     export_span_to_otel(nspan(kind=SpanKind.GENERATION, attributes=attributes), tracer=otel.tracer)
 
@@ -1468,6 +1579,7 @@ def test_shared_content_attributes_are_withheld_when_capture_is_off(otel: OTel) 
 
 
 def test_shared_content_attributes_are_exported_when_capture_is_on(otel: OTel) -> None:
+    """Verify that enabling capture exports every supplied shared content attribute."""
     attributes = {key: f"CONTENT-{index}" for index, key in enumerate(CONTENT_ATTRIBUTE_KEYS)}
     export_span_to_otel(
         nspan(kind=SpanKind.GENERATION, attributes=attributes),
@@ -1481,6 +1593,7 @@ def test_shared_content_attributes_are_exported_when_capture_is_on(otel: OTel) -
 
 
 def test_random_forests_always_export_in_one_trace_with_correct_links(otel: OTel) -> None:
+    """Verify mapped trace IDs and correct parent links across exported random forests."""
     rng = random.Random(23)
     for _ in range(40):
         otel.memory.clear()
@@ -1523,11 +1636,13 @@ def test_random_forests_always_export_in_one_trace_with_correct_links(otel: OTel
 
 
 def test_exporter_satisfies_the_base_exporter_contract() -> None:
+    """Verify that the OTel exporter implements the BaseExporter contract."""
     assert isinstance(NiriZanToOTelExporter(tracer=MagicMock()), BaseExporter)
 
 
 @pytest.mark.asyncio
 async def test_exporter_exports_a_trace_to_otel(otel: OTel) -> None:
+    """Verify that asynchronous trace export reaches the SDK without recording a failure."""
     exporter = NiriZanToOTelExporter(tracer=otel.tracer)
     root = nspan(name="root")
     child = nspan(name="child", parent=root.span_id)
@@ -1540,6 +1655,7 @@ async def test_exporter_exports_a_trace_to_otel(otel: OTel) -> None:
 
 @pytest.mark.asyncio
 async def test_exporter_applies_its_config(otel: OTel) -> None:
+    """Verify that asynchronous export applies its configured content capture policy."""
     exporter = NiriZanToOTelExporter(tracer=otel.tracer, config=CONTENT_ON)
 
     await exporter.export(ntrace(nspan(input_payload="the prompt")))
@@ -1551,6 +1667,7 @@ async def test_exporter_applies_its_config(otel: OTel) -> None:
 async def test_exporter_does_not_raise_when_the_otel_pipeline_fails(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
+    """Verify that asynchronous pipeline failures are counted and logged without escaping."""
     tracer = MagicMock()
     tracer.start_span.side_effect = RuntimeError("collector unreachable")
     exporter = NiriZanToOTelExporter(tracer=tracer)
@@ -1565,6 +1682,7 @@ async def test_exporter_does_not_raise_when_the_otel_pipeline_fails(
 
 @pytest.mark.asyncio
 async def test_exporter_counts_every_failure_and_recovers_afterwards(otel: OTel) -> None:
+    """Verify cumulative failure counts and successful delivery after pipeline recovery."""
     failing = MagicMock()
     failing.start_span.side_effect = [RuntimeError("one"), RuntimeError("two")]
     exporter = NiriZanToOTelExporter(tracer=failing)
@@ -1582,6 +1700,7 @@ async def test_exporter_counts_every_failure_and_recovers_afterwards(otel: OTel)
 
 @pytest.mark.asyncio
 async def test_exporter_does_not_swallow_task_cancellation() -> None:
+    """Verify that task cancellation propagates without incrementing export failure counts."""
     tracer = MagicMock()
     tracer.start_span.side_effect = asyncio.CancelledError()
     exporter = NiriZanToOTelExporter(tracer=tracer)
@@ -1605,6 +1724,7 @@ async def test_exporter_works_without_a_configured_tracer_provider() -> None:
 
 
 def test_exporter_helpers_export_spans_and_traces_directly(otel: OTel) -> None:
+    """Verify that synchronous helper methods export individual spans and complete traces."""
     exporter = NiriZanToOTelExporter(tracer=otel.tracer)
     root = nspan(name="root")
     child = nspan(name="child", parent=root.span_id)
@@ -1618,6 +1738,7 @@ def test_exporter_helpers_export_spans_and_traces_directly(otel: OTel) -> None:
 
 
 def test_exporter_reuses_the_tracer_it_was_built_with() -> None:
+    """Verify that synchronous helpers reuse the tracer bound at exporter construction."""
     tracer = MagicMock()
     exporter = NiriZanToOTelExporter(tracer=tracer)
 
@@ -1628,6 +1749,7 @@ def test_exporter_reuses_the_tracer_it_was_built_with() -> None:
 
 
 def test_exporter_helpers_do_not_swallow_failures() -> None:
+    """Verify that synchronous helper failures propagate without changing async failure counters."""
     tracer = MagicMock()
     tracer.start_span.side_effect = RuntimeError("direct call failure")
     exporter = NiriZanToOTelExporter(tracer=tracer)
@@ -1644,6 +1766,7 @@ def test_exporter_helpers_do_not_swallow_failures() -> None:
 
 @pytest.mark.asyncio
 async def test_nirizan_tracer_traces_arrive_as_one_linked_otel_trace(otel: OTel) -> None:
+    """Verify that native NiriZan instrumentation exports one SDK trace with preserved nesting."""
     tracer = NiriZanTracer("app", exporter=NiriZanToOTelExporter(tracer=otel.tracer))
 
     async with tracer.start_span("plan", SpanKind.PLANNING):
@@ -1681,6 +1804,7 @@ async def test_nirizan_tracer_keeps_working_when_the_otel_pipeline_is_broken() -
 
 @pytest.mark.asyncio
 async def test_prompt_text_is_not_sent_to_otel_by_default_end_to_end(otel: OTel) -> None:
+    """Verify that default end-to-end export does not expose the supplied prompt text."""
     tracer = NiriZanTracer("app", exporter=NiriZanToOTelExporter(tracer=otel.tracer))
 
     async with tracer.start_span(

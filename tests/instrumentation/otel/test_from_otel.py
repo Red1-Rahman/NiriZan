@@ -165,6 +165,7 @@ def _resource(service: str | None) -> Resource:
 
 @cache
 def _scope(name: str) -> InstrumentationScope:
+    """Build an instrumentation scope with the requested name."""
     return InstrumentationScope(name)
 
 
@@ -225,6 +226,7 @@ def make_span(
 
 
 def buffer_of(*spans: ReadableSpan, trace_id: int = TRACE_ID, now: float = 0.0) -> _TraceBuffer:
+    """Populate a trace buffer with spans at a fixed clock time."""
     buf = _TraceBuffer(trace_id, now)
     for span in spans:
         buf.add(span, now)
@@ -235,12 +237,15 @@ class FakeClock:
     """A manually advanced monotonic clock."""
 
     def __init__(self, start: float = 1_000.0) -> None:
+        """Set the initial time for a manually advanced clock."""
         self.now = start
 
     def __call__(self) -> float:
+        """Return the current fake time without advancing it."""
         return self.now
 
     def advance(self, seconds: float) -> None:
+        """Advance the fake clock by the requested number of seconds."""
         self.now += seconds
 
 
@@ -248,11 +253,13 @@ class RecordingSink:
     """Thread-safe sink that records traces and can be told to fail."""
 
     def __init__(self) -> None:
+        """Initialize a locked trace list with sink failures disabled."""
         self.traces: list[Trace] = []
         self.raise_on_enqueue = False
         self._lock = threading.Lock()
 
     def enqueue_trace(self, trace: Trace) -> None:
+        """Record a trace under the lock, or raise the configured test failure."""
         if self.raise_on_enqueue:
             raise RuntimeError("sink failure")
         with self._lock:
@@ -263,11 +270,13 @@ class BlockingSink(RecordingSink):
     """Sink that parks the consumer thread inside ``enqueue_trace`` until released."""
 
     def __init__(self) -> None:
+        """Initialize recording state and events that control blocked delivery."""
         super().__init__()
         self.entered = threading.Event()
         self.release = threading.Event()
 
     def enqueue_trace(self, trace: Trace) -> None:
+        """Signal sink entry and wait for release before recording the trace."""
         self.entered.set()
         assert self.release.wait(timeout=10), "test never released the sink"
         super().enqueue_trace(trace)
@@ -287,10 +296,12 @@ def wait_until(predicate: Callable[[], bool], *, timeout: float = 5.0) -> None:
 
 
 def span_names(trace: Trace) -> list[str]:
+    """Return span names in the trace's stored order."""
     return [s.name for s in trace.spans]
 
 
 def by_name(trace: Trace) -> dict[str, Span]:
+    """Index the trace's spans by name for linkage assertions."""
     return {s.name: s for s in trace.spans}
 
 
@@ -301,11 +312,13 @@ def by_name(trace: Trace) -> dict[str, Span]:
 
 @pytest.fixture
 def sink() -> RecordingSink:
+    """Provide a fresh recording sink for each test."""
     return RecordingSink()
 
 
 @pytest.fixture
 def clock() -> FakeClock:
+    """Provide a fresh manually advanced clock for each test."""
     return FakeClock()
 
 
@@ -316,6 +329,7 @@ def make_processor(
     """Factory for *live* processors (consumer thread running), always shut down."""
 
     def factory(**kwargs: Any) -> NiriZanSpanProcessor:
+        """Create a processor with test defaults and register shutdown cleanup."""
         kwargs.setdefault("clock", clock)
         processor = NiriZanSpanProcessor(kwargs.pop("sink", sink), **kwargs)
         request.addfinalizer(processor.shutdown)
@@ -334,6 +348,7 @@ def make_inert(sink: RecordingSink, clock: FakeClock) -> Callable[..., NiriZanSp
     """
 
     def factory(**kwargs: Any) -> NiriZanSpanProcessor:
+        """Create and stop a processor for deterministic direct calls to its internals."""
         kwargs.setdefault("clock", clock)
         processor = NiriZanSpanProcessor(kwargs.pop("sink", sink), **kwargs)
         processor.shutdown()
@@ -345,10 +360,12 @@ def make_inert(sink: RecordingSink, clock: FakeClock) -> Callable[..., NiriZanSp
 
 @pytest.fixture
 def inert(make_inert: Callable[..., NiriZanSpanProcessor]) -> NiriZanSpanProcessor:
+    """Provide a stopped processor with the default test settings."""
     return make_inert()
 
 
 def consumer_threads() -> list[threading.Thread]:
+    """List live threads belonging to span processor consumers."""
     return [
         t for t in threading.enumerate() if t.name == "nirizan-otel-span-consumer" and t.is_alive()
     ]
@@ -367,6 +384,7 @@ def test_stat_reason_values_are_the_documented_counter_keys() -> None:
 def test_stat_reason_is_interchangeable_with_plain_string_keys(
     inert: NiriZanSpanProcessor,
 ) -> None:
+    """Verify that enum reasons and plain strings address the same statistics counter."""
     inert._record_stat(StatReason.LATE_ARRIVAL)
     inert._record_stat("late_arrival")
 
@@ -381,6 +399,7 @@ def test_stat_reason_is_interchangeable_with_plain_string_keys(
 
 
 def test_config_defaults_match_documented_values() -> None:
+    """Verify the documented default processor settings."""
     config = ProcessorConfig()
 
     assert config.idle_timeout_seconds == 5.0
@@ -454,6 +473,7 @@ def test_config_defaults_match_documented_values() -> None:
 def test_config_rejects_invalid_values_with_a_message_naming_the_field(
     kwargs: dict[str, Any], message: str
 ) -> None:
+    """Verify that invalid configuration values produce field-specific error messages."""
     with pytest.raises(ValueError, match=re.escape(message)):
         ProcessorConfig(**kwargs)
 
@@ -469,15 +489,18 @@ def test_config_rejects_invalid_values_with_a_message_naming_the_field(
     ids=["bool-for-int", "str-for-int", "str-for-float", "int-for-bool"],
 )
 def test_config_is_strict_about_types(kwargs: dict[str, Any]) -> None:
+    """Verify that strict configuration validation rejects incompatible types."""
     with pytest.raises(ValidationError):
         ProcessorConfig(**kwargs)
 
 
 def test_config_accepts_an_int_where_a_float_is_expected() -> None:
+    """Verify that integer timeouts are accepted as floating point values."""
     assert ProcessorConfig(idle_timeout_seconds=1).idle_timeout_seconds == 1.0
 
 
 def test_config_accepts_the_smallest_valid_values() -> None:
+    """Verify that configuration accepts its smallest supported limits."""
     config = ProcessorConfig(
         idle_timeout_seconds=0.001,
         max_trace_age_seconds=0.002,
@@ -489,6 +512,7 @@ def test_config_accepts_the_smallest_valid_values() -> None:
 
 
 def test_config_is_immutable() -> None:
+    """Verify that validated processor settings cannot be reassigned."""
     config = ProcessorConfig()
     field = "max_queue_size"
     with pytest.raises(ValidationError):
@@ -498,6 +522,7 @@ def test_config_is_immutable() -> None:
 def test_processor_exposes_its_validated_config_and_round_trips_through_from_config(
     sink: RecordingSink, clock: FakeClock, request: pytest.FixtureRequest
 ) -> None:
+    """Verify that processors expose and reconstruct their validated configuration."""
     config = ProcessorConfig(max_buffered_traces=7, orphan_policy="drop", ignore_own_scope=False)
 
     processor = NiriZanSpanProcessor.from_config(sink, config, clock=clock)
@@ -536,6 +561,7 @@ def test_processor_rejects_unknown_keywords(sink: RecordingSink) -> None:
 
 
 def test_invalid_configuration_does_not_start_a_consumer_thread(sink: RecordingSink) -> None:
+    """Verify that invalid settings fail before a consumer thread starts."""
     before = len(consumer_threads())
 
     with pytest.raises(ValueError):
@@ -549,6 +575,7 @@ def test_generation_policy_logs_a_warning(
     make_processor: Callable[..., NiriZanSpanProcessor],
     caplog: pytest.LogCaptureFixture,
 ) -> None:
+    """Verify that assuming generation for unknown spans emits a warning."""
     with caplog.at_level(logging.WARNING, logger=_MODULE_LOGGER):
         make_processor(unrecognized_span_policy="generation")
 
@@ -559,6 +586,7 @@ def test_default_policy_does_not_log_a_warning(
     make_processor: Callable[..., NiriZanSpanProcessor],
     caplog: pytest.LogCaptureFixture,
 ) -> None:
+    """Verify that the default unknown-span policy starts without a warning."""
     with caplog.at_level(logging.WARNING, logger=_MODULE_LOGGER):
         make_processor()
 
@@ -581,6 +609,7 @@ def test_consumer_thread_is_a_named_daemon(
 
 
 def test_ns_to_datetime_converts_to_timezone_aware_utc_truncating_to_microseconds() -> None:
+    """Verify that nanoseconds become aware UTC datetimes at microsecond precision."""
     result = _ns_to_datetime(1_600_000_000_123_456_789)
 
     assert result == datetime(2020, 9, 13, 12, 26, 40, 123_456, tzinfo=UTC)
@@ -588,14 +617,17 @@ def test_ns_to_datetime_converts_to_timezone_aware_utc_truncating_to_microsecond
 
 
 def test_ns_to_datetime_truncates_rather_than_rounds() -> None:
+    """Verify that submicrosecond timestamp digits are truncated rather than rounded."""
     assert _ns_to_datetime(999_999_999).microsecond == 999_999
 
 
 def test_ns_to_datetime_handles_the_epoch() -> None:
+    """Verify that a zero timestamp maps to the Unix epoch."""
     assert _ns_to_datetime(0) == datetime(1970, 1, 1, tzinfo=UTC)
 
 
 def test_ns_to_datetime_substitutes_now_for_a_missing_timestamp() -> None:
+    """Verify that a missing timestamp defaults to the current UTC time."""
     before = datetime.now(UTC)
     result = _ns_to_datetime(None)
     after = datetime.now(UTC)
@@ -618,6 +650,7 @@ _SAMPLE_UUID = UUID("12345678-1234-5678-1234-567812345678")
     ids=["canonical", "uppercase", "no-dashes", "urn", "braces"],
 )
 def test_parse_stashed_uuid_accepts_and_normalizes_the_formats_uuid_accepts(raw: str) -> None:
+    """Verify that supported UUID text formats normalize to the same stashed ID."""
     assert _parse_stashed_uuid(raw) == _SAMPLE_UUID
 
 
@@ -642,12 +675,14 @@ def test_parse_stashed_uuid_rejects_untrusted_values(raw: object) -> None:
 
 
 def _ctx_of(span: ReadableSpan) -> SpanContext:
+    """Return a span context, asserting that the fixture supplies one."""
     ctx = span.get_span_context()
     assert ctx is not None
     return ctx
 
 
 def test_extract_span_id_recovers_a_stashed_id_as_roundtrip() -> None:
+    """Verify that a trusted stashed span ID is recovered with roundtrip provenance."""
     span = make_span(0xAB, attributes={NIRIZAN_SPAN_ID: str(_SAMPLE_UUID)})
 
     assert _extract_nirizan_span_id(span, _ctx_of(span), True) == (
@@ -657,6 +692,7 @@ def test_extract_span_id_recovers_a_stashed_id_as_roundtrip() -> None:
 
 
 def test_extract_span_id_derives_an_id_when_nothing_is_stashed() -> None:
+    """Verify that absent stashed IDs produce a span UUID derived from the OTel ID."""
     span = make_span(0xAB)
 
     assert _extract_nirizan_span_id(span, _ctx_of(span), False) == (
@@ -671,6 +707,7 @@ def test_extract_span_id_derives_an_id_when_nothing_is_stashed() -> None:
     ids=["garbage", "nil", "non-string", "empty"],
 )
 def test_extract_span_id_falls_back_to_derivation_for_unusable_stashes(stashed: object) -> None:
+    """Verify that unusable stashed span IDs fall back to deterministic derivation."""
     span = make_span(0xAB, attributes={NIRIZAN_SPAN_ID: stashed})
 
     assert _extract_nirizan_span_id(span, _ctx_of(span), True) == (
@@ -694,6 +731,7 @@ def test_extract_span_id_preserves_a_stashed_derived_provenance() -> None:
 
 @pytest.mark.parametrize("prior", [ID_SOURCE_ROUNDTRIP, "bogus", None, 7])
 def test_extract_span_id_treats_any_other_stashed_provenance_as_roundtrip(prior: object) -> None:
+    """Verify that unknown stashed provenance defaults to roundtrip."""
     span = make_span(
         0xAB,
         attributes={NIRIZAN_SPAN_ID: str(_SAMPLE_UUID), NIRIZAN_SPAN_ID_SOURCE: prior},
@@ -703,6 +741,7 @@ def test_extract_span_id_treats_any_other_stashed_provenance_as_roundtrip(prior:
 
 
 def test_extract_trace_id_derives_from_the_otel_trace_id_by_default() -> None:
+    """Verify that trace IDs are derived from OTel IDs when stashed IDs are untrusted."""
     spans = {1: make_span(1)}
 
     assert _extract_nirizan_trace_id(spans, TRACE_ID, False) == (
@@ -712,6 +751,7 @@ def test_extract_trace_id_derives_from_the_otel_trace_id_by_default() -> None:
 
 
 def test_extract_trace_id_recovers_a_stashed_id_even_if_only_one_span_has_it() -> None:
+    """Verify that one trusted valid stash can supply the trace UUID."""
     spans = {
         1: make_span(1),
         2: make_span(2, attributes={NIRIZAN_TRACE_ID: str(_SAMPLE_UUID)}),
@@ -721,6 +761,7 @@ def test_extract_trace_id_recovers_a_stashed_id_even_if_only_one_span_has_it() -
 
 
 def test_extract_trace_id_skips_unusable_stashes_and_uses_a_later_valid_one() -> None:
+    """Verify that invalid trace ID stashes do not hide a later valid stash."""
     spans = {
         1: make_span(1, attributes={NIRIZAN_TRACE_ID: "garbage"}),
         2: make_span(2, attributes={NIRIZAN_TRACE_ID: str(_SAMPLE_UUID)}),
@@ -730,6 +771,7 @@ def test_extract_trace_id_skips_unusable_stashes_and_uses_a_later_valid_one() ->
 
 
 def test_extract_trace_id_resolves_conflicts_by_start_time_not_arrival_order() -> None:
+    """Verify that start time determines which conflicting stashed trace ID wins."""
     first = make_span(1, start=T0, attributes={NIRIZAN_TRACE_ID: str(UUID(int=1))})
     second = make_span(2, start=T0 + 10, attributes={NIRIZAN_TRACE_ID: str(UUID(int=2))})
 
@@ -741,6 +783,7 @@ def test_extract_trace_id_resolves_conflicts_by_start_time_not_arrival_order() -
 
 
 def test_extract_trace_id_preserves_a_stashed_derived_provenance() -> None:
+    """Verify that recovery preserves an explicitly derived trace ID provenance."""
     spans = {
         1: make_span(
             1,
@@ -767,6 +810,7 @@ def test_extract_trace_id_preserves_a_stashed_derived_provenance() -> None:
     ids=["none", "one", "same-twice", "two-distinct", "one-invalid", "one-nil"],
 )
 def test_has_conflicting_trace_ids(stashes: list[str], expected: bool) -> None:
+    """Verify conflict detection across matching, distinct, and unusable trace ID stashes."""
     spans = {
         i + 1: make_span(i + 1, attributes={NIRIZAN_TRACE_ID: stash})
         for i, stash in enumerate(stashes)
@@ -806,6 +850,7 @@ def test_has_conflicting_trace_ids(stashes: list[str], expected: bool) -> None:
 def test_infer_span_kind_recognizes_explicit_and_implicit_kinds(
     attrs: dict[str, Any], expected: SpanKind
 ) -> None:
+    """Verify span kind inference from explicit kinds and recognized semantic attributes."""
     assert _infer_span_kind(attrs) is expected
 
 
@@ -815,6 +860,7 @@ def test_infer_span_kind_recognizes_explicit_and_implicit_kinds(
     ids=["empty", "unrelated", "unknown-explicit", "exporter-alias-not-a-kind"],
 )
 def test_infer_span_kind_returns_none_when_nothing_is_recognizable(attrs: dict[str, Any]) -> None:
+    """Verify that unrecognized attributes yield no inferred span kind."""
     assert _infer_span_kind(attrs) is None
 
 
@@ -833,6 +879,7 @@ def test_payload_key_table_covers_every_span_kind() -> None:
 
 @pytest.mark.parametrize("kind", list(SpanKind))
 def test_extract_payloads_maps_each_kind_to_its_own_keys(kind: SpanKind) -> None:
+    """Verify payload extraction uses the input and output keys for each span kind."""
     in_key, out_key = _PAYLOAD_KEYS[kind]
 
     assert _extract_payloads(kind, {in_key: "in", out_key: "out"}) == ("in", "out")
@@ -842,12 +889,14 @@ def test_extract_payloads_maps_each_kind_to_its_own_keys(kind: SpanKind) -> None
 
 
 def test_extract_payloads_coerces_non_strings_and_ignores_other_kinds_keys() -> None:
+    """Verify payload extraction stringifies values and ignores keys for other kinds."""
     attrs = {GEN_AI_PROMPT: 42, NIRIZAN_RETRIEVAL_QUERY: "not mine"}
 
     assert _extract_payloads(SpanKind.GENERATION, attrs) == ("42", None)
 
 
 def _convert(otel_attrs: dict[str, Any], **overrides: Any) -> dict[str, Any]:
+    """Convert attributes with content enabled and overridable metadata defaults."""
     kwargs: dict[str, Any] = {
         "service_name": None,
         "span_id_hex": None,
@@ -864,6 +913,7 @@ def _convert(otel_attrs: dict[str, Any], **overrides: Any) -> dict[str, Any]:
 
 
 def test_convert_attributes_preserves_scalar_types() -> None:
+    """Verify that conversion preserves scalar attribute values and types."""
     result = _convert({"s": "v", "i": 3, "f": 1.5, "b": True, "z": 0, "e": ""})
 
     assert result["s"] == "v"
@@ -875,6 +925,7 @@ def test_convert_attributes_preserves_scalar_types() -> None:
 
 
 def test_convert_attributes_skips_none_values() -> None:
+    """Verify that conversion omits attributes whose values are None."""
     assert "n" not in _convert({"n": None})
 
 
@@ -882,6 +933,7 @@ def test_convert_attributes_skips_none_values() -> None:
 def test_convert_attributes_encodes_sequences_under_the_reserved_prefix(
     sequence: Sequence[str] | list[str] | tuple[str, ...],
 ) -> None:
+    """Verify that sequences become JSON strings under the reserved key prefix."""
     result = _convert({"tags": sequence})
 
     assert "tags" not in result
@@ -889,6 +941,7 @@ def test_convert_attributes_encodes_sequences_under_the_reserved_prefix(
 
 
 def test_convert_attributes_does_not_double_prefix_an_already_prefixed_key() -> None:
+    """Verify that an existing sequence prefix is preserved without duplication."""
     result = _convert({f"{SEQ_ATTR_PREFIX}tags": ["a"]})
 
     assert list(result)[0] == f"{SEQ_ATTR_PREFIX}tags"
@@ -896,6 +949,7 @@ def test_convert_attributes_does_not_double_prefix_an_already_prefixed_key() -> 
 
 
 def test_convert_attributes_keeps_non_ascii_sequence_items_unescaped() -> None:
+    """Verify that encoded sequence text preserves non-ASCII characters."""
     result = _convert({"words": ["বাংলা", "العربية"]})
 
     assert "\\u" not in result[f"{SEQ_ATTR_PREFIX}words"]
@@ -903,8 +957,11 @@ def test_convert_attributes_keeps_non_ascii_sequence_items_unescaped() -> None:
 
 
 def test_convert_attributes_stringifies_and_truncates_unsupported_types() -> None:
+    """Verify that unsupported attribute types are stringified and length limited."""
+
     class Odd:
         def __str__(self) -> str:
+            """Return oversized text to exercise conversion and truncation of custom objects."""
             return "odd-" + "x" * (MAX_ATTR_VALUE_LENGTH * 2)
 
     result = _convert({"odd": Odd(), "raw": b"bytes"})
@@ -915,6 +972,7 @@ def test_convert_attributes_stringifies_and_truncates_unsupported_types() -> Non
 
 
 def test_convert_attributes_truncates_long_string_attributes() -> None:
+    """Verify that long string attributes end at the limit with a truncation marker."""
     result = _convert({"prompt": "x" * (MAX_ATTR_VALUE_LENGTH * 2)})
 
     assert len(result["prompt"]) == MAX_ATTR_VALUE_LENGTH
@@ -922,6 +980,7 @@ def test_convert_attributes_truncates_long_string_attributes() -> None:
 
 
 def test_convert_attributes_leaves_short_strings_unchanged() -> None:
+    """Verify that short and empty attribute strings pass through unchanged."""
     value = "x" * (MAX_ATTR_VALUE_LENGTH - 1)
 
     assert _convert({"prompt": value})["prompt"] == value
@@ -930,6 +989,7 @@ def test_convert_attributes_leaves_short_strings_unchanged() -> None:
 def test_assembly_keeps_full_payload_when_attribute_copy_is_truncated(
     make_inert: Callable[..., NiriZanSpanProcessor],
 ) -> None:
+    """Verify that payload text can remain intact when its attribute copy is truncated."""
     long_prompt = "p" * (MAX_ATTR_VALUE_LENGTH * 2)
 
     inert = make_inert(capture_content=True)
@@ -942,7 +1002,10 @@ def test_assembly_keeps_full_payload_when_attribute_copy_is_truncated(
 def test_convert_attributes_drops_a_sequence_that_cannot_be_encoded_and_keeps_the_rest(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
+    """Verify that a sequence encoding failure leaves unrelated attributes intact."""
+
     def failing_encoder(_: Any) -> str:
+        """Raise a sequence encoding error to exercise attribute-level recovery."""
         raise ValueError("cannot encode")
 
     monkeypatch.setattr(from_otel, "encode_sequence_attribute_value", failing_encoder)
@@ -973,6 +1036,7 @@ def test_a_whitespace_only_sequence_key_drops_only_that_attribute_not_the_span(
 
 
 def test_convert_attributes_writes_all_metadata_when_present() -> None:
+    """Verify that available service, ID, sampling, trace state, and status metadata are stored."""
     result = _convert(
         {},
         service_name="svc",
@@ -996,6 +1060,7 @@ def test_convert_attributes_writes_all_metadata_when_present() -> None:
 
 
 def test_convert_attributes_omits_absent_metadata_but_always_writes_provenance() -> None:
+    """Verify that absent metadata is omitted while ID provenance is always included."""
     result = _convert({})
 
     assert set(result) == {NIRIZAN_SPAN_ID_SOURCE, NIRIZAN_TRACE_ID_SOURCE}
@@ -1017,12 +1082,14 @@ def test_convert_attributes_cannot_be_spoofed_by_producer_supplied_metadata() ->
 
 
 def test_convert_attributes_truncates_a_long_trace_state() -> None:
+    """Verify that trace state text is bounded by the attribute length limit."""
     result = _convert({}, trace_state="k=" + "v" * (MAX_ATTR_VALUE_LENGTH * 2))
 
     assert len(result[OTEL_TRACE_STATE]) == MAX_ATTR_VALUE_LENGTH
 
 
 def test_convert_attributes_does_not_mutate_its_input() -> None:
+    """Verify that attribute conversion leaves its input mapping unchanged."""
     original = {"tags": ["a"], "n": None}
     snapshot = {"tags": ["a"], "n": None}
 
@@ -1032,6 +1099,7 @@ def test_convert_attributes_does_not_mutate_its_input() -> None:
 
 
 def test_scope_name_reads_the_instrumentation_scope() -> None:
+    """Verify that the scope name comes from the span's instrumentation scope."""
     assert _scope_name(make_span(1, scope="my.lib")) == "my.lib"
 
 
@@ -1054,6 +1122,7 @@ def test_scope_name_never_touches_the_deprecated_instrumentation_info() -> None:
     ids=["bare", "mock", "empty-spec", "legacy-info-only"],
 )
 def test_scope_name_is_none_when_the_name_is_unavailable_or_not_a_string(span: Any) -> None:
+    """Verify that missing or non-string scope names produce None."""
     assert _scope_name(span) is None
 
 
@@ -1062,6 +1131,7 @@ def test_scope_name_is_none_when_the_name_is_unavailable_or_not_a_string(span: A
     [(5, 5), (0, 0), (-3, -3), (True, 0), (False, 0), (None, 0), ("7", 0), (1.5, 0)],
 )
 def test_int_or_zero(value: object, expected: int) -> None:
+    """Verify that integer timestamps pass through and unsupported values default to zero."""
     assert _int_or_zero(value) == expected
 
 
@@ -1071,6 +1141,7 @@ def test_int_or_zero(value: object, expected: int) -> None:
 
 
 def test_trace_buffer_add_stores_by_otel_span_id_and_reports_duplicates() -> None:
+    """Verify buffer replacement by OTel span ID and duplicate reporting."""
     buf = _TraceBuffer(TRACE_ID, now=1.0)
     first = make_span(1, name="first")
     replacement = make_span(1, name="replacement")
@@ -1085,6 +1156,7 @@ def test_trace_buffer_add_stores_by_otel_span_id_and_reports_duplicates() -> Non
 
 
 def test_trace_buffer_tracks_open_spans_and_never_goes_negative() -> None:
+    """Verify that starts and ends balance without making the open span count negative."""
     buf = _TraceBuffer(TRACE_ID, now=0.0)
 
     buf.add(make_span(1), now=1.0)  # an end with no recorded start
@@ -1104,6 +1176,7 @@ def test_trace_buffer_tracks_open_spans_and_never_goes_negative() -> None:
 
 
 def test_trace_buffer_discard_does_not_store_a_span() -> None:
+    """Verify that discarding an ended span updates accounting without storing it."""
     buf = _TraceBuffer(TRACE_ID, now=0.0)
     buf.mark_started(now=1.0)
 
@@ -1114,6 +1187,7 @@ def test_trace_buffer_discard_does_not_store_a_span() -> None:
 
 
 def test_trace_buffer_ignores_a_span_without_a_context() -> None:
+    """Verify that a span without context is not stored in the buffer."""
     buf = _TraceBuffer(TRACE_ID, now=0.0)
     contextless = ReadableSpan(name="no-context", context=None)
 
@@ -1122,6 +1196,7 @@ def test_trace_buffer_ignores_a_span_without_a_context() -> None:
 
 
 def test_trace_buffer_starts_with_trustworthy_accounting() -> None:
+    """Verify that new buffers start with no lost markers or cap warnings."""
     buf = _TraceBuffer(TRACE_ID, now=0.0)
 
     assert (buf.open_spans, buf.has_untracked_start, buf.has_untracked_end, buf.cap_warned) == (
@@ -1133,6 +1208,7 @@ def test_trace_buffer_starts_with_trustworthy_accounting() -> None:
 
 
 def test_start_key_orders_by_start_time_then_span_id_and_tolerates_unknown_spans() -> None:
+    """Verify start-time and span-ID ordering, including missing buffered spans."""
     buf = buffer_of(make_span(5, start=T0), make_span(3, start=T0), make_span(9, start=T0 - 1))
 
     assert sorted([5, 3, 9], key=lambda oid: _start_key(buf, oid)) == [9, 3, 5]
@@ -1150,6 +1226,7 @@ def resolve(
     kinds: set[int] | None = None,
     policy: str = "emit",
 ) -> from_otel._ParentResolution:
+    """Resolve parents for a chosen candidate set under the requested orphan policy."""
     buf = buffer_of(*spans)
     ids = {_ctx_of(s).span_id for s in spans} if kinds is None else kinds
     kind_map = dict.fromkeys(sorted(ids), SpanKind.GENERATION)
@@ -1157,6 +1234,7 @@ def resolve(
 
 
 def test_resolve_parents_single_root() -> None:
+    """Verify that a lone root has no parent, dropped status, or synthetic origin."""
     result = resolve([make_span(1)])
 
     assert result.parent_of == {1: None}
@@ -1164,12 +1242,14 @@ def test_resolve_parents_single_root() -> None:
 
 
 def test_resolve_parents_chain_links_each_span_to_its_parent() -> None:
+    """Verify that every span in a chain retains its immediate parent."""
     result = resolve([make_span(1), make_span(2, parent=1), make_span(3, parent=2)])
 
     assert result.parent_of == {1: None, 2: 1, 3: 2}
 
 
 def test_resolve_parents_siblings_share_a_parent() -> None:
+    """Verify that sibling spans resolve to the same parent."""
     result = resolve([make_span(1), make_span(2, parent=1), make_span(3, parent=1)])
 
     assert result.parent_of == {1: None, 2: 1, 3: 1}
@@ -1188,12 +1268,14 @@ def test_resolve_parents_treats_an_absent_remote_parent_as_a_root_not_an_orphan(
 
 
 def test_resolve_parents_attaches_to_a_remote_parent_that_is_present_locally() -> None:
+    """Verify that a remote parent present in the local buffer remains linked."""
     result = resolve([make_span(1), make_span(2, parent=1, remote_parent=True)])
 
     assert result.parent_of == {1: None, 2: 1}
 
 
 def test_resolve_parents_emit_policy_gives_an_orphan_a_synthetic_origin() -> None:
+    """Verify that emitted orphans retain their missing parent's ID as a synthetic origin."""
     result = resolve([make_span(2, parent=0xAAA)], policy="emit")
 
     assert result.parent_of == {2: 0xAAA}
@@ -1202,6 +1284,7 @@ def test_resolve_parents_emit_policy_gives_an_orphan_a_synthetic_origin() -> Non
 
 
 def test_resolve_parents_drop_policy_drops_an_orphan_and_its_whole_subtree() -> None:
+    """Verify that dropping an orphan also drops its descendant subtree."""
     spans = [
         make_span(2, parent=0xAAA),
         make_span(3, parent=2),
@@ -1216,6 +1299,7 @@ def test_resolve_parents_drop_policy_drops_an_orphan_and_its_whole_subtree() -> 
 
 
 def test_resolve_parents_emit_policy_keeps_the_orphans_subtree_attached_to_it() -> None:
+    """Verify that emitting an orphan preserves links within its subtree."""
     result = resolve([make_span(2, parent=0xAAA), make_span(3, parent=2)], policy="emit")
 
     assert result.parent_of == {2: 0xAAA, 3: 2}
@@ -1223,6 +1307,7 @@ def test_resolve_parents_emit_policy_keeps_the_orphans_subtree_attached_to_it() 
 
 
 def test_resolve_parents_reattaches_children_across_a_skipped_span() -> None:
+    """Verify that children attach to the nearest retained ancestor across a skipped span."""
     spans = [make_span(1), make_span(2, parent=1), make_span(3, parent=2)]
 
     result = resolve(spans, kinds={1, 3})
@@ -1231,6 +1316,7 @@ def test_resolve_parents_reattaches_children_across_a_skipped_span() -> None:
 
 
 def test_resolve_parents_promotes_a_child_to_root_when_every_ancestor_is_skipped() -> None:
+    """Verify that a child becomes a root when no ancestor is retained."""
     spans = [make_span(1), make_span(2, parent=1), make_span(3, parent=2)]
 
     result = resolve(spans, kinds={3})
@@ -1239,6 +1325,7 @@ def test_resolve_parents_promotes_a_child_to_root_when_every_ancestor_is_skipped
 
 
 def test_resolve_parents_looks_through_skipped_spans_to_a_missing_ancestor() -> None:
+    """Verify that skipped ancestors do not hide a missing parent from orphan handling."""
     spans = [make_span(2, parent=0xAAA), make_span(3, parent=2)]
 
     result = resolve(spans, kinds={3}, policy="emit")
@@ -1248,18 +1335,21 @@ def test_resolve_parents_looks_through_skipped_spans_to_a_missing_ancestor() -> 
 
 
 def test_resolve_parents_treats_an_invalid_parent_id_as_no_parent() -> None:
+    """Verify that an invalid parent ID is treated as an absent parent."""
     result = resolve([make_span(2, parent=0)])
 
     assert result.parent_of == {2: None}
 
 
 def test_resolve_parents_with_no_candidates_resolves_nothing() -> None:
+    """Verify that an empty candidate set produces no parent resolution state."""
     result = resolve([make_span(1), make_span(2, parent=1)], kinds=set())
 
     assert (result.parent_of, result.dropped, result.synthetic_origin) == ({}, set(), {})
 
 
 def test_resolve_parents_breaks_a_two_span_cycle_with_exactly_one_root() -> None:
+    """Verify that a two-span cycle is broken into exactly one root."""
     result = resolve([make_span(1, parent=2), make_span(2, parent=1)])
 
     assert sorted(result.parent_of) == [1, 2]
@@ -1268,6 +1358,7 @@ def test_resolve_parents_breaks_a_two_span_cycle_with_exactly_one_root() -> None
 
 
 def test_resolve_parents_breaks_a_self_parented_span() -> None:
+    """Verify that a self-parented span becomes a root and counts as a broken cycle."""
     result = resolve([make_span(5, parent=5)])
 
     assert result.parent_of == {5: None}
@@ -1275,6 +1366,7 @@ def test_resolve_parents_breaks_a_self_parented_span() -> None:
 
 
 def test_resolve_parents_attaches_a_tail_that_feeds_into_a_cycle() -> None:
+    """Verify that breaking a cycle retains the tail attached to it."""
     result = resolve(
         [
             make_span(1, parent=2),
@@ -1343,6 +1435,7 @@ def _reference_resolve(
     """A deliberately naive resolver: no memoization, plain recursion, acyclic input only."""
 
     def physical_parent(span_id: int) -> int | None:
+        """Read a reference parent ID, treating absent remote parents as roots."""
         parent = buf.spans[span_id].parent
         if parent is None or parent.span_id == 0:
             return None
@@ -1351,6 +1444,7 @@ def _reference_resolve(
         return parent.span_id
 
     def nearest(span_id: int) -> tuple[str, int | None]:
+        """Find the nearest candidate ancestor, root, or missing parent in the reference forest."""
         current = physical_parent(span_id)
         while True:
             if current is None:
@@ -1364,6 +1458,7 @@ def _reference_resolve(
     memo: dict[int, tuple[str, int | None]] = {}
 
     def state(span_id: int) -> tuple[str, int | None]:
+        """Memoize reference parent outcomes, propagating orphan drops to descendants."""
         if span_id in memo:
             return memo[span_id]
         kind, target = nearest(span_id)
@@ -1395,6 +1490,7 @@ def _reference_resolve(
 
 @pytest.mark.parametrize("policy", ["emit", "drop"])
 def test_resolve_parents_matches_a_naive_reference_on_random_forests(policy: str) -> None:
+    """Compare parent resolution against an independent reference on random forests."""
     rng = random.Random(20260402)
 
     for _ in range(300):
@@ -1414,6 +1510,7 @@ def test_resolve_parents_matches_a_naive_reference_on_random_forests(policy: str
 
 
 def test_resolve_parents_result_does_not_depend_on_insertion_order() -> None:
+    """Verify that parent resolution is independent of buffer insertion order."""
     rng = random.Random(7)
 
     for _ in range(100):
@@ -1437,22 +1534,26 @@ def test_resolve_parents_result_does_not_depend_on_insertion_order() -> None:
 def assemble(
     processor: NiriZanSpanProcessor, *spans: ReadableSpan, trace_id: int = TRACE_ID
 ) -> Trace | None:
+    """Assemble the supplied spans through the processor's trace assembly path."""
     return processor._assemble_trace(buffer_of(*spans, trace_id=trace_id))
 
 
 def assemble_ok(
     processor: NiriZanSpanProcessor, *spans: ReadableSpan, trace_id: int = TRACE_ID
 ) -> Trace:
+    """Assemble a trace and assert that at least one span survives conversion."""
     result = assemble(processor, *spans, trace_id=trace_id)
     assert result is not None
     return result
 
 
 def test_assembly_returns_none_for_an_empty_buffer(inert: NiriZanSpanProcessor) -> None:
+    """Verify that an empty buffer does not produce a trace."""
     assert inert._assemble_trace(_TraceBuffer(TRACE_ID, 0.0)) is None
 
 
 def test_assembly_of_one_span_produces_a_valid_trace(inert: NiriZanSpanProcessor) -> None:
+    """Verify that one recognizable span produces a valid trace with derived IDs."""
     trace = assemble_ok(inert, make_span(0xAB, name="only"))
 
     assert isinstance(trace, Trace)
@@ -1485,6 +1586,7 @@ def test_assembly_upholds_the_trace_and_span_contracts(inert: NiriZanSpanProcess
 
 
 def test_assembly_orders_spans_by_start_time_then_span_id(inert: NiriZanSpanProcessor) -> None:
+    """Verify that assembled spans are ordered by start time and then OTel span ID."""
     trace = assemble_ok(
         inert,
         make_span(3, name="c", start=T0 + 5),
@@ -1498,6 +1600,7 @@ def test_assembly_orders_spans_by_start_time_then_span_id(inert: NiriZanSpanProc
 def test_assembly_links_parents_using_each_spans_nirizan_id(
     make_inert: Callable[..., NiriZanSpanProcessor],
 ) -> None:
+    """Verify that parent links use the recovered or derived NiriZan span UUIDs."""
     stashed = UUID("87654321-4321-8765-4321-876543218765")
     trace = assemble_ok(
         make_inert(trust_stashed_ids=True),
@@ -1514,6 +1617,7 @@ def test_assembly_links_parents_using_each_spans_nirizan_id(
 def test_assembly_reports_provenance_for_spans_and_the_trace(
     make_inert: Callable[..., NiriZanSpanProcessor],
 ) -> None:
+    """Verify that assembly records span and trace ID provenance."""
     trace = assemble_ok(
         make_inert(trust_stashed_ids=True),
         make_span(1, name="stashed", attributes={NIRIZAN_SPAN_ID: str(uuid4())}),
@@ -1529,6 +1633,7 @@ def test_assembly_reports_provenance_for_spans_and_the_trace(
 def test_assembly_recovers_a_stashed_trace_id(
     make_inert: Callable[..., NiriZanSpanProcessor],
 ) -> None:
+    """Verify that trusted stashed trace IDs propagate to the trace and its spans."""
     stashed = uuid4()
 
     trace = assemble_ok(
@@ -1544,6 +1649,7 @@ def test_assembly_recovers_a_stashed_trace_id(
 def test_assembly_records_a_conflict_between_stashed_trace_ids(
     make_inert: Callable[..., NiriZanSpanProcessor], caplog: pytest.LogCaptureFixture
 ) -> None:
+    """Verify that conflicting stashed trace IDs are counted and logged."""
     inert = make_inert(trust_stashed_ids=True)
     with caplog.at_level(logging.WARNING, logger=_MODULE_LOGGER):
         trace = assemble_ok(
@@ -1581,6 +1687,7 @@ def test_assembly_gives_a_duplicate_stashed_span_id_a_derived_replacement(
 def test_assembly_lets_the_earliest_started_span_keep_a_contested_id_whatever_the_arrival_order(
     make_inert: Callable[..., NiriZanSpanProcessor],
 ) -> None:
+    """Verify that the earliest started span keeps a contested UUID regardless of arrival order."""
     shared = str(uuid4())
     earlier = make_span(1, name="earlier", attributes={NIRIZAN_SPAN_ID: shared})
     later = make_span(2, name="later", attributes={NIRIZAN_SPAN_ID: shared})
@@ -1599,6 +1706,7 @@ def test_assembly_lets_the_earliest_started_span_keep_a_contested_id_whatever_th
 def test_assembly_keeps_children_attached_to_the_right_duplicate(
     inert: NiriZanSpanProcessor,
 ) -> None:
+    """Verify that resolving duplicate UUIDs preserves each child's intended parent."""
     shared = str(uuid4())
 
     trace = assemble_ok(
@@ -1632,6 +1740,7 @@ def test_assembly_drops_a_span_whose_replacement_id_also_collides(
 def test_assembly_application_name_comes_from_the_root_spans_service(
     inert: NiriZanSpanProcessor,
 ) -> None:
+    """Verify that the root span's service name determines the application name."""
     trace = assemble_ok(
         inert,
         make_span(1, service="root-service"),
@@ -1644,6 +1753,7 @@ def test_assembly_application_name_comes_from_the_root_spans_service(
 def test_assembly_application_name_falls_back_to_any_span_with_a_service(
     inert: NiriZanSpanProcessor,
 ) -> None:
+    """Verify that another span supplies the application name when the root has no service."""
     trace = assemble_ok(
         inert,
         make_span(1, service=None),
@@ -1656,6 +1766,7 @@ def test_assembly_application_name_falls_back_to_any_span_with_a_service(
 def test_assembly_application_name_is_unknown_without_any_service_name(
     inert: NiriZanSpanProcessor,
 ) -> None:
+    """Verify that a trace without a service name uses the unknown application fallback."""
     assert assemble_ok(inert, make_span(1, service=None)).application_name == "unknown"
 
 
@@ -1676,6 +1787,7 @@ def test_assembly_application_name_survives_when_the_promoted_root_has_the_name(
 def test_assembly_session_id_uses_the_first_valid_session_by_start_time(
     make_inert: Callable[..., NiriZanSpanProcessor],
 ) -> None:
+    """Verify that the earliest valid trusted session ID wins by span start time."""
     first, second = uuid4(), uuid4()
 
     trace = assemble_ok(
@@ -1690,6 +1802,7 @@ def test_assembly_session_id_uses_the_first_valid_session_by_start_time(
 def test_assembly_does_not_recover_a_stashed_session_id_when_untrusted(
     inert: NiriZanSpanProcessor,
 ) -> None:
+    """Verify that disabling stash trust prevents session ID recovery."""
     trace = assemble_ok(inert, make_span(1, attributes={NIRIZAN_SESSION_ID: str(uuid4())}))
 
     assert trace.session_id is None
@@ -1698,6 +1811,7 @@ def test_assembly_does_not_recover_a_stashed_session_id_when_untrusted(
 def test_assembly_recovers_a_stashed_session_id_when_trusted(
     make_inert: Callable[..., NiriZanSpanProcessor],
 ) -> None:
+    """Verify that an allowed session UUID is recovered when stash trust is enabled."""
     session_id = uuid4()
     trace = assemble_ok(
         make_inert(trust_stashed_ids=True, trusted_session_ids=frozenset({session_id})),
@@ -1710,6 +1824,7 @@ def test_assembly_recovers_a_stashed_session_id_when_trusted(
 def test_assembly_rejects_an_untrusted_stashed_session_id(
     make_inert: Callable[..., NiriZanSpanProcessor],
 ) -> None:
+    """Verify that session IDs outside the trusted set are not recovered."""
     session_id = uuid4()
     trusted_session_id = uuid4()
     trace = assemble_ok(
@@ -1724,6 +1839,7 @@ def test_assembly_rejects_an_untrusted_stashed_session_id(
 
 
 def test_assembly_ignores_an_invalid_session_id(inert: NiriZanSpanProcessor) -> None:
+    """Verify that malformed stashed session IDs do not reach the assembled trace."""
     trace = assemble_ok(
         inert,
         make_span(1, attributes={NIRIZAN_SESSION_ID: "garbage"}),
@@ -1734,6 +1850,7 @@ def test_assembly_ignores_an_invalid_session_id(inert: NiriZanSpanProcessor) -> 
 
 
 def test_assembly_clamps_and_defaults_span_names(inert: NiriZanSpanProcessor) -> None:
+    """Verify that span names are length limited and missing names receive a fallback."""
     trace = assemble_ok(
         inert,
         make_span(1, name="a" * 300),
@@ -1750,6 +1867,7 @@ def test_assembly_clamps_and_defaults_span_names(inert: NiriZanSpanProcessor) ->
 
 
 def test_assembly_converts_timestamps_to_utc_datetimes(inert: NiriZanSpanProcessor) -> None:
+    """Verify that assembly converts span timestamps to aware UTC datetimes."""
     trace = assemble_ok(
         inert,
         make_span(1, start=1_600_000_000_000_000_000, end=1_600_000_002_500_000_000),
@@ -1772,6 +1890,7 @@ def test_assembly_converts_timestamps_to_utc_datetimes(inert: NiriZanSpanProcess
 def test_assembly_captures_otel_status_as_attributes(
     inert: NiriZanSpanProcessor, status: Status, code: str, description: str | None
 ) -> None:
+    """Verify that assembly records OTel status codes and descriptions as attributes."""
     attrs = assemble_ok(inert, make_span(1, status=status)).spans[0].attributes
 
     assert attrs[OTEL_STATUS_CODE] == code
@@ -1780,12 +1899,14 @@ def test_assembly_captures_otel_status_as_attributes(
 
 @pytest.mark.parametrize("sampled", [True, False])
 def test_assembly_captures_the_sampled_flag(inert: NiriZanSpanProcessor, sampled: bool) -> None:
+    """Verify that assembly preserves both values of the OTel sampled flag."""
     attrs = assemble_ok(inert, make_span(1, sampled=sampled)).spans[0].attributes
 
     assert attrs[OTEL_SAMPLED] is sampled
 
 
 def test_assembly_captures_trace_state_only_when_present(inert: NiriZanSpanProcessor) -> None:
+    """Verify that trace state is captured only when it is present."""
     with_state = assemble_ok(inert, make_span(1, trace_state=TraceState([("vendor", "x")])))
     without = assemble_ok(inert, make_span(2))
 
@@ -1811,7 +1932,10 @@ def test_assembly_captures_trace_state_in_the_w3c_header_format(
 def test_assembly_omits_trace_state_it_cannot_serialize_and_keeps_the_span(
     inert: NiriZanSpanProcessor, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """Verify that trace state serialization errors do not discard the span."""
+
     def broken(self: TraceState) -> str:
+        """Raise during trace state serialization to exercise metadata recovery."""
         raise RuntimeError("cannot serialize")
 
     monkeypatch.setattr(TraceState, "to_header", broken)
@@ -1823,6 +1947,7 @@ def test_assembly_omits_trace_state_it_cannot_serialize_and_keeps_the_span(
 
 
 def test_assembly_captures_service_and_span_id_metadata(inert: NiriZanSpanProcessor) -> None:
+    """Verify that assembled spans carry service and original OTel span ID metadata."""
     attrs = assemble_ok(inert, make_span(0xAB, service="svc")).spans[0].attributes
 
     assert attrs["otel.service.name"] == "svc"
@@ -1830,6 +1955,7 @@ def test_assembly_captures_service_and_span_id_metadata(inert: NiriZanSpanProces
 
 
 def test_assembly_preserves_the_original_otel_attributes(inert: NiriZanSpanProcessor) -> None:
+    """Verify that unrelated original OTel attributes survive assembly."""
     attrs = (
         assemble_ok(inert, make_span(1, attributes={"http.method": "GET", "retries": 3}))
         .spans[0]
@@ -1841,6 +1967,7 @@ def test_assembly_preserves_the_original_otel_attributes(inert: NiriZanSpanProce
 
 
 def test_assembly_encodes_sequence_attributes(inert: NiriZanSpanProcessor) -> None:
+    """Verify that assembly encodes sequence attributes under the reserved prefix."""
     attrs = assemble_ok(inert, make_span(1, attributes={"tags": ("a", "b")})).spans[0].attributes
 
     assert json.loads(str(attrs[f"{SEQ_ATTR_PREFIX}tags"])) == ["a", "b"]
@@ -1850,6 +1977,7 @@ def test_assembly_encodes_sequence_attributes(inert: NiriZanSpanProcessor) -> No
 def test_assembly_extracts_payloads_for_every_kind(
     make_inert: Callable[..., NiriZanSpanProcessor], kind: SpanKind
 ) -> None:
+    """Verify that assembly extracts input and output payloads for every recognized kind."""
     in_key, out_key = _PAYLOAD_KEYS[kind]
     span = make_span(
         1,
@@ -1868,6 +1996,7 @@ def test_assembly_extracts_payloads_for_every_kind(
 def test_assembly_preserves_non_ascii_text(
     make_inert: Callable[..., NiriZanSpanProcessor],
 ) -> None:
+    """Verify that names, payloads, and sequence attributes preserve non-ASCII text."""
     span = make_span(
         1,
         name="বাংলা পরীক্ষা",
@@ -1884,6 +2013,7 @@ def test_assembly_preserves_non_ascii_text(
 def test_assembly_drops_unrecognized_spans_by_default_and_counts_them(
     inert: NiriZanSpanProcessor,
 ) -> None:
+    """Verify that the default policy drops and counts unrecognized spans."""
     trace = assemble_ok(
         inert,
         make_span(1, name="known"),
@@ -1895,6 +2025,7 @@ def test_assembly_drops_unrecognized_spans_by_default_and_counts_them(
 
 
 def test_assembly_returns_none_when_nothing_is_recognizable(inert: NiriZanSpanProcessor) -> None:
+    """Verify that a wholly unrecognized buffer produces no trace and counts each drop."""
     assert assemble(inert, make_span(1, recognized=False), make_span(2, recognized=False)) is None
     assert inert.get_stats()["unrecognized_kind"] == 2
 
@@ -1902,6 +2033,7 @@ def test_assembly_returns_none_when_nothing_is_recognizable(inert: NiriZanSpanPr
 def test_assembly_generation_policy_labels_unrecognized_spans_as_generation(
     make_inert: Callable[..., NiriZanSpanProcessor],
 ) -> None:
+    """Verify that the generation policy retains unrecognized spans as generation spans."""
     processor = make_inert(unrecognized_span_policy="generation")
 
     trace = assemble_ok(processor, make_span(1, name="http-span", recognized=False))
@@ -1913,6 +2045,7 @@ def test_assembly_generation_policy_labels_unrecognized_spans_as_generation(
 def test_assembly_reattaches_children_of_dropped_unrecognized_spans(
     inert: NiriZanSpanProcessor,
 ) -> None:
+    """Verify that children of dropped unrecognized spans attach to a surviving ancestor."""
     trace = assemble_ok(
         inert,
         make_span(1, name="root"),
@@ -1928,6 +2061,7 @@ def test_assembly_reattaches_children_of_dropped_unrecognized_spans(
 def test_assembly_promotes_a_child_whose_ancestors_are_all_dropped(
     inert: NiriZanSpanProcessor,
 ) -> None:
+    """Verify that a surviving child becomes a root when all its ancestors are dropped."""
     trace = assemble_ok(
         inert,
         make_span(1, name="skipped-root", recognized=False),
@@ -1962,6 +2096,7 @@ def test_assembly_survives_a_span_that_cannot_be_converted_and_reattaches_its_ch
 def test_assembly_returns_none_when_every_span_fails_conversion(
     inert: NiriZanSpanProcessor,
 ) -> None:
+    """Verify that assembly returns None and counts errors when every conversion fails."""
     assert assemble(inert, make_span(1, start=10**30, end=10**30 + 1)) is None
     assert inert.get_stats()["conversion_error"] == 1
 
@@ -1969,6 +2104,7 @@ def test_assembly_returns_none_when_every_span_fails_conversion(
 def test_assembly_emit_policy_gives_an_orphan_a_deterministic_synthetic_parent(
     inert: NiriZanSpanProcessor,
 ) -> None:
+    """Verify that emitted orphans receive deterministic, explicitly marked synthetic parents."""
     trace = assemble_ok(inert, make_span(3, name="orphan", parent=0x9999))
 
     assert trace.spans[0].parent_span_id == otel_span_id_to_uuid(0x9999)
@@ -1979,6 +2115,7 @@ def test_assembly_emit_policy_gives_an_orphan_a_deterministic_synthetic_parent(
 def test_assembly_drop_policy_discards_orphans_and_counts_them(
     make_inert: Callable[..., NiriZanSpanProcessor],
 ) -> None:
+    """Verify that the drop policy discards orphans and records the missing-parent reason."""
     processor = make_inert(orphan_policy="drop")
 
     trace = assemble(processor, make_span(3, parent=0x9999))
@@ -1991,6 +2128,7 @@ def test_assembly_drop_policy_discards_orphans_and_counts_them(
 def test_assembly_keeps_a_remote_parented_span_as_a_root(
     make_inert: Callable[..., NiriZanSpanProcessor], policy: str
 ) -> None:
+    """Verify that a span with an absent remote parent is retained as a root."""
     processor = make_inert(orphan_policy=policy)
 
     trace = assemble_ok(processor, make_span(2, parent=0xAAA, remote_parent=True))
@@ -2000,6 +2138,7 @@ def test_assembly_keeps_a_remote_parented_span_as_a_root(
 
 
 def test_assembly_counts_a_broken_cycle(inert: NiriZanSpanProcessor) -> None:
+    """Verify that assembly retains both spans of a cycle and counts the broken link."""
     trace = assemble_ok(inert, make_span(1, parent=2), make_span(2, parent=1))
 
     assert len(trace.spans) == 2
@@ -2008,6 +2147,7 @@ def test_assembly_counts_a_broken_cycle(inert: NiriZanSpanProcessor) -> None:
 
 
 def test_assembly_does_not_mutate_the_buffer(inert: NiriZanSpanProcessor) -> None:
+    """Verify that assembly leaves buffered spans unchanged."""
     buf = buffer_of(make_span(1), make_span(2, parent=1))
     before = dict(buf.spans)
 
@@ -2017,6 +2157,7 @@ def test_assembly_does_not_mutate_the_buffer(inert: NiriZanSpanProcessor) -> Non
 
 
 def test_assembly_is_deterministic_for_any_arrival_order(inert: NiriZanSpanProcessor) -> None:
+    """Verify that shuffled arrival orders produce the same assembled spans and trace ID."""
     spans = [
         make_span(1),
         make_span(2, parent=1),
@@ -2033,6 +2174,7 @@ def test_assembly_is_deterministic_for_any_arrival_order(inert: NiriZanSpanProce
 
 
 def test_assembly_is_repeatable_on_the_same_buffer(inert: NiriZanSpanProcessor) -> None:
+    """Verify that repeated assembly of the same buffer produces equal spans."""
     buf = buffer_of(make_span(1), make_span(2, parent=1))
 
     first = inert._assemble_trace(buf)
@@ -2043,6 +2185,7 @@ def test_assembly_is_repeatable_on_the_same_buffer(inert: NiriZanSpanProcessor) 
 
 
 def test_assembled_trace_survives_a_json_round_trip(inert: NiriZanSpanProcessor) -> None:
+    """Verify that an assembled trace survives model JSON serialization and validation."""
     trace = assemble_ok(
         inert,
         make_span(1, attributes={GEN_AI_PROMPT: "বাংলা", "tags": ["a"]}),
@@ -2058,6 +2201,7 @@ def test_assembled_trace_survives_a_json_round_trip(inert: NiriZanSpanProcessor)
 def test_assembly_invariants_hold_on_random_forests(
     make_inert: Callable[..., NiriZanSpanProcessor], policy: str
 ) -> None:
+    """Verify ID uniqueness, timestamp order, and parent linkage across random forests."""
     processor = make_inert(orphan_policy=policy)
     rng = random.Random(99)
 
@@ -2094,6 +2238,7 @@ def test_assembly_invariants_hold_on_random_forests(
 
 
 def flush_state(processor: NiriZanSpanProcessor, trace_id: int = TRACE_ID) -> bool:
+    """Check whether the processor remembers the trace as recently flushed."""
     return trace_id in processor._recent_flushes
 
 
@@ -2109,6 +2254,7 @@ def flush_state(processor: NiriZanSpanProcessor, trace_id: int = TRACE_ID) -> bo
 def test_buffering_rejects_invalid_spans_and_counts_them(
     inert: NiriZanSpanProcessor, span: ReadableSpan, reason: str
 ) -> None:
+    """Verify that invalid contexts and IDs are rejected before buffering and counted."""
     inert._buffer_span(span)
 
     assert inert._buffers == {}
@@ -2116,6 +2262,7 @@ def test_buffering_rejects_invalid_spans_and_counts_them(
 
 
 def test_buffering_creates_one_buffer_per_trace(inert: NiriZanSpanProcessor) -> None:
+    """Verify that spans are grouped into separate buffers by OTel trace ID."""
     inert._buffer_span(make_span(1))
     inert._buffer_span(make_span(2))
     inert._buffer_span(make_span(3, trace_id=OTHER_TRACE_ID))
@@ -2127,6 +2274,7 @@ def test_buffering_creates_one_buffer_per_trace(inert: NiriZanSpanProcessor) -> 
 def test_buffering_counts_a_duplicate_otel_span_id_and_keeps_the_latest(
     inert: NiriZanSpanProcessor, caplog: pytest.LogCaptureFixture
 ) -> None:
+    """Verify that duplicate OTel span IDs retain the latest span and increment a counter."""
     inert._buffer_span(make_span(1, name="first"))
     with caplog.at_level(logging.WARNING, logger=_MODULE_LOGGER):
         inert._buffer_span(make_span(1, name="second"))
@@ -2139,6 +2287,7 @@ def test_buffering_counts_a_duplicate_otel_span_id_and_keeps_the_latest(
 def test_a_span_arriving_after_its_trace_was_flushed_is_dropped_and_counted(
     inert: NiriZanSpanProcessor, sink: RecordingSink
 ) -> None:
+    """Verify that spans arriving after a trace flush are dropped and counted as late."""
     inert._buffer_span(make_span(1))
     inert._flush_trace(TRACE_ID, reason="test")
 
@@ -2152,6 +2301,7 @@ def test_a_span_arriving_after_its_trace_was_flushed_is_dropped_and_counted(
 def test_start_markers_are_ignored_for_an_already_flushed_trace(
     inert: NiriZanSpanProcessor,
 ) -> None:
+    """Verify that start markers cannot recreate an already flushed trace buffer."""
     inert._buffer_span(make_span(1))
     inert._flush_trace(TRACE_ID, reason="test")
 
@@ -2161,6 +2311,7 @@ def test_start_markers_are_ignored_for_an_already_flushed_trace(
 
 
 def test_start_and_end_markers_balance_the_open_span_count(inert: NiriZanSpanProcessor) -> None:
+    """Verify that start and end processing maintains the expected open span count."""
     inert._mark_span_started(TRACE_ID, 0.0)
     inert._mark_span_started(TRACE_ID, 0.0)
     assert inert._buffers[TRACE_ID].open_spans == 2
@@ -2172,6 +2323,7 @@ def test_start_and_end_markers_balance_the_open_span_count(inert: NiriZanSpanPro
 def test_idle_flush_waits_for_the_idle_timeout(
     make_inert: Callable[..., NiriZanSpanProcessor], clock: FakeClock, sink: RecordingSink
 ) -> None:
+    """Verify that a finished trace is flushed only after its idle timeout."""
     processor = make_inert(idle_timeout_seconds=5.0, max_trace_age_seconds=60.0)
     processor._buffer_span(make_span(1))
 
@@ -2187,6 +2339,7 @@ def test_idle_flush_waits_for_the_idle_timeout(
 def test_idle_flush_does_not_flush_a_trace_with_an_open_span(
     make_inert: Callable[..., NiriZanSpanProcessor], clock: FakeClock, sink: RecordingSink
 ) -> None:
+    """Verify that idle flushing retains traces with an open span."""
     processor = make_inert(idle_timeout_seconds=5.0, max_trace_age_seconds=60.0)
     processor._mark_span_started(TRACE_ID, clock())
     processor._buffer_span(make_span(1))
@@ -2202,6 +2355,7 @@ def test_idle_flush_does_not_flush_a_trace_with_an_open_span(
 def test_max_age_flushes_even_a_trace_with_an_open_span(
     make_inert: Callable[..., NiriZanSpanProcessor], clock: FakeClock, sink: RecordingSink
 ) -> None:
+    """Verify that maximum age forces a flush even while a span remains open."""
     processor = make_inert(idle_timeout_seconds=5.0, max_trace_age_seconds=60.0)
     processor._mark_span_started(TRACE_ID, clock())
     processor._mark_span_started(TRACE_ID, clock())
@@ -2229,6 +2383,7 @@ def test_max_age_flushes_even_a_trace_with_an_open_span(
 def test_quiescence_requires_no_open_spans_and_trustworthy_accounting(
     open_spans: int, untracked_start: bool, untracked_end: bool, quiescent: bool
 ) -> None:
+    """Verify that quiescence requires zero open spans and no lost start or end markers."""
     buf = _TraceBuffer(TRACE_ID, 0.0)
     buf.open_spans = open_spans
     buf.has_untracked_start = untracked_start
@@ -2258,6 +2413,7 @@ def test_idle_flush_rule_truth_table(
     untracked_end: bool,
     flushable: bool,
 ) -> None:
+    """Verify the idle flush decision across accounting states and timeout boundaries."""
     processor = make_inert(idle_timeout_seconds=5.0, max_trace_age_seconds=60.0)
     buf = _TraceBuffer(TRACE_ID, clock())
     buf.open_spans = open_spans
@@ -2292,6 +2448,7 @@ def test_a_dropped_end_marker_waits_for_max_age_while_another_span_is_open(
 def test_a_dropped_start_marker_keeps_a_trace_from_flushing_on_idle_but_not_on_age(
     make_inert: Callable[..., NiriZanSpanProcessor], clock: FakeClock, sink: RecordingSink
 ) -> None:
+    """Verify that a lost start marker prevents idle flushing but not maximum-age flushing."""
     processor = make_inert(idle_timeout_seconds=5.0, max_trace_age_seconds=60.0)
     processor._buffer_span(make_span(1))
     processor._note_dropped_marker(processor._dropped_start_traces, TRACE_ID)
@@ -2308,6 +2465,7 @@ def test_a_dropped_start_marker_keeps_a_trace_from_flushing_on_idle_but_not_on_a
 def test_pending_dropped_markers_are_applied_by_the_sweep_without_new_activity(
     make_inert: Callable[..., NiriZanSpanProcessor], clock: FakeClock
 ) -> None:
+    """Verify that idle sweeps apply pending dropped markers without new span activity."""
     processor = make_inert(idle_timeout_seconds=5.0, max_trace_age_seconds=600.0)
     processor._mark_span_started(TRACE_ID, clock())
     processor._note_dropped_marker(processor._dropped_end_traces, TRACE_ID)
@@ -2319,6 +2477,7 @@ def test_pending_dropped_markers_are_applied_by_the_sweep_without_new_activity(
 
 
 def test_a_dropped_marker_is_consumed_exactly_once(inert: NiriZanSpanProcessor) -> None:
+    """Verify that consuming a dropped marker removes it exactly once."""
     inert._note_dropped_marker(inert._dropped_start_traces, TRACE_ID)
 
     assert inert._consume_dropped_start(TRACE_ID) is True
@@ -2329,6 +2488,7 @@ def test_a_dropped_marker_is_consumed_exactly_once(inert: NiriZanSpanProcessor) 
 def test_dropped_marker_tables_are_bounded_and_evict_the_oldest(
     inert: NiriZanSpanProcessor, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """Verify that dropped-marker history stays bounded and evicts the oldest entries."""
     monkeypatch.setattr(from_otel, "_RECENT_FLUSHES_MAX", 3)
 
     for trace_id in range(1, 7):
@@ -2340,6 +2500,7 @@ def test_dropped_marker_tables_are_bounded_and_evict_the_oldest(
 def test_recent_flush_memory_is_bounded_and_evicts_the_oldest(
     inert: NiriZanSpanProcessor, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """Verify that recent-flush history stays bounded and evicts the oldest trace IDs."""
     monkeypatch.setattr(from_otel, "_RECENT_FLUSHES_MAX", 3)
 
     for trace_id in range(1, 7):
@@ -2352,6 +2513,7 @@ def test_recent_flush_memory_is_bounded_and_evicts_the_oldest(
 def test_force_flush_rule_flushes_finished_traces_and_leaves_in_flight_ones(
     inert: NiriZanSpanProcessor, sink: RecordingSink
 ) -> None:
+    """Verify that force flushing delivers finished traces and retains in-flight traces."""
     inert._buffer_span(make_span(1, trace_id=0xA))  # finished
     inert._mark_span_started(0xB, 0.0)  # in flight
     inert._buffer_span(make_span(1, trace_id=0xB))
@@ -2383,6 +2545,7 @@ def test_force_flush_rule_does_not_poison_an_in_flight_trace(
 def test_force_flush_rule_applies_pending_dropped_markers_before_deciding(
     inert: NiriZanSpanProcessor, sink: RecordingSink
 ) -> None:
+    """Verify that pending dropped markers prevent premature force flushing."""
     inert._buffer_span(make_span(1))
     inert._note_dropped_marker(inert._dropped_end_traces, TRACE_ID)
 
@@ -2394,6 +2557,7 @@ def test_force_flush_rule_applies_pending_dropped_markers_before_deciding(
 def test_flush_all_flushes_every_trace_including_in_flight_ones(
     inert: NiriZanSpanProcessor, sink: RecordingSink
 ) -> None:
+    """Verify that flushing all traces includes traces with open spans."""
     inert._mark_span_started(0xB, 0.0)
     inert._mark_span_started(0xB, 0.0)
     inert._buffer_span(make_span(1, trace_id=0xB))
@@ -2408,6 +2572,7 @@ def test_flush_all_flushes_every_trace_including_in_flight_ones(
 def test_buffer_cap_evicts_finished_traces_before_in_flight_ones(
     make_inert: Callable[..., NiriZanSpanProcessor], clock: FakeClock, sink: RecordingSink
 ) -> None:
+    """Verify that buffer pressure evicts a finished trace before an older open trace."""
     processor = make_inert(max_buffered_traces=2)
 
     processor._mark_span_started(0xA, clock())  # the oldest trace is still in flight
@@ -2428,6 +2593,7 @@ def test_buffer_cap_evicts_finished_traces_before_in_flight_ones(
 def test_buffer_cap_evicts_the_oldest_in_flight_trace_only_when_it_must(
     make_inert: Callable[..., NiriZanSpanProcessor], clock: FakeClock, sink: RecordingSink
 ) -> None:
+    """Verify that unavoidable open-trace eviction chooses the oldest and records it."""
     processor = make_inert(max_buffered_traces=1)
     for trace_id in (0xA, 0xB):
         processor._mark_span_started(trace_id, clock())
@@ -2444,6 +2610,7 @@ def test_buffer_cap_evicts_the_oldest_in_flight_trace_only_when_it_must(
 def test_buffer_cap_is_a_no_op_at_or_below_the_limit(
     make_inert: Callable[..., NiriZanSpanProcessor], sink: RecordingSink
 ) -> None:
+    """Verify that enforcing an unexceeded buffer limit delivers no traces."""
     processor = make_inert(max_buffered_traces=2)
     processor._buffer_span(make_span(1, trace_id=0xA))
     processor._buffer_span(make_span(1, trace_id=0xB))
@@ -2457,6 +2624,7 @@ def test_buffer_cap_is_a_no_op_at_or_below_the_limit(
 def test_per_trace_span_cap_drops_extra_spans_warns_once_and_counts_each(
     make_inert: Callable[..., NiriZanSpanProcessor], caplog: pytest.LogCaptureFixture
 ) -> None:
+    """Verify that extra spans are dropped and counted with one cap warning per trace."""
     processor = make_inert(max_spans_per_trace=3)
 
     with caplog.at_level(logging.WARNING, logger=_MODULE_LOGGER):
@@ -2474,6 +2642,7 @@ def test_per_trace_span_cap_drops_extra_spans_warns_once_and_counts_each(
 def test_per_trace_span_cap_still_accepts_a_replacement_for_a_stored_span(
     make_inert: Callable[..., NiriZanSpanProcessor],
 ) -> None:
+    """Verify that the span cap still permits replacement of an existing span ID."""
     processor = make_inert(max_spans_per_trace=1)
     processor._buffer_span(make_span(1, name="first"))
 
@@ -2486,6 +2655,7 @@ def test_per_trace_span_cap_still_accepts_a_replacement_for_a_stored_span(
 def test_flushing_a_trace_with_only_unrecognized_spans_delivers_nothing_and_does_not_raise(
     inert: NiriZanSpanProcessor, sink: RecordingSink
 ) -> None:
+    """Verify that flushing unrecognized spans remembers the flush without delivery."""
     inert._buffer_span(make_span(1, recognized=False))
 
     inert._flush_trace(TRACE_ID, reason="test")
@@ -2497,6 +2667,7 @@ def test_flushing_a_trace_with_only_unrecognized_spans_delivers_nothing_and_does
 def test_flushing_an_unknown_trace_is_a_no_op(
     inert: NiriZanSpanProcessor, sink: RecordingSink
 ) -> None:
+    """Verify that flushing an unknown trace creates no delivery or flush history."""
     inert._flush_trace(0xDEAD, reason="test")
 
     assert sink.traces == []
@@ -2506,6 +2677,7 @@ def test_flushing_an_unknown_trace_is_a_no_op(
 def test_a_failing_sink_does_not_raise_and_does_not_resurrect_the_trace(
     inert: NiriZanSpanProcessor, sink: RecordingSink, caplog: pytest.LogCaptureFixture
 ) -> None:
+    """Verify that sink failures are logged without restoring the removed trace buffer."""
     sink.raise_on_enqueue = True
     inert._buffer_span(make_span(1))
 
@@ -2523,7 +2695,10 @@ def test_an_assembly_failure_does_not_raise_and_still_marks_the_trace_flushed(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
+    """Verify that assembly failures are logged and the trace is still marked flushed."""
+
     def explode(_: _TraceBuffer) -> Trace:
+        """Raise an assembly error to exercise flush failure handling."""
         raise RuntimeError("assembly bug")
 
     inert._buffer_span(make_span(1))
@@ -2538,6 +2713,7 @@ def test_an_assembly_failure_does_not_raise_and_still_marks_the_trace_flushed(
 
 
 def test_stats_are_a_copy_and_start_empty(inert: NiriZanSpanProcessor) -> None:
+    """Verify that statistics start empty and callers receive an independent copy."""
     assert inert.get_stats() == {}
 
     inert._record_stat(StatReason.LATE_ARRIVAL)
@@ -2548,9 +2724,11 @@ def test_stats_are_a_copy_and_start_empty(inert: NiriZanSpanProcessor) -> None:
 
 
 def test_stat_recording_is_thread_safe(inert: NiriZanSpanProcessor) -> None:
+    """Verify that concurrent statistic updates do not lose increments."""
     threads, per_thread = 8, 500
 
     def hammer() -> None:
+        """Increment the same counter repeatedly from one test worker."""
         for _ in range(per_thread):
             inert._record_stat(StatReason.LATE_ARRIVAL)
 
@@ -2566,6 +2744,7 @@ def test_stat_recording_is_thread_safe(inert: NiriZanSpanProcessor) -> None:
 def test_fake_clock_drives_buffer_timestamps(
     make_inert: Callable[..., NiriZanSpanProcessor], clock: FakeClock
 ) -> None:
+    """Verify that the injected clock controls buffer creation timestamps."""
     processor = make_inert()
     clock.now = 1234.5
 
@@ -2582,6 +2761,7 @@ def test_fake_clock_drives_buffer_timestamps(
 def test_entry_points_are_no_ops_after_shutdown(
     inert: NiriZanSpanProcessor, sink: RecordingSink
 ) -> None:
+    """Verify that stopped processors ignore incoming spans and reject force flushing."""
     inert.on_start(make_span(1))
     inert.on_end(make_span(1))
 
@@ -2592,6 +2772,7 @@ def test_entry_points_are_no_ops_after_shutdown(
 def test_on_start_ignores_spans_with_an_invalid_context(
     make_processor: Callable[..., NiriZanSpanProcessor],
 ) -> None:
+    """Verify that invalid span contexts do not create buffers through on_start."""
     processor = make_processor()
 
     processor.on_start(ReadableSpan(name="no-context", context=None))
@@ -2604,6 +2785,7 @@ def test_on_start_ignores_spans_with_an_invalid_context(
 def test_own_scope_spans_are_skipped_by_default_and_counted(
     make_processor: Callable[..., NiriZanSpanProcessor], sink: RecordingSink
 ) -> None:
+    """Verify that the default scope guard skips and counts NiriZan's own spans."""
     processor = make_processor()
     own = make_span(1, scope=NIRIZAN_INSTRUMENTATION_SCOPE)
 
@@ -2618,6 +2800,7 @@ def test_own_scope_spans_are_skipped_by_default_and_counted(
 def test_own_scope_spans_are_ingested_when_the_guard_is_disabled(
     make_processor: Callable[..., NiriZanSpanProcessor], sink: RecordingSink
 ) -> None:
+    """Verify that disabling the scope guard allows NiriZan's own spans to be ingested."""
     processor = make_processor(ignore_own_scope=False)
     own = make_span(1, scope=NIRIZAN_INSTRUMENTATION_SCOPE)
 
@@ -2631,6 +2814,7 @@ def test_own_scope_spans_are_ingested_when_the_guard_is_disabled(
 def test_other_scopes_are_never_skipped(
     make_processor: Callable[..., NiriZanSpanProcessor], sink: RecordingSink
 ) -> None:
+    """Verify that spans from other or unnamed scopes are retained by the guard."""
     processor = make_processor()
 
     processor.on_end(make_span(1, scope="nirizan.other"))
@@ -2649,6 +2833,7 @@ def test_other_scopes_are_never_skipped(
 def test_end_to_end_delivery_of_a_two_span_trace(
     make_processor: Callable[..., NiriZanSpanProcessor], sink: RecordingSink
 ) -> None:
+    """Verify threaded delivery preserves IDs, session metadata, and two-span parent links."""
     session = uuid4()
     processor = make_processor(trust_stashed_ids=True, trusted_session_ids=frozenset({session}))
     stashed = uuid4()
@@ -2708,6 +2893,7 @@ def test_force_flush_keeps_a_trace_with_open_spans_buffered_and_delivers_it_whol
 def test_force_flush_delivers_each_finished_trace_once(
     make_processor: Callable[..., NiriZanSpanProcessor], sink: RecordingSink
 ) -> None:
+    """Verify that repeated force flushing delivers each finished trace only once."""
     processor = make_processor()
     processor.on_end(make_span(1))
 
@@ -2720,6 +2906,7 @@ def test_force_flush_delivers_each_finished_trace_once(
 def test_force_flush_with_nothing_buffered_succeeds(
     make_processor: Callable[..., NiriZanSpanProcessor], sink: RecordingSink
 ) -> None:
+    """Verify that force flushing an empty processor succeeds without delivery."""
     assert make_processor().force_flush() is True
     assert sink.traces == []
 
@@ -2727,6 +2914,7 @@ def test_force_flush_with_nothing_buffered_succeeds(
 def test_a_span_arriving_after_a_completed_flush_is_a_late_arrival(
     make_processor: Callable[..., NiriZanSpanProcessor], sink: RecordingSink
 ) -> None:
+    """Verify that a span arriving after force flush is counted as a late arrival."""
     processor = make_processor()
     processor.on_end(make_span(1))
     assert processor.force_flush()
@@ -2741,6 +2929,7 @@ def test_a_span_arriving_after_a_completed_flush_is_a_late_arrival(
 def test_shutdown_flushes_in_flight_traces(
     make_processor: Callable[..., NiriZanSpanProcessor], sink: RecordingSink
 ) -> None:
+    """Verify that shutdown delivers buffered spans even when their trace is still open."""
     processor = make_processor()
     root = make_span(1, name="never-ends")
     child = make_span(2, name="child", parent=1)
@@ -2757,6 +2946,7 @@ def test_shutdown_flushes_in_flight_traces(
 def test_shutdown_is_idempotent_and_releases_the_consumer_thread(
     sink: RecordingSink,
 ) -> None:
+    """Verify that repeated shutdown stops the consumer and disables force flushing."""
     processor = NiriZanSpanProcessor(sink)
     thread = processor._consumer
 
@@ -2769,6 +2959,7 @@ def test_shutdown_is_idempotent_and_releases_the_consumer_thread(
 
 
 def test_shutdown_delivers_spans_queued_before_it(sink: RecordingSink) -> None:
+    """Verify that shutdown drains spans already queued for delivery."""
     processor = NiriZanSpanProcessor(sink)
     processor.on_end(make_span(1))
 
@@ -2783,9 +2974,11 @@ def test_on_end_never_raises_into_the_application_when_enqueueing_fails(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
+    """Verify that enqueue errors are logged without escaping on_end or halting later work."""
     processor = make_processor()
 
     def broken_put(_: object) -> None:
+        """Raise a queue insertion error to exercise on_end failure containment."""
         raise RuntimeError("queue is broken")
 
     with monkeypatch.context() as patch:
@@ -2802,6 +2995,7 @@ def test_on_end_never_raises_into_the_application_when_enqueueing_fails(
 def test_shutdown_with_a_full_queue_still_stops_the_consumer_and_loses_nothing_queued(
     make_processor: Callable[..., NiriZanSpanProcessor],
 ) -> None:
+    """Verify that shutdown and flush waiters finish even when the work queue is full."""
     blocking = BlockingSink()
     processor = make_processor(sink=blocking, max_queue_size=1)
     processor.on_end(make_span(1, trace_id=0xA))
@@ -2887,6 +3081,7 @@ def test_force_flush_times_out_when_the_queue_is_saturated_and_data_is_not_lost_
 def test_a_trace_that_lost_a_span_end_is_held_by_force_flush_and_delivered_on_shutdown(
     make_processor: Callable[..., NiriZanSpanProcessor],
 ) -> None:
+    """Verify that a lost end marker defers force flushing until shutdown delivers the trace."""
     blocking = BlockingSink()
     processor = make_processor(sink=blocking, max_queue_size=2)
 
@@ -2914,6 +3109,7 @@ def test_a_trace_that_lost_a_span_end_is_held_by_force_flush_and_delivered_on_sh
 def test_a_failing_sink_does_not_stop_later_deliveries(
     make_processor: Callable[..., NiriZanSpanProcessor], sink: RecordingSink
 ) -> None:
+    """Verify that a failed sink delivery does not prevent a later trace from being delivered."""
     processor = make_processor()
     sink.raise_on_enqueue = True
     processor.on_end(make_span(1, trace_id=0xA))
@@ -2934,11 +3130,13 @@ def test_an_unexpected_error_in_the_consumer_is_counted_and_the_thread_survives(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
+    """Verify that an unexpected consumer error is counted without killing the thread."""
     processor = make_processor()
     original = processor._buffer_span
     calls = {"n": 0}
 
     def flaky(span: ReadableSpan) -> None:
+        """Fail the first span buffering call and delegate subsequent calls to the real method."""
         calls["n"] += 1
         if calls["n"] == 1:
             raise RuntimeError("unexpected")
@@ -2964,9 +3162,11 @@ def test_a_flush_waiter_is_released_even_if_the_flush_itself_fails(
     make_processor: Callable[..., NiriZanSpanProcessor],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Verify that a failed flush still releases its waiter and records a consumer error."""
     processor = make_processor()
 
     def explode(*, reason: str) -> None:
+        """Raise a flush error to exercise waiter notification on failure."""
         raise RuntimeError("flush bug")
 
     monkeypatch.setattr(processor, "_flush_quiescent", explode)
@@ -2983,10 +3183,12 @@ def test_a_flush_waiter_is_released_even_if_the_flush_itself_fails(
 def test_many_producer_threads_lose_no_spans_and_never_mix_traces(
     make_processor: Callable[..., NiriZanSpanProcessor], sink: RecordingSink
 ) -> None:
+    """Verify that concurrent producers retain all spans without mixing traces or parent links."""
     processor = make_processor()
     producers, traces_each = 8, 25
 
     def produce(worker: int) -> None:
+        """Submit distinct three-span traces with child-first completion from one producer."""
         for n in range(1, traces_each + 1):
             trace_id = (worker << 32) | n
             root = make_span(1, trace_id=trace_id, name=f"root-{worker}-{n}")
@@ -3027,6 +3229,7 @@ def test_many_producer_threads_lose_no_spans_and_never_mix_traces(
 def test_the_consumer_is_restarted_in_a_forked_child_and_the_parent_is_unaffected(
     make_processor: Callable[..., NiriZanSpanProcessor], sink: RecordingSink
 ) -> None:
+    """Verify that a forked child restarts consumption while the parent keeps working."""
     processor = make_processor()
     processor.on_end(make_span(1, trace_id=0xA))
     assert processor.force_flush()
@@ -3069,6 +3272,7 @@ def test_the_consumer_is_restarted_in_a_forked_child_and_the_parent_is_unaffecte
 def test_a_processor_that_was_shut_down_stays_shut_down_after_a_simulated_fork(
     inert: NiriZanSpanProcessor,
 ) -> None:
+    """Verify that fork reinitialization does not restart a stopped processor."""
     inert._reinit_after_fork()
 
     assert not inert._consumer.is_alive()
@@ -3078,6 +3282,7 @@ def test_a_processor_that_was_shut_down_stays_shut_down_after_a_simulated_fork(
 def test_reinit_after_fork_discards_inherited_state_and_restarts_the_consumer(
     make_processor: Callable[..., NiriZanSpanProcessor], sink: RecordingSink
 ) -> None:
+    """Verify that fork reinitialization replaces inherited thread state and resumes delivery."""
     processor = make_processor(idle_timeout_seconds=0.05, max_trace_age_seconds=60.0)
     # Trace A is in flight: two spans started, only one ended, so it stays buffered.
     processor.on_start(make_span(1, trace_id=0xA))
@@ -3125,6 +3330,7 @@ def test_a_consumer_superseded_by_reinit_retires_and_leaves_one_consumer_running
 def test_a_superseded_consumer_does_not_flush_the_new_state_on_its_way_out(
     make_processor: Callable[..., NiriZanSpanProcessor], sink: RecordingSink
 ) -> None:
+    """Verify that a superseded consumer exits without flushing replacement buffers."""
     processor = make_processor(idle_timeout_seconds=0.05, max_trace_age_seconds=60.0)
     inherited_consumer = processor._consumer
     processor._reinit_after_fork()
@@ -3143,6 +3349,7 @@ def test_a_superseded_consumer_does_not_flush_the_new_state_on_its_way_out(
 def test_a_superseded_consumer_discards_items_left_in_its_old_queue(
     make_processor: Callable[..., NiriZanSpanProcessor], sink: RecordingSink
 ) -> None:
+    """Verify that a superseded consumer ignores work left in its old queue."""
     processor = make_processor(idle_timeout_seconds=0.05, max_trace_age_seconds=60.0)
     inherited_consumer = processor._consumer
     old_queue = processor._queue
@@ -3161,6 +3368,7 @@ def test_a_superseded_consumer_discards_items_left_in_its_old_queue(
 def test_live_processors_are_registered_for_fork_handling_without_keeping_them_alive(
     sink: RecordingSink,
 ) -> None:
+    """Verify that fork registration tracks live processors through weak references."""
     processor = NiriZanSpanProcessor(sink)
     assert processor in from_otel._LIVE_PROCESSORS
 
@@ -3180,6 +3388,7 @@ def test_live_processors_are_registered_for_fork_handling_without_keeping_them_a
 def provider(
     make_processor: Callable[..., NiriZanSpanProcessor],
 ) -> Iterator[tuple[TracerProvider, NiriZanSpanProcessor]]:
+    """Provide an SDK tracer provider with content capture and processor shutdown cleanup."""
     processor = make_processor(capture_content=True)
     tracer_provider = TracerProvider(
         resource=Resource({"service.name": "sdk-service"}), shutdown_on_exit=False
@@ -3192,6 +3401,7 @@ def provider(
 def test_sdk_nested_spans_become_a_linked_trace(
     provider: tuple[TracerProvider, NiriZanSpanProcessor], sink: RecordingSink
 ) -> None:
+    """Verify that real SDK nesting becomes a linked trace with the expected span kinds."""
     tracer_provider, _ = provider
     tracer = tracer_provider.get_tracer("app")
 
@@ -3237,6 +3447,7 @@ def test_raising_span_exports_error_status() -> None:
 def test_sdk_in_flight_trace_survives_a_force_flush(
     provider: tuple[TracerProvider, NiriZanSpanProcessor], sink: RecordingSink
 ) -> None:
+    """Verify that SDK force flush retains in-flight traces until their remaining spans end."""
     tracer_provider, _ = provider
     tracer = tracer_provider.get_tracer("app")
 
@@ -3253,6 +3464,7 @@ def test_sdk_in_flight_trace_survives_a_force_flush(
 def test_sdk_remote_parent_makes_a_root_even_when_orphans_are_dropped(
     make_processor: Callable[..., NiriZanSpanProcessor], sink: RecordingSink
 ) -> None:
+    """Verify that an absent remote parent becomes a root even under the orphan drop policy."""
     processor = make_processor(orphan_policy="drop")
     tracer_provider = TracerProvider(shutdown_on_exit=False)
     tracer_provider.add_span_processor(processor)
@@ -3280,6 +3492,7 @@ def test_sdk_remote_parent_makes_a_root_even_when_orphans_are_dropped(
 def test_sdk_tuple_attributes_are_encoded_as_sequences(
     provider: tuple[TracerProvider, NiriZanSpanProcessor], sink: RecordingSink
 ) -> None:
+    """Verify that tuple attributes from the SDK become encoded sequence attributes."""
     tracer_provider, _ = provider
     tracer = tracer_provider.get_tracer("app")
 
@@ -3296,6 +3509,7 @@ def test_sdk_tuple_attributes_are_encoded_as_sequences(
 def test_sdk_spans_from_the_nirizan_scope_are_ignored_unless_opted_in(
     make_processor: Callable[..., NiriZanSpanProcessor], sink: RecordingSink
 ) -> None:
+    """Verify that SDK spans from the NiriZan scope require explicit opt-in for ingestion."""
     ignoring = make_processor()
     ingesting = make_processor(ignore_own_scope=False, sink=RecordingSink())
     tracer_provider = TracerProvider(shutdown_on_exit=False)
@@ -3316,6 +3530,7 @@ def test_sdk_spans_from_the_nirizan_scope_are_ignored_unless_opted_in(
 def test_sdk_shutdown_flushes_traces_that_are_still_open(
     make_processor: Callable[..., NiriZanSpanProcessor], sink: RecordingSink
 ) -> None:
+    """Verify that SDK shutdown delivers buffered children of a still-open root."""
     processor = make_processor()
     tracer_provider = TracerProvider(shutdown_on_exit=False)
     tracer_provider.add_span_processor(processor)

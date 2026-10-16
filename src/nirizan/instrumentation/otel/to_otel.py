@@ -196,6 +196,7 @@ def _format_payload_value(payload: str | None) -> str | None:
 
 
 def _first_str(attrs: Mapping[str, AttributeValue], *keys: str) -> str | None:
+    """Return the first nonempty string found under the supplied keys, or None."""
     for key in keys:
         value = attrs.get(key)
         if isinstance(value, str) and value:
@@ -222,6 +223,7 @@ def _add_generation_attributes(
     custom: Mapping[str, AttributeValue],
     config: OTelExporterConfig,
 ) -> None:
+    """Add generation metadata, including legacy aliases when configured."""
     provider = _first_str(custom, "provider", GEN_AI_PROVIDER_NAME, GEN_AI_SYSTEM)
     if provider:
         attributes[GEN_AI_PROVIDER_NAME] = provider
@@ -503,6 +505,7 @@ class NiriZanToOTelExporter(BaseExporter):
         *,
         config: OTelExporterConfig | None = None,
     ) -> None:
+        """Bind the supplied or default tracer and settings, starting with no export failures."""
         self._tracer = tracer or _get_default_tracer()
         self._config = config or _DEFAULT_CONFIG
         self._export_failures = 0

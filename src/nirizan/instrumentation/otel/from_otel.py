@@ -166,6 +166,7 @@ class ProcessorConfig(BaseModel):
     @field_validator("idle_timeout_seconds")
     @classmethod
     def _idle_timeout_positive(cls, value: float) -> float:
+        """Require a positive, finite idle timeout."""
         if not value > 0 or math.isinf(value):
             raise ValueError("idle_timeout_seconds must be positive and finite.")
         return value
@@ -173,6 +174,7 @@ class ProcessorConfig(BaseModel):
     @field_validator("max_trace_age_seconds")
     @classmethod
     def _max_age_finite(cls, value: float) -> float:
+        """Reject non-finite trace age limits."""
         if math.isnan(value) or math.isinf(value):
             raise ValueError("max_trace_age_seconds must be finite.")
         return value
@@ -180,6 +182,7 @@ class ProcessorConfig(BaseModel):
     @field_validator("max_buffered_traces")
     @classmethod
     def _max_buffered_positive(cls, value: int) -> int:
+        """Require capacity for at least one buffered trace."""
         if value < 1:
             raise ValueError("max_buffered_traces must be at least 1.")
         return value
@@ -187,6 +190,7 @@ class ProcessorConfig(BaseModel):
     @field_validator("max_queue_size")
     @classmethod
     def _max_queue_positive(cls, value: int) -> int:
+        """Require capacity for at least one queued item."""
         if value < 1:
             raise ValueError("max_queue_size must be at least 1.")
         return value
@@ -194,6 +198,7 @@ class ProcessorConfig(BaseModel):
     @field_validator("max_spans_per_trace")
     @classmethod
     def _max_spans_positive(cls, value: int) -> int:
+        """Require capacity for at least one span per trace."""
         if value < 1:
             raise ValueError("max_spans_per_trace must be at least 1.")
         return value
@@ -201,6 +206,7 @@ class ProcessorConfig(BaseModel):
     @field_validator("max_payload_chars")
     @classmethod
     def _payload_limit(cls, value: int) -> int:
+        """Ensure the payload budget leaves room for text before the truncation suffix."""
         if value <= len(_PAYLOAD_SUFFIX):
             raise ValueError("max_payload_chars must exceed the truncation suffix length.")
         return value
@@ -208,6 +214,7 @@ class ProcessorConfig(BaseModel):
     @field_validator("max_buffered_spans")
     @classmethod
     def _max_buffered_spans_positive(cls, value: int) -> int:
+        """Require capacity for at least one buffered span."""
         if value < 1:
             raise ValueError("max_buffered_spans must be at least 1.")
         return value
@@ -215,6 +222,7 @@ class ProcessorConfig(BaseModel):
     @field_validator("trusted_session_ids", mode="before")
     @classmethod
     def _trusted_session_ids_set(cls, value: object) -> object:
+        """Normalize supported session ID collections before strict field validation."""
         if isinstance(value, (set, list, tuple)):
             return frozenset(value)
         return value
@@ -222,6 +230,7 @@ class ProcessorConfig(BaseModel):
     @field_validator("orphan_policy", mode="before")
     @classmethod
     def _orphan_policy_known(cls, value: object) -> object:
+        """Reject orphan policies other than emitting or dropping orphan spans."""
         if value not in ("emit", "drop"):
             raise ValueError("orphan_policy must be 'emit' or 'drop'.")
         return value
@@ -229,12 +238,14 @@ class ProcessorConfig(BaseModel):
     @field_validator("unrecognized_span_policy", mode="before")
     @classmethod
     def _unrecognized_policy_known(cls, value: object) -> object:
+        """Reject unrecognized-span policies other than dropping or assuming generation."""
         if value not in ("drop", "generation"):
             raise ValueError("unrecognized_span_policy must be 'drop' or 'generation'.")
         return value
 
     @model_validator(mode="after")
     def _age_exceeds_idle(self) -> ProcessorConfig:
+        """Require the maximum trace age to exceed the idle timeout."""
         if self.max_trace_age_seconds <= self.idle_timeout_seconds:
             raise ValueError("max_trace_age_seconds must be greater than idle_timeout_seconds.")
         return self
@@ -558,6 +569,7 @@ class _TraceBuffer:
     )
 
     def __init__(self, otel_trace_id: int, now: float) -> None:
+        """Initialize an empty trace buffer with timestamps and reliable span accounting."""
         self.otel_trace_id = otel_trace_id
         self.spans: dict[int, ReadableSpan] = {}
         self.first_seen = now
@@ -614,6 +626,7 @@ class _ParentResolution:
     __slots__ = ("parent_of", "synthetic_origin", "dropped", "cycles_broken")
 
     def __init__(self) -> None:
+        """Initialize empty parent mappings, orphan sets, and a cycle counter."""
         self.parent_of: dict[int, int | None] = {}
         self.synthetic_origin: dict[int, int] = {}
         self.dropped: set[int] = set()
@@ -647,6 +660,7 @@ def _resolve_parents(
     memo: dict[int, tuple[str, int | None]] = {}
 
     def physical_parent(otel_span_id: int) -> int | None:
+        """Return the local parent ID, treating absent upstream remote parents as roots."""
         span = buf.spans.get(otel_span_id)
         if span is None:
             return None
@@ -722,6 +736,7 @@ _LIVE_PROCESSORS: weakref.WeakSet[NiriZanSpanProcessor] = weakref.WeakSet()
 
 
 def _reinit_processors_after_fork() -> None:
+    """Reinitialize live processors in the forked child, logging individual failures."""
     for processor in list(_LIVE_PROCESSORS):
         try:
             processor._reinit_after_fork()
@@ -769,6 +784,7 @@ class NiriZanSpanProcessor(SpanProcessor):
         capture_content: bool = False,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
+        """Validate settings, initialize processor state, and start the consumer thread."""
         config = ProcessorConfig(
             idle_timeout_seconds=idle_timeout_seconds,
             max_trace_age_seconds=max_trace_age_seconds,
@@ -846,6 +862,7 @@ class NiriZanSpanProcessor(SpanProcessor):
         return self._config
 
     def _start_consumer(self) -> None:
+        """Start a daemon consumer bound to the current queue and shutdown event."""
         # The thread is handed the queue and shutdown event it must serve, instead
         # of reading them from ``self`` on every iteration. If ``_reinit_after_fork``
         # replaces them, a thread that predates the replacement notices it has been
@@ -990,11 +1007,13 @@ class NiriZanSpanProcessor(SpanProcessor):
             return dict(self._stats)
 
     def _record_stat(self, reason: StatReason | str) -> None:
+        """Increment a reason counter while holding the statistics lock."""
         key = str(reason)
         with self._stats_lock:
             self._stats[key] = self._stats.get(key, 0) + 1
 
     def _is_own_scope(self, span: Any) -> bool:
+        """Check whether the configured scope guard excludes this span."""
         return self._config.ignore_own_scope and _scope_name(span) == NIRIZAN_INSTRUMENTATION_SCOPE
 
     def _note_dropped_marker(self, table: dict[int, None], otel_trace_id: int) -> None:
@@ -1008,6 +1027,7 @@ class NiriZanSpanProcessor(SpanProcessor):
             self._stats[key] = self._stats.get(key, 0) + 1
 
     def _consume_flag(self, table: dict[int, None], otel_trace_id: int) -> bool:
+        """Atomically remove a trace flag and report whether it was present."""
         with self._stats_lock:
             if otel_trace_id in table:
                 del table[otel_trace_id]
@@ -1028,6 +1048,7 @@ class NiriZanSpanProcessor(SpanProcessor):
         return self._consume_flag(self._dropped_end_traces, otel_trace_id)
 
     def _apply_pending_flags(self, otel_trace_id: int, buf: _TraceBuffer) -> None:
+        """Transfer pending dropped-marker flags to the trace buffer."""
         if self._consume_dropped_start(otel_trace_id):
             buf.has_untracked_start = True
         if self._consume_dropped_end(otel_trace_id):
@@ -1075,10 +1096,12 @@ class NiriZanSpanProcessor(SpanProcessor):
         self._guarded(self._drain_and_flush)
 
     def _idle_tick(self) -> None:
+        """Sweep expired traces and record the sweep time."""
         self._sweep_idle_traces()
         self._last_sweep = self._clock()
 
     def _process_item(self, item: Any) -> None:
+        """Handle a flush request, start marker, or ended span and enforce buffer limits."""
         if _is_flush_request(item):
             try:
                 self._flush_quiescent(reason="force_flush")
@@ -1136,6 +1159,7 @@ class NiriZanSpanProcessor(SpanProcessor):
                 event.set()
 
     def _mark_span_started(self, otel_trace_id: int, now: float) -> None:
+        """Track a span start unless its trace has already been flushed."""
         if otel_trace_id in self._recent_flushes:
             return
         buf = self._buffers.get(otel_trace_id)
@@ -1146,6 +1170,7 @@ class NiriZanSpanProcessor(SpanProcessor):
         buf.mark_started(now)
 
     def _buffer_span(self, span: ReadableSpan) -> None:
+        """Validate and buffer an ended span, accounting for duplicates and span limits."""
         ctx = _get_span_context(span)
         if ctx is None:
             logger.warning(
@@ -1234,6 +1259,7 @@ class NiriZanSpanProcessor(SpanProcessor):
         return buf.open_spans == 0 and not buf.has_untracked_start and not buf.has_untracked_end
 
     def _sweep_idle_traces(self) -> None:
+        """Apply pending flags and flush traces that have reached idle or age limits."""
         now = self._clock()
         to_flush: list[tuple[int, str]] = []
         for trace_id, buf in self._buffers.items():
@@ -1246,12 +1272,14 @@ class NiriZanSpanProcessor(SpanProcessor):
             self._flush_trace(trace_id, reason=reason)
 
     def _over_buffer_cap(self) -> bool:
+        """Check whether either the trace count or total buffered span limit is exceeded."""
         return (
             len(self._buffers) > self._max_buffered
             or self._buffered_spans > self._config.max_buffered_spans
         )
 
     def _enforce_buffer_cap(self) -> None:
+        """Flush traces until both buffer limits hold, preferring finished, older traces."""
         if not self._over_buffer_cap():
             return
         # Evict traces that look finished first, oldest first. A trace that still
@@ -1276,6 +1304,7 @@ class NiriZanSpanProcessor(SpanProcessor):
             self._flush_trace(trace_id, reason="buffer_cap")
 
     def _flush_all(self, *, reason: str) -> None:
+        """Flush every buffered trace, including traces with open spans."""
         for trace_id in list(self._buffers.keys()):
             self._flush_trace(trace_id, reason=reason)
 
@@ -1287,6 +1316,7 @@ class NiriZanSpanProcessor(SpanProcessor):
                 self._flush_trace(trace_id, reason=reason)
 
     def _flush_trace(self, otel_trace_id: int, *, reason: str) -> None:
+        """Remove and remember a trace, then assemble and deliver it with errors logged."""
         buf = self._buffers.pop(otel_trace_id, None)
         if buf is None:
             return
@@ -1325,6 +1355,7 @@ class NiriZanSpanProcessor(SpanProcessor):
     # -- Trace assembly ---------------------------------------------------------
 
     def _assemble_trace(self, buf: _TraceBuffer) -> Trace | None:
+        """Assemble surviving spans in start order, or return None if none survive."""
         if not buf.spans:
             return None
 
@@ -1496,6 +1527,7 @@ class NiriZanSpanProcessor(SpanProcessor):
 
     @staticmethod
     def _get_service_name(span: ReadableSpan) -> str | None:
+        """Read a string service name from the span resource, if available."""
         resource = getattr(span, "resource", None)
         if resource is None:
             return None
@@ -1529,6 +1561,7 @@ class NiriZanSpanProcessor(SpanProcessor):
         trust_stashed_ids: bool,
         trusted_session_ids: frozenset[UUID],
     ) -> UUID | None:
+        """Return the first allowed nonzero session UUID when stashed IDs are trusted."""
         if not trust_stashed_ids or not trusted_session_ids:
             return None
         for span in spans.values():
