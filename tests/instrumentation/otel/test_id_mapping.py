@@ -12,7 +12,7 @@ import os
 import random
 import subprocess
 import sys
-from uuid import UUID
+from uuid import UUID, uuid5
 
 import pytest
 
@@ -20,9 +20,11 @@ from nirizan.instrumentation.otel._id_mapping import (
     _MAX_SPAN_ID,
     _MAX_TRACE_ID,
     _NIRIZAN_SPAN_ID_NAMESPACE,
+    _NIRIZAN_TRACE_ID_NAMESPACE,
     is_valid_otel_span_id,
     is_valid_otel_trace_id,
     otel_span_id_to_uuid,
+    otel_trace_id_to_derived_uuid,
     otel_trace_id_to_uuid,
     uuid_to_otel_span_id,
     uuid_to_otel_trace_id,
@@ -259,6 +261,90 @@ def test_otel_span_id_to_uuid_has_no_collisions_in_a_large_sample() -> None:
     ids = {rng.randrange(1, _MAX_SPAN_ID + 1) for _ in range(5_000)}
     derived = {otel_span_id_to_uuid(i) for i in ids}
     assert len(derived) == len(ids)
+
+
+# ---------------------------------------------------------------------------
+# Trace ID derivation for untrusted ingest
+# ---------------------------------------------------------------------------
+
+
+def test_otel_trace_id_to_derived_uuid_is_deterministic() -> None:
+    """The same OTel trace ID always derives the same NiriZan trace ID.
+
+    Two ingests of the same OTel trace must land on one NiriZan trace, or a
+    consumer correlating across them would see unrelated traces.
+    """
+    first = otel_trace_id_to_derived_uuid(_VALID_TRACE_INT)
+    second = otel_trace_id_to_derived_uuid(_VALID_TRACE_INT)
+
+    assert first == second
+    assert otel_trace_id_to_derived_uuid(_VALID_TRACE_INT + 1) != first
+
+
+def test_otel_trace_id_to_derived_uuid_is_a_version_5_rfc4122_uuid() -> None:
+    """The derived ID is a well-formed name-based (version 5) UUID."""
+    derived = otel_trace_id_to_derived_uuid(_VALID_TRACE_INT)
+
+    assert derived.version == 5
+    assert derived.variant == "specified in RFC 4122"
+
+
+def test_otel_trace_id_to_derived_uuid_differs_from_the_exact_inverse() -> None:
+    """The derived ID is not the OTel trace ID reinterpreted as a UUID.
+
+    This is the property the whole function exists for. The OTel trace ID is
+    producer-chosen, so if the derived ID equalled the inverse mapping, an
+    incoming trace could name itself after any stored native trace.
+    """
+    derived = otel_trace_id_to_derived_uuid(_VALID_TRACE_INT)
+
+    assert derived != otel_trace_id_to_uuid(_VALID_TRACE_INT)
+    assert derived != UUID(int=_VALID_TRACE_INT)
+
+
+def test_otel_trace_id_to_derived_uuid_names_the_hex_of_the_trace_id() -> None:
+    """The derivation hashes the 32-character lowercase hex name.
+
+    Pinning the name form matters: a different name encoding would change every
+    derived trace id ever persisted. Computed independently with the standard
+    library, which is the same computation, so this also documents that
+    equivalence for a reader.
+    """
+    expected = uuid5(_NIRIZAN_TRACE_ID_NAMESPACE, f"{_VALID_TRACE_INT:032x}")
+
+    assert otel_trace_id_to_derived_uuid(_VALID_TRACE_INT) == expected
+
+
+@pytest.mark.parametrize("value", [0, -1, _MAX_TRACE_ID + 1, 1 << 200])
+def test_otel_trace_id_to_derived_uuid_rejects_invalid_values(value: int) -> None:
+    """The same validation as the exact inverse mapping: non-zero, 128 bits."""
+    with pytest.raises(ValueError, match="Invalid OTel trace ID"):
+        otel_trace_id_to_derived_uuid(value)
+
+
+def test_otel_trace_id_to_derived_uuid_has_no_collisions_in_a_large_sample() -> None:
+    """Distinct OTel trace IDs derive distinct UUIDs (sampled, not exhaustive)."""
+    rng = random.Random(20260403)
+    ids = {rng.randrange(1, _MAX_TRACE_ID + 1) for _ in range(10_000)}
+
+    derived = {otel_trace_id_to_derived_uuid(i) for i in ids}
+
+    assert len(ids) >= 10_000
+    assert len(derived) == len(ids)
+
+
+def test_the_trace_id_derivation_does_not_disturb_the_trusted_round_trip() -> None:
+    """The exact inverse pair is untouched, so export and round trips still match.
+
+    Native export and a trusted round trip depend on ``uuid_to_otel_trace_id``
+    and ``otel_trace_id_to_uuid`` being exact inverses of each other. Adding
+    the namespaced derivation must not change that, and the derived image must
+    stay disjoint from the exact one.
+    """
+    for uuid_value in (_VALID_UUID, UUID(int=1), UUID(int=_MAX_TRACE_ID)):
+        otel_value = uuid_to_otel_trace_id(uuid_value)
+        assert otel_trace_id_to_uuid(otel_value) == uuid_value
+        assert otel_trace_id_to_derived_uuid(otel_value) != uuid_value
 
 
 # ---------------------------------------------------------------------------

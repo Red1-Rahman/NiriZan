@@ -44,6 +44,7 @@ __all__ = [
     "OTEL_SPAN_ID",
     "OTEL_STATUS_CODE",
     "OTEL_STATUS_DESCRIPTION",
+    "OTEL_TRACE_ID",
     "OTEL_TRACE_STATE",
     "SEMCONV_VERSION",
     "SEQ_ATTR_PREFIX",
@@ -186,6 +187,12 @@ SPAN_ID_SOURCE_DERIVED: str = ID_SOURCE_DERIVED
 # Captured OTel Metadata Attributes (written during OTel -> NiriZan ingestion)
 OTEL_SPAN_ID: str = "otel.span_id"
 OTEL_SAMPLED: str = "otel.sampled"
+# The OTel trace id verbatim, as 32 lowercase hex characters. Recorded on
+# ingestion so a derived NiriZan trace id can be correlated back to the
+# producer's own trace, and so an audit can see which OTel trace produced a
+# stored NiriZan trace. Structural metadata, not content: it is never gated by
+# capture_content, and it is not in CONTENT_ATTRIBUTE_KEYS.
+OTEL_TRACE_ID: str = "otel.trace_id"
 OTEL_TRACE_STATE: str = "otel.trace_state"
 OTEL_STATUS_CODE: str = "otel.status_code"
 OTEL_STATUS_DESCRIPTION: str = "otel.status_description"

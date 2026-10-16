@@ -35,7 +35,7 @@ from nirizan.instrumentation.otel._id_mapping import (
     is_valid_otel_span_id,
     is_valid_otel_trace_id,
     otel_span_id_to_uuid,
-    otel_trace_id_to_uuid,
+    otel_trace_id_to_derived_uuid,
 )
 from nirizan.instrumentation.otel.semconv import (
     CONTENT_ATTRIBUTE_KEYS,
@@ -61,6 +61,7 @@ from nirizan.instrumentation.otel.semconv import (
     OTEL_SPAN_ID,
     OTEL_STATUS_CODE,
     OTEL_STATUS_DESCRIPTION,
+    OTEL_TRACE_ID,
     OTEL_TRACE_STATE,
     decode_sequence_key,
     encode_sequence_attribute_value,
@@ -372,12 +373,21 @@ def _extract_nirizan_trace_id(
 
     Spans are examined in start-time order so the result does not depend on
     arrival order. A stashed id wins over a derived one, but only when
-    ``trust`` is ``True``. When it is ``False``, every span's id is derived
-    from the OTel trace id, so an ingested span cannot claim an existing
-    stored trace's id.
+    ``trust`` is ``True``.
+
+    When no stashed id is available or trusted, the id is *derived* from the
+    OTel trace id through ``otel_trace_id_to_derived_uuid``, a namespaced hash
+    rather than the exact inverse mapping. That is the guarantee this function
+    provides: the returned id is a deterministic function of the OTel trace id
+    (so the same OTel trace always ingests to the same NiriZan trace), and it
+    is not the OTel trace id reinterpreted as a UUID. The OTel trace id comes
+    from the producer, so the exact inverse would let an incoming trace take
+    the id of a stored native trace and overwrite it on save. The original OTel
+    trace id is recorded on the spans as ``otel.trace_id`` for correlation, and
+    provenance is ``ID_SOURCE_DERIVED`` in both derived paths.
     """
     if not trust:
-        return otel_trace_id_to_uuid(otel_trace_id), ID_SOURCE_DERIVED
+        return otel_trace_id_to_derived_uuid(otel_trace_id), ID_SOURCE_DERIVED
 
     ordered = sorted(
         spans.items(),
@@ -397,7 +407,7 @@ def _extract_nirizan_trace_id(
                 stashed,
                 getattr(span, "name", "<unnamed>"),
             )
-    return otel_trace_id_to_uuid(otel_trace_id), ID_SOURCE_DERIVED
+    return otel_trace_id_to_derived_uuid(otel_trace_id), ID_SOURCE_DERIVED
 
 
 def _has_conflicting_trace_ids(spans: Mapping[int, ReadableSpan]) -> bool:
@@ -493,6 +503,7 @@ def _convert_attributes(
     *,
     service_name: str | None,
     span_id_hex: str | None,
+    trace_id_hex: str | None,
     span_id_source: str,
     trace_id_source: str,
     sampled: bool | None,
@@ -535,6 +546,12 @@ def _convert_attributes(
         result[_OTEL_SERVICE_NAME] = service_name
     if span_id_hex:
         result[OTEL_SPAN_ID] = span_id_hex
+    # The OTel trace id is recorded verbatim so a consumer can correlate an
+    # ingested trace with the producer's own telemetry, and so the derived
+    # NiriZan id stays traceable back to the id that produced it. It is
+    # structural metadata, not content, so capture_content does not gate it.
+    if trace_id_hex:
+        result[OTEL_TRACE_ID] = trace_id_hex
     result[NIRIZAN_SPAN_ID_SOURCE] = span_id_source
     result[NIRIZAN_TRACE_ID_SOURCE] = trace_id_source
     if sampled is not None:
@@ -1647,6 +1664,7 @@ class NiriZanSpanProcessor(SpanProcessor):
                 otel_attrs,
                 service_name=self._get_service_name(span),
                 span_id_hex=format(ctx.span_id, "016x"),
+                trace_id_hex=format(ctx.trace_id, "032x"),
                 span_id_source=span_id_source,
                 trace_id_source=trace_id_source,
                 sampled=sampled,

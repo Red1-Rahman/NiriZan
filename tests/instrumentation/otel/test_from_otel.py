@@ -68,6 +68,7 @@ from pydantic import ValidationError  # noqa: E402
 from nirizan.instrumentation.otel import from_otel  # noqa: E402
 from nirizan.instrumentation.otel._id_mapping import (  # noqa: E402
     otel_span_id_to_uuid,
+    otel_trace_id_to_derived_uuid,
     otel_trace_id_to_uuid,
 )
 from nirizan.instrumentation.otel.from_otel import (  # noqa: E402
@@ -90,6 +91,7 @@ from nirizan.instrumentation.otel.from_otel import (  # noqa: E402
     _TraceBuffer,
 )
 from nirizan.instrumentation.otel.semconv import (  # noqa: E402
+    CONTENT_ATTRIBUTE_KEYS,
     GEN_AI_COMPLETION,
     GEN_AI_OPERATION_NAME,
     GEN_AI_PROMPT,
@@ -113,6 +115,7 @@ from nirizan.instrumentation.otel.semconv import (  # noqa: E402
     OTEL_SPAN_ID,
     OTEL_STATUS_CODE,
     OTEL_STATUS_DESCRIPTION,
+    OTEL_TRACE_ID,
     OTEL_TRACE_STATE,
     SEQ_ATTR_PREFIX,
     SPAN_ID_SOURCE_DERIVED,
@@ -741,13 +744,40 @@ def test_extract_span_id_treats_any_other_stashed_provenance_as_roundtrip(prior:
 
 
 def test_extract_trace_id_derives_from_the_otel_trace_id_by_default() -> None:
-    """Verify that trace IDs are derived from OTel IDs when stashed IDs are untrusted."""
+    """Untrusted stashes give a namespaced derived id, not the OTel id as a UUID.
+
+    The derived id must be a deterministic function of the OTel trace id, and
+    must *not* equal the exact inverse mapping: the OTel trace id is chosen by
+    the producer, so mapping it straight back would let an incoming trace claim
+    a stored native trace's id.
+    """
     spans = {1: make_span(1)}
 
     assert _extract_nirizan_trace_id(spans, TRACE_ID, False) == (
-        otel_trace_id_to_uuid(TRACE_ID),
+        otel_trace_id_to_derived_uuid(TRACE_ID),
         ID_SOURCE_DERIVED,
     )
+    # Deterministic across repeats, so one OTel trace is one NiriZan trace.
+    assert (
+        _extract_nirizan_trace_id(spans, TRACE_ID, False)[0]
+        == (_extract_nirizan_trace_id(spans, TRACE_ID, False)[0])
+    )
+    assert _extract_nirizan_trace_id(spans, TRACE_ID, False)[0] != otel_trace_id_to_uuid(TRACE_ID)
+
+
+def test_extract_trace_id_falls_back_to_derivation_when_nothing_is_stashed() -> None:
+    """A trusted producer that stashes no id still gets a derived id.
+
+    Trust means "stashed ids are authoritative", not "the OTel trace id may be
+    used verbatim", so the fallback cannot be the exact inverse mapping either.
+    """
+    spans = {1: make_span(1), 2: make_span(2)}
+
+    assert _extract_nirizan_trace_id(spans, TRACE_ID, True) == (
+        otel_trace_id_to_derived_uuid(TRACE_ID),
+        ID_SOURCE_DERIVED,
+    )
+    assert _extract_nirizan_trace_id(spans, TRACE_ID, True)[0] != otel_trace_id_to_uuid(TRACE_ID)
 
 
 def test_extract_trace_id_recovers_a_stashed_id_even_if_only_one_span_has_it() -> None:
@@ -900,6 +930,7 @@ def _convert(otel_attrs: dict[str, Any], **overrides: Any) -> dict[str, Any]:
     kwargs: dict[str, Any] = {
         "service_name": None,
         "span_id_hex": None,
+        "trace_id_hex": None,
         "span_id_source": ID_SOURCE_DERIVED,
         "trace_id_source": ID_SOURCE_DERIVED,
         "sampled": None,
@@ -1557,7 +1588,7 @@ def test_assembly_of_one_span_produces_a_valid_trace(inert: NiriZanSpanProcessor
     trace = assemble_ok(inert, make_span(0xAB, name="only"))
 
     assert isinstance(trace, Trace)
-    assert trace.trace_id == otel_trace_id_to_uuid(TRACE_ID)
+    assert trace.trace_id == otel_trace_id_to_derived_uuid(TRACE_ID)
     assert span_names(trace) == ["only"]
     assert trace.spans[0].parent_span_id is None
     assert trace.created_at.tzinfo is not None
@@ -1952,6 +1983,44 @@ def test_assembly_captures_service_and_span_id_metadata(inert: NiriZanSpanProces
 
     assert attrs["otel.service.name"] == "svc"
     assert attrs[OTEL_SPAN_ID] == "00000000000000ab"
+
+
+def test_assembly_records_the_otel_trace_id_for_correlation(
+    make_inert: Callable[..., NiriZanSpanProcessor],
+) -> None:
+    """The original OTel trace id is recorded verbatim, whatever the trust setting.
+
+    It is the only way back from a derived NiriZan trace id to the producer's
+    own trace, and the only way to see which OTel trace a stored trace came
+    from, so it is written for both the trusted and the untrusted path and is
+    never gated by capture_content.
+    """
+    for trust in (False, True):
+        trace = assemble_ok(
+            make_inert(trust_stashed_ids=trust),
+            make_span(0xAB, trace_id=TRACE_ID),
+            trace_id=TRACE_ID,
+        )
+
+        assert trace.spans[0].attributes[OTEL_TRACE_ID] == f"{TRACE_ID:032x}"
+
+
+def test_the_otel_trace_id_attribute_is_not_content() -> None:
+    """``otel.trace_id`` survives capture off: it is metadata, not content.
+
+    If it were treated as content it would be withheld whenever
+    ``capture_content=False``, which is the default, and the derived id would
+    have no recorded origin at all.
+    """
+    assert OTEL_TRACE_ID not in CONTENT_ATTRIBUTE_KEYS
+    assert (
+        _convert(
+            {},
+            trace_id_hex="0000000000000000000000000000000a",
+            capture_content=False,
+        )[OTEL_TRACE_ID]
+        == "0000000000000000000000000000000a"
+    )
 
 
 def test_assembly_preserves_the_original_otel_attributes(inert: NiriZanSpanProcessor) -> None:
@@ -2521,7 +2590,7 @@ def test_force_flush_rule_flushes_finished_traces_and_leaves_in_flight_ones(
 
     inert._flush_quiescent(reason="force_flush")
 
-    assert [t.trace_id for t in sink.traces] == [otel_trace_id_to_uuid(0xA)]
+    assert [t.trace_id for t in sink.traces] == [otel_trace_id_to_derived_uuid(0xA)]
     assert set(inert._buffers) == {0xB}
 
 
@@ -2585,7 +2654,7 @@ def test_buffer_cap_evicts_finished_traces_before_in_flight_ones(
 
     processor._enforce_buffer_cap()
 
-    assert [t.trace_id for t in sink.traces] == [otel_trace_id_to_uuid(0xB)]
+    assert [t.trace_id for t in sink.traces] == [otel_trace_id_to_derived_uuid(0xB)]
     assert set(processor._buffers) == {0xA, 0xC}
     assert "evicted_open_trace" not in processor.get_stats()
 
@@ -2603,7 +2672,7 @@ def test_buffer_cap_evicts_the_oldest_in_flight_trace_only_when_it_must(
 
     processor._enforce_buffer_cap()
 
-    assert [t.trace_id for t in sink.traces] == [otel_trace_id_to_uuid(0xA)]
+    assert [t.trace_id for t in sink.traces] == [otel_trace_id_to_derived_uuid(0xA)]
     assert processor.get_stats()["evicted_open_trace"] == 1
 
 
@@ -2989,7 +3058,7 @@ def test_on_end_never_raises_into_the_application_when_enqueueing_fails(
     assert any("Failed to enqueue OTel span" in r.getMessage() for r in caplog.records)
     processor.on_end(make_span(1, trace_id=0xB))
     assert processor.force_flush() is True
-    assert [t.trace_id for t in sink.traces] == [otel_trace_id_to_uuid(0xB)]
+    assert [t.trace_id for t in sink.traces] == [otel_trace_id_to_derived_uuid(0xB)]
 
 
 def test_shutdown_with_a_full_queue_still_stops_the_consumer_and_loses_nothing_queued(
@@ -3014,8 +3083,8 @@ def test_shutdown_with_a_full_queue_still_stops_the_consumer_and_loses_nothing_q
     assert not closer.is_alive() and not flusher.is_alive()
     assert not processor._consumer.is_alive()
     assert {t.trace_id for t in blocking.traces} == {
-        otel_trace_id_to_uuid(0xA),
-        otel_trace_id_to_uuid(0xB),
+        otel_trace_id_to_derived_uuid(0xA),
+        otel_trace_id_to_derived_uuid(0xB),
     }
 
 
@@ -3075,7 +3144,7 @@ def test_force_flush_times_out_when_the_queue_is_saturated_and_data_is_not_lost_
     assert processor.force_flush(timeout_millis=5_000) is True
 
     delivered = {t.trace_id: t for t in blocking.traces}
-    assert otel_trace_id_to_uuid(0xA) in delivered
+    assert otel_trace_id_to_derived_uuid(0xA) in delivered
 
 
 def test_a_trace_that_lost_a_span_end_is_held_by_force_flush_and_delivered_on_shutdown(
@@ -3098,12 +3167,12 @@ def test_a_trace_that_lost_a_span_end_is_held_by_force_flush_and_delivered_on_sh
     flusher.join(timeout=10)
     assert processor.force_flush(timeout_millis=5_000) is True
 
-    assert [t.trace_id for t in blocking.traces] == [otel_trace_id_to_uuid(0xA)]
+    assert [t.trace_id for t in blocking.traces] == [otel_trace_id_to_derived_uuid(0xA)]
 
     processor.shutdown()
 
     delivered = {t.trace_id: t for t in blocking.traces}
-    assert len(delivered[otel_trace_id_to_uuid(0xB)].spans) == 2
+    assert len(delivered[otel_trace_id_to_derived_uuid(0xB)].spans) == 2
 
 
 def test_a_failing_sink_does_not_stop_later_deliveries(
@@ -3120,7 +3189,7 @@ def test_a_failing_sink_does_not_stop_later_deliveries(
     processor.on_end(make_span(1, trace_id=0xB))
     assert processor.force_flush() is True
 
-    assert [t.trace_id for t in sink.traces] == [otel_trace_id_to_uuid(0xB)]
+    assert [t.trace_id for t in sink.traces] == [otel_trace_id_to_derived_uuid(0xB)]
     assert processor._consumer.is_alive()
 
 
@@ -3151,7 +3220,7 @@ def test_an_unexpected_error_in_the_consumer_is_counted_and_the_thread_survives(
 
     assert processor._consumer.is_alive()
     assert processor.get_stats() == {"consumer_error": 1}
-    assert [t.trace_id for t in sink.traces] == [otel_trace_id_to_uuid(0xB)]
+    assert [t.trace_id for t in sink.traces] == [otel_trace_id_to_derived_uuid(0xB)]
     assert any(
         "Unexpected error in NiriZanSpanProcessor consumer" in r.getMessage()
         for r in caplog.records
@@ -3264,8 +3333,8 @@ def test_the_consumer_is_restarted_in_a_forked_child_and_the_parent_is_unaffecte
     processor.on_end(make_span(1, trace_id=0xC))
     assert processor.force_flush()
     assert [t.trace_id for t in sink.traces] == [
-        otel_trace_id_to_uuid(0xA),
-        otel_trace_id_to_uuid(0xC),
+        otel_trace_id_to_derived_uuid(0xA),
+        otel_trace_id_to_derived_uuid(0xC),
     ]
 
 
@@ -3305,7 +3374,7 @@ def test_reinit_after_fork_discards_inherited_state_and_restarts_the_consumer(
     processor.on_end(make_span(1, trace_id=0xB))
     assert processor.force_flush()
     # Trace A belonged to the pre-fork process and is not re-emitted by this one.
-    assert [t.trace_id for t in sink.traces] == [otel_trace_id_to_uuid(0xB)]
+    assert [t.trace_id for t in sink.traces] == [otel_trace_id_to_derived_uuid(0xB)]
 
 
 def test_a_consumer_superseded_by_reinit_retires_and_leaves_one_consumer_running(

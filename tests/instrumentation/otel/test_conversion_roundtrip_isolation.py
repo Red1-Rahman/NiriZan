@@ -742,25 +742,33 @@ def test_roundtrip_normalizes_non_utc_input_offsets(hours: int, minutes: int) ->
 
 
 def test_roundtrip_with_untrusted_stashed_ids_derives_identity_deterministically() -> None:
-    """With ``trust_stashed_ids=False`` identity is derived, and repeats match.
+    """With ``trust_stashed_ids=False`` identity is a namespaced derived id.
 
-    The derived value is a pure function of the OpenTelemetry ids, so two
-    exports of the same trace agree with each other. What distinguishes the
-    setting is the recorded provenance, not the value itself: the
-    NiriZan-to-OTel id mapping is an exact inverse, so a derived trace id
-    happens to equal the original one.
+    The derived value is a pure function of the OpenTelemetry trace id, so two
+    exports of the same trace agree with each other. It is *not* the original
+    NiriZan trace id, because the OpenTelemetry trace id is chosen by the
+    producer: reusing the exact inverse mapping would let an incoming trace
+    claim a stored native trace's id. The original OpenTelemetry trace id is
+    recorded on the spans so the derived id stays traceable, and the trusted
+    path still round trips exactly.
     """
     trace = make_trace()
     trusted = single_trace(roundtrip_configured(trace, trust_stashed_ids=True))
     first = single_trace(roundtrip_configured(trace, trust_stashed_ids=False))
     second = single_trace(roundtrip_configured(trace, trust_stashed_ids=False))
+    otel_trace_id = format(trace.trace_id.int, "032x")
 
     assert trusted.trace_id == trace.trace_id
     assert first.trace_id == second.trace_id
+    assert first.trace_id != trace.trace_id
+    assert first.trace_id != trusted.trace_id
     assert sorted(s.name for s in first.spans) == sorted(s.name for s in second.spans)
     assert trusted.spans[0].attributes["nirizan.trace_id.source"] == "roundtrip"
     assert first.spans[0].attributes["nirizan.trace_id.source"] == "derived"
     assert first.spans[0].attributes["nirizan.span_id.source"] == "derived"
+    # The original OpenTelemetry trace id is kept for correlation.
+    assert first.spans[0].attributes["otel.trace_id"] == otel_trace_id
+    assert trusted.spans[0].attributes["otel.trace_id"] == otel_trace_id
 
 
 def test_roundtrip_of_seeded_random_forests_preserves_every_parent_link() -> None:

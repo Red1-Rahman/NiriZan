@@ -196,7 +196,10 @@ Its defensive defaults are `trust_stashed_ids=False`,
 `capture_content=False`, `orphan_policy="emit"`, and
 `unrecognized_span_policy="drop"`. Stashed NiriZan IDs are used only when
 `trust_stashed_ids=True`; otherwise IDs are derived from OTel IDs and
-provenance is recorded as `derived`. Stashed session IDs require both
+provenance is recorded as `derived`. A trace ID is derived whenever the stash
+is untrusted *or* nothing trustworthy was stashed, and derivation means the
+namespaced mapping described under ID mapping below, never the exact inverse of
+the OTel ID. Stashed session IDs require both
 `trust_stashed_ids=True` and membership in the explicitly configured
 `trusted_session_ids` allowlist; a session ID supplied by an otherwise
 untrusted OTel producer is ignored.
@@ -246,7 +249,7 @@ must be imported explicitly by callers that installed the `otel` extra.
 
 #### ID mapping (`instrumentation/otel/_id_mapping.py`)
 
-Six conversion helpers with no OpenTelemetry dependency: `uuid_to_otel_trace_id`
+Seven conversion helpers with no OpenTelemetry dependency: `uuid_to_otel_trace_id`
 and `uuid_to_otel_span_id` turn NiriZan UUIDs into the 128-bit and 64-bit OTel
 integers, `otel_trace_id_to_uuid` and `otel_span_id_to_uuid` invert them, and
 `is_valid_otel_trace_id` / `is_valid_otel_span_id` perform the range checks the
@@ -255,6 +258,42 @@ all-zeros OTel ID raises `ValueError`; the validation helpers return `bool` and
 never raise. `otel_span_id_to_uuid` derives its UUID deterministically (UUIDv5
 over the fixed NiriZan namespace), so the same OTel span ID yields the same
 NiriZan UUID on every platform and Python version.
+
+There are two distinct trace-ID mappings, and which one a caller gets is a
+contract, not an implementation detail:
+
+* `uuid_to_otel_trace_id` and `otel_trace_id_to_uuid` are an exact inverse pair.
+  They are the mapping for **native export and trusted round trips**, where
+  NiriZan is the identity authority and one NiriZan trace must come back as the
+  same NiriZan trace.
+* `otel_trace_id_to_derived_uuid` is a **namespaced derivation**: a UUIDv5 over a
+  fixed NiriZan namespace UUID and the 32-character lowercase hex form of the
+  OTel trace ID. It is the mapping for **ingest of an untrusted or unstashed OTel
+  trace ID**, and it is deliberately not the inverse.
+
+The guarantee the derived mapping provides: **an ingested trace whose OTel trace
+ID is not trusted never takes a stored native trace's ID.** The OTel trace ID
+arrives from the producer (a W3C `traceparent` header), so it is
+attacker-influenced; the exact inverse would let any producer name an incoming
+trace after a stored native trace it has observed, and `save` would then replace
+that trace's metadata and its whole span set. Hashing into a private namespace
+confines an untrusted OTel trace ID to the derived image of that namespace,
+which is disjoint from the IDs native traces are created with. The derived ID is
+still a deterministic function of the OTel trace ID, so the same OTel trace
+always ingests to the same NiriZan trace, and `ID_SOURCE_DERIVED` provenance is
+recorded in both derived paths.
+
+The derivation namespace is **part of persisted identity**: changing it changes
+every derived trace ID ever stored, so old and new derived traces stop being the
+same trace and neither can be re-derived after an upgrade. It is therefore
+fixed for the life of the format, and a change to it is a breaking change under
+the Versioning Rule.
+
+For correlation and audit, ingestion records the original OTel trace ID on every
+assembled span as the `otel.trace_id` attribute (32 lowercase hex characters),
+next to `otel.span_id`. That is the only route from a derived NiriZan trace ID
+back to the producer's own trace, and it is structural metadata rather than
+content, so `capture_content` never gates it.
 
 #### Semantic conventions (`instrumentation/otel/semconv.py`)
 
@@ -299,6 +338,7 @@ __all__ = [
     "OTEL_SPAN_ID",
     "OTEL_STATUS_CODE",
     "OTEL_STATUS_DESCRIPTION",
+    "OTEL_TRACE_ID",
     "OTEL_TRACE_STATE",
     "SEMCONV_VERSION",
     "SEQ_ATTR_PREFIX",

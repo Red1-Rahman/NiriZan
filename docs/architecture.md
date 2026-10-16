@@ -161,7 +161,7 @@ verified as a set of independent layers rather than by a single test:
 | L4 | Storage persists OTel-shaped traces (synthetic parents, provenance attributes, recovered session IDs) with no OpenTelemetry dependency | `tests/storage/test_otel_storage_boundary_isolation.py` |
 | L5 | Buffer caps and stats hold on every intake path, including the shutdown drain, and under eight concurrent producer threads | `tests/instrumentation/otel/test_processor_lifecycle_isolation.py` |
 | L6 | Round-trip fidelity: the two adapters are inverses on real trace shapes, and `capture_content=False` covers known content attributes without filtering custom ones | `tests/instrumentation/otel/test_conversion_roundtrip_isolation.py` |
-| L7 | With both directions on one provider there is no export/ingest feedback loop, the core trace shape is identical with the bridge active and unused, and export does not mutate its input | `tests/instrumentation/otel/test_tracer_exporter_isolation.py` |
+| L7 | With both directions on one provider there is no export/ingest feedback loop, the core trace shape is identical with the bridge active and unused, export does not mutate its input, and an untrusted ingested trace cannot take a stored native trace's id | `tests/instrumentation/otel/test_tracer_exporter_isolation.py` |
 
 Two static layers sit alongside the dynamic ones: an AST scan of the core
 package for any import of `opentelemetry` or the adapter (independent of the
@@ -173,6 +173,30 @@ the core-only legs assert that `import opentelemetry` fails before running the
 suite. What the bridge *promises* is written down in
 [`contracts.md`](contracts.md#open-telemetry-adapter-contracts-instrumentationotel);
 this section covers only how the boundary is enforced.
+
+#### Why an untrusted OTel trace id is never used verbatim
+
+An OTel trace id arrives from the producer, in a W3C `traceparent` header, so it
+is attacker-influenced input rather than an identifier NiriZan can treat as
+meaning anything. NiriZan's UUIDs and OTel trace ids are the same 128 bits, so
+the tempting mapping between them is an exact inverse, and that mapping is used
+for export and for trusted round trips, where NiriZan is the identity authority.
+On the untrusted ingest path it would be a real hazard: a producer that had seen
+a stored native trace's id could send a trace carrying it, and `save` would treat
+the incoming trace as the stored one and replace its metadata and its span set.
+Ingest therefore *derives* the NiriZan trace id by hashing the OTel trace id into
+a private fixed namespace, which confines producer-chosen input to an image of
+that namespace and leaves the ids native traces use untouched. The trade is
+deliberate: a derived id cannot be reversed to an OTel trace id by a consumer,
+so the original OTel trace id is recorded on every span as `otel.trace_id` for
+correlation, and the namespace is part of persisted identity (see
+[`contracts.md`](contracts.md#id-mapping-instrumentationotel_id_mappingpy) for the
+guarantee). The collision tests that pin this end to end are
+`test_untrusted_ingest_cannot_overwrite_a_stored_native_trace`,
+`test_untrusted_stash_with_no_stashed_id_cannot_take_a_native_trace_id`, and
+`test_a_stashed_trace_id_is_still_used_and_marked_roundtrip` in
+`tests/instrumentation/otel/test_tracer_exporter_isolation.py`, with the
+derivation itself pinned in `tests/instrumentation/otel/test_id_mapping.py`.
 
 ### 3.2 Evaluator Orchestrator
 

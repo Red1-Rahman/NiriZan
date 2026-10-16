@@ -23,15 +23,23 @@ import pytest
 pytest.importorskip("opentelemetry")
 pytest.importorskip("opentelemetry.sdk")
 
+import asyncio  # noqa: E402
 import threading  # noqa: E402
 from dataclasses import dataclass  # noqa: E402
 from datetime import UTC, datetime  # noqa: E402
-from uuid import uuid4  # noqa: E402
+from pathlib import Path  # noqa: E402
+from uuid import UUID, uuid4  # noqa: E402
 
 from opentelemetry.sdk.trace import ReadableSpan, TracerProvider  # noqa: E402
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor  # noqa: E402
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import (  # noqa: E402
     InMemorySpanExporter,
+)
+from opentelemetry.trace import (  # noqa: E402
+    NonRecordingSpan,
+    SpanContext,
+    TraceFlags,
+    set_span_in_context,
 )
 
 from nirizan.instrumentation.exporters import BaseExporter, InMemoryExporter  # noqa: E402
@@ -44,6 +52,9 @@ from nirizan.instrumentation.otel.semconv import (  # noqa: E402
 from nirizan.instrumentation.otel.to_otel import NiriZanToOTelExporter  # noqa: E402
 from nirizan.instrumentation.spans import Span, SpanKind, Trace  # noqa: E402
 from nirizan.instrumentation.tracer import Tracer as NiriZanTracer  # noqa: E402
+from nirizan.orchestrator.collector import TraceCollector  # noqa: E402
+from nirizan.orchestrator.loop_sink import LoopTraceSink  # noqa: E402
+from nirizan.storage.trace_repository import SQLiteTraceRepository  # noqa: E402
 
 pytestmark = pytest.mark.otel
 
@@ -408,3 +419,232 @@ def _single_span_trace() -> Trace:
             )
         ],
     )
+
+
+# ---------------------------------------------------------------------------
+# Untrusted ingest cannot take a stored native trace's id
+# ---------------------------------------------------------------------------
+
+
+def _native_stored_trace() -> Trace:
+    """A native trace with metadata and two spans, as the core tracer builds it."""
+    trace_id = uuid4()
+    root_id = uuid4()
+    child_id = uuid4()
+    started = datetime(2026, 1, 1, tzinfo=UTC)
+    return Trace(
+        trace_id=trace_id,
+        application_name="native-app",
+        created_at=started,
+        code_commit="native0000",
+        data_snapshot_id="native-snapshot",
+        session_id=uuid4(),
+        spans=[
+            Span(
+                span_id=root_id,
+                trace_id=trace_id,
+                kind=SpanKind.PLANNING,
+                name="native-root",
+                started_at=started,
+                ended_at=started,
+                attributes={"native": "yes"},
+            ),
+            Span(
+                span_id=child_id,
+                trace_id=trace_id,
+                parent_span_id=root_id,
+                kind=SpanKind.GENERATION,
+                name="native-child",
+                started_at=started,
+                ended_at=started,
+            ),
+        ],
+    )
+
+
+class _SignallingRepository(SQLiteTraceRepository):
+    """The real repository, plus an event set once a save has completed."""
+
+    def __init__(self, db_path: str) -> None:
+        super().__init__(db_path)
+        self.saved = asyncio.Event()
+
+    async def save(self, trace: Trace) -> None:
+        await super().save(trace)
+        self.saved.set()
+
+
+async def _ingest_otel_trace_id_into(
+    repository: _SignallingRepository,
+    otel_trace_id: int,
+    *,
+    trust_stashed_ids: bool,
+    attributes: dict[str, str] | None = None,
+) -> None:
+    """Run one OTel span through the real ingest path into ``repository``.
+
+    The span is created by a real SDK tracer under an explicit context, so the
+    processor sees exactly what it would see in production, and delivery goes
+    through ``LoopTraceSink`` and ``TraceCollector`` into the repository that
+    already holds the native trace. The save is awaited through the
+    repository's event, because ``LoopTraceSink`` only schedules the collector
+    coroutine and ``collector.stop()`` would otherwise race it.
+    """
+    loop = asyncio.get_running_loop()
+    collector = TraceCollector(repository)
+    await collector.start()
+    provider = TracerProvider(shutdown_on_exit=False)
+    processor = NiriZanSpanProcessor(
+        LoopTraceSink(collector, loop),
+        trust_stashed_ids=trust_stashed_ids,
+    )
+    provider.add_span_processor(processor)
+    context = set_span_in_context(
+        NonRecordingSpan(
+            SpanContext(
+                trace_id=otel_trace_id,
+                span_id=0x1234,
+                is_remote=True,
+                trace_flags=TraceFlags(TraceFlags.SAMPLED),
+            )
+        )
+    )
+
+    with provider.get_tracer("l7-collision").start_span(
+        "foreign-op",
+        context=context,
+        attributes={"nirizan.span.kind": "generation", **(attributes or {})},
+    ):
+        pass
+
+    assert processor.force_flush(timeout_millis=30_000) is True
+    provider.shutdown()
+    await asyncio.wait_for(repository.saved.wait(), timeout=15)
+    await collector.stop()
+
+
+def _stored_rows(repository: SQLiteTraceRepository, trace_id: object) -> tuple[dict, list[dict]]:
+    """The raw stored rows for a trace, for a byte-for-byte comparison."""
+    trace_row = repository._conn.execute(
+        "SELECT * FROM traces WHERE trace_id = ?", (str(trace_id),)
+    ).fetchone()
+    span_rows = repository._conn.execute(
+        "SELECT * FROM spans WHERE trace_id = ? ORDER BY span_id", (str(trace_id),)
+    ).fetchall()
+    return dict(trace_row), [dict(row) for row in span_rows]
+
+
+def _other_trace_ids(repository: SQLiteTraceRepository, keep: object) -> list[str]:
+    return [
+        row["trace_id"]
+        for row in repository._conn.execute("SELECT trace_id FROM traces").fetchall()
+        if row["trace_id"] != str(keep)
+    ]
+
+
+async def test_untrusted_ingest_cannot_overwrite_a_stored_native_trace(tmp_path: Path) -> None:
+    """An OTel trace id must not let an ingested trace take a native trace's id.
+
+    The OTel trace id arrives over the wire (a W3C ``traceparent`` header), so
+    it is producer-influenced: any producer can send the exact id of an
+    existing stored native trace. If ingest mapped that id straight back to a
+    NiriZan UUID, ``save`` would treat the incoming trace as the stored one and
+    replace its metadata and its whole span set, so this asserts the stored rows
+    are byte-for-byte unchanged and the ingested trace lands under a different
+    id.
+    """
+    repository = _SignallingRepository(str(tmp_path / "traces.db"))
+    try:
+        native = _native_stored_trace()
+        await repository.save(native)
+        before_trace_row, before_span_rows = _stored_rows(repository, native.trace_id)
+        repository.saved.clear()
+
+        await _ingest_otel_trace_id_into(
+            repository,
+            native.trace_id.int,
+            trust_stashed_ids=False,
+        )
+
+        after_trace_row, after_span_rows = _stored_rows(repository, native.trace_id)
+        assert after_trace_row == before_trace_row
+        assert after_span_rows == before_span_rows
+        assert after_span_rows, "the native trace lost its spans"
+
+        ingested_ids = _other_trace_ids(repository, native.trace_id)
+        assert len(ingested_ids) == 1
+        assert ingested_ids[0] != str(native.trace_id)
+        ingested = await repository.get(UUID(ingested_ids[0]))
+        assert ingested is not None
+        assert [span.name for span in ingested.spans] == ["foreign-op"]
+    finally:
+        repository.close()
+
+
+async def test_untrusted_stash_with_no_stashed_id_cannot_take_a_native_trace_id(
+    tmp_path: Path,
+) -> None:
+    """The trusted-but-unstashed fallback derives too, so it cannot collide.
+
+    With ``trust_stashed_ids=True`` a stashed id still wins, which is the
+    round-trip path. When no span stashes one, the fallback must not fall back
+    to the exact inverse mapping either, because that is the same collision with
+    a different reason for arriving.
+    """
+    repository = _SignallingRepository(str(tmp_path / "traces.db"))
+    try:
+        native = _native_stored_trace()
+        await repository.save(native)
+        before_trace_row, before_span_rows = _stored_rows(repository, native.trace_id)
+        repository.saved.clear()
+
+        await _ingest_otel_trace_id_into(
+            repository,
+            native.trace_id.int,
+            trust_stashed_ids=True,
+        )
+
+        after_trace_row, after_span_rows = _stored_rows(repository, native.trace_id)
+        assert after_trace_row == before_trace_row
+        assert after_span_rows == before_span_rows
+
+        ingested_ids = _other_trace_ids(repository, native.trace_id)
+        assert len(ingested_ids) == 1
+        assert ingested_ids[0] != str(native.trace_id)
+    finally:
+        repository.close()
+
+
+async def test_a_stashed_trace_id_is_still_used_and_marked_roundtrip(tmp_path: Path) -> None:
+    """A trusted stash keeps the round trip intact, provenance included.
+
+    This is the counterpart to the two collision tests: deriving is the default
+    for untrusted and unstashed input, not a blanket removal of identity
+    recovery. A producer that is trusted and stashes the id still gets the
+    NiriZan id it exported, and `save` still recognizes the trace as its own.
+    """
+    repository = _SignallingRepository(str(tmp_path / "traces.db"))
+    try:
+        native = _native_stored_trace()
+        await repository.save(native)
+        before_trace_row, before_span_rows = _stored_rows(repository, native.trace_id)
+        repository.saved.clear()
+
+        await _ingest_otel_trace_id_into(
+            repository,
+            native.trace_id.int,
+            trust_stashed_ids=True,
+            attributes={"nirizan.trace_id": str(native.trace_id)},
+        )
+
+        after_trace_row, after_span_rows = _stored_rows(repository, native.trace_id)
+        # The stashed id wins, so this save is a replacement of that trace.
+        assert len(after_span_rows) == 1
+        assert after_span_rows[0]["name"] == "foreign-op"
+        assert after_trace_row["trace_id"] == before_trace_row["trace_id"]
+        # And the round trip is recorded as such, not as a derived id.
+        stored = await repository.get(native.trace_id)
+        assert stored is not None
+        assert stored.spans[0].attributes["nirizan.trace_id.source"] == "roundtrip"
+    finally:
+        repository.close()

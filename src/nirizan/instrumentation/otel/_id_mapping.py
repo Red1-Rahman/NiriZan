@@ -7,12 +7,14 @@ It contains zero external package dependencies.
 """
 
 import hashlib
+import uuid as uuid_module
 from uuid import UUID
 
 __all__ = [
     "is_valid_otel_span_id",
     "is_valid_otel_trace_id",
     "otel_span_id_to_uuid",
+    "otel_trace_id_to_derived_uuid",
     "otel_trace_id_to_uuid",
     "uuid_to_otel_span_id",
     "uuid_to_otel_trace_id",
@@ -22,6 +24,12 @@ __all__ = [
 # Fixed UUID namespace for deterministic derivation of 128-bit UUIDs
 # from 64-bit OTel Span IDs when the 'nirizan.span_id' attribute is absent.
 _NIRIZAN_SPAN_ID_NAMESPACE: UUID = UUID("a921d782-2615-4428-b0e6-5c56d78703a1")
+
+# Fixed UUID namespace for deriving a NiriZan trace id from an untrusted OTel
+# trace id (see otel_trace_id_to_derived_uuid). PERMANENT: changing it changes
+# every derived trace id ever persisted, so old and new derived traces stop
+# being the same trace and neither can be re-derived after an upgrade.
+_NIRIZAN_TRACE_ID_NAMESPACE: UUID = UUID("e13089c7-7d05-402a-a1b5-bf8972e54c6f")
 
 _MAX_TRACE_ID: int = (1 << 128) - 1
 _MAX_SPAN_ID: int = (1 << 64) - 1
@@ -68,6 +76,11 @@ def uuid_to_otel_trace_id(trace_id: UUID) -> int:
 def otel_trace_id_to_uuid(otel_trace_id: int) -> UUID:
     """Convert a 128-bit integer OTel trace ID to a 128-bit NiriZan UUID trace ID.
 
+    This is the exact inverse of ``uuid_to_otel_trace_id``, so it is only for
+    the trusted paths: native export and a trusted round trip. Ingest of an
+    untrusted or unstashed OTel trace ID must use
+    ``otel_trace_id_to_derived_uuid`` instead.
+
     Raises:
         ValueError: If otel_trace_id is not a valid non-zero 128-bit integer.
     """
@@ -76,6 +89,35 @@ def otel_trace_id_to_uuid(otel_trace_id: int) -> UUID:
             f"Invalid OTel trace ID: {otel_trace_id}. Must be a non-zero 128-bit integer."
         )
     return UUID(int=otel_trace_id)
+
+
+def otel_trace_id_to_derived_uuid(otel_trace_id: int) -> UUID:
+    """Derive a NiriZan trace UUID from an untrusted OTel trace ID, by name.
+
+    Computes a UUIDv5 over ``_NIRIZAN_TRACE_ID_NAMESPACE`` and the 32-character
+    lowercase hex form of the OTel trace ID, so the same OTel trace ID always
+    yields the same NiriZan trace ID, on any platform and any supported Python.
+
+    This is deliberately *not* ``otel_trace_id_to_uuid``. The OTel trace ID
+    arrives from the producer (a W3C ``traceparent`` header), so it is
+    attacker-influenced, and the exact inverse mapping would let a producer
+    name an ingested trace after any stored native trace it has seen. Hashing
+    into a private namespace means an untrusted OTel trace ID can only ever
+    reach ids in the derived image of that namespace, which is disjoint from
+    the ids native traces are created with.
+
+    ``uuid.uuid5`` is used directly with a ``str`` name, which is portable
+    across Python 3.11 and 3.12 (only its ``bytes`` name handling differs
+    between those versions, and ``bytes`` is not used here).
+
+    Raises:
+        ValueError: If otel_trace_id is not a valid non-zero 128-bit integer.
+    """
+    if not is_valid_otel_trace_id(otel_trace_id):
+        raise ValueError(
+            f"Invalid OTel trace ID: {otel_trace_id}. Must be a non-zero 128-bit integer."
+        )
+    return uuid_module.uuid5(_NIRIZAN_TRACE_ID_NAMESPACE, f"{otel_trace_id:032x}")
 
 
 def uuid_to_otel_span_id(span_id: UUID) -> int:
