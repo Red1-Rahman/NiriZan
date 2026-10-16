@@ -1,5 +1,7 @@
 # tests/storage/test_models.py
-from datetime import datetime, timezone
+import logging
+import threading
+from datetime import UTC, datetime, timedelta, timezone
 from uuid import uuid4
 
 import pytest
@@ -7,11 +9,21 @@ from pydantic import ValidationError
 
 from nirizan.instrumentation.spans import Span, SpanKind, Trace
 from nirizan.metrics.base import MetricResult
-from nirizan.storage.models import Baseline, Run, SpanRecord, TraceRecord
+from nirizan.storage import models
+from nirizan.storage.models import (
+    Baseline,
+    Run,
+    SpanRecord,
+    TraceRecord,
+    _OnceLatch,
+    _parse_utc_datetime,
+    _utc_isoformat,
+    _warn_legacy_naive_once,
+)
 
 
 def test_span_record_round_trip() -> None:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     span = Span(
         span_id=uuid4(),
         trace_id=uuid4(),
@@ -41,7 +53,7 @@ def test_span_record_round_trip() -> None:
 
 
 def test_trace_record_round_trip() -> None:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     session_id = uuid4()
     trace = Trace(
         trace_id=uuid4(),
@@ -65,7 +77,7 @@ def test_trace_record_round_trip() -> None:
 
 
 def test_run_validation() -> None:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     trace_id = uuid4()
     valid_run = Run(
         run_id=uuid4(),
@@ -106,7 +118,7 @@ def test_run_validation() -> None:
 
 
 def test_baseline_validation() -> None:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     valid_baseline = Baseline(
         baseline_id=uuid4(),
         system_type="rag_agent",
@@ -135,3 +147,133 @@ def test_baseline_validation() -> None:
             established_at=now,
             label="",
         )
+
+
+# ---------------------------------------------------------------------------
+# Timestamp serialization helpers (write strict / read tolerant)
+# ---------------------------------------------------------------------------
+
+
+def test_utc_isoformat_normalizes_offsets_to_utc() -> None:
+    ist = timezone(timedelta(hours=5, minutes=30))
+
+    result = _utc_isoformat(datetime(2026, 1, 1, 5, 30, tzinfo=ist))
+
+    assert result == "2026-01-01T00:00:00+00:00"
+
+
+def test_utc_isoformat_rejects_naive_datetime() -> None:
+    with pytest.raises(ValueError, match="timezone-aware"):
+        _utc_isoformat(datetime(2026, 1, 1))
+
+
+def test_parse_utc_datetime_normalizes_offset_to_utc() -> None:
+    parsed = _parse_utc_datetime("2026-01-01T05:30:00+05:30")
+
+    assert parsed == datetime(2026, 1, 1, tzinfo=UTC)
+    assert parsed.utcoffset() == timedelta(0)
+
+
+def test_parse_utc_datetime_accepts_z_suffix() -> None:
+    parsed = _parse_utc_datetime("2026-01-01T00:00:00Z")
+
+    assert parsed == datetime(2026, 1, 1, tzinfo=UTC)
+
+
+def test_parse_utc_datetime_reads_naive_as_utc(
+    caplog: pytest.LogCaptureFixture, fresh_legacy_latch: _OnceLatch
+) -> None:
+    with caplog.at_level(logging.WARNING):
+        parsed = _parse_utc_datetime("2025-06-01T12:00:00")
+
+    assert parsed == datetime(2025, 6, 1, 12, 0, tzinfo=UTC)
+    assert parsed.utcoffset() == timedelta(0)
+    warnings = [
+        record
+        for record in caplog.records
+        if record.name == "nirizan.storage.models" and record.levelno >= logging.WARNING
+    ]
+    assert len(warnings) == 1
+    assert "2025-06-01T12:00:00" in warnings[0].getMessage()
+
+
+def test_parse_utc_datetime_warns_once_per_process(
+    caplog: pytest.LogCaptureFixture, fresh_legacy_latch: _OnceLatch
+) -> None:
+    with caplog.at_level(logging.WARNING):
+        _parse_utc_datetime("2025-06-01T12:00:00")
+        _parse_utc_datetime("2025-06-02T12:00:00")
+        _parse_utc_datetime("2025-06-03T12:00:00")
+
+    warnings = [
+        record
+        for record in caplog.records
+        if record.name == "nirizan.storage.models" and record.levelno >= logging.WARNING
+    ]
+    assert len(warnings) == 1
+    # Only the first offending value is named in the warning.
+    assert "2025-06-01T12:00:00" in warnings[0].getMessage()
+
+
+def test_parse_utc_datetime_malformed_raises_clear_value_error() -> None:
+    with pytest.raises(ValueError, match="'not-a-timestamp'"):
+        _parse_utc_datetime("not-a-timestamp")
+
+
+@pytest.fixture
+def fresh_legacy_latch(monkeypatch: pytest.MonkeyPatch) -> _OnceLatch:
+    """Install an unclaimed warning latch, so a test sees the warning itself."""
+    latch = _OnceLatch()
+    monkeypatch.setattr(models, "_legacy_naive_warning_latch", latch)
+    return latch
+
+
+def test_the_legacy_warning_latch_is_checked_under_its_lock(
+    fresh_legacy_latch: _OnceLatch,
+) -> None:
+    """The once-per-process claim happens inside the lock, not before it.
+
+    A repository is read from worker threads, so an unguarded check-then-set
+    lets two threads that hit a legacy row at the same moment both warn. This
+    asserts the ordering directly: while the test holds the latch's lock, a
+    second thread calling the warner cannot get past the claim. The wait is a
+    bounded ``Event.wait``, never a sleep.
+    """
+    finished = threading.Event()
+    worker = threading.Thread(
+        target=lambda: (_warn_legacy_naive_once("2025-06-01T12:00:00"), finished.set())
+    )
+
+    fresh_legacy_latch.lock.acquire()
+    try:
+        worker.start()
+        # Without the lock the claim returns immediately, so this wait
+        # returning True is the failure signal.
+        assert finished.wait(timeout=0.2) is False
+    finally:
+        fresh_legacy_latch.lock.release()
+
+    worker.join(timeout=15)
+    assert finished.is_set()
+    assert fresh_legacy_latch.claimed is True
+
+
+def test_span_record_round_trip_normalizes_to_utc() -> None:
+    ist = timezone(timedelta(hours=5, minutes=30))
+    started = datetime(2026, 1, 1, 5, 30, tzinfo=ist)
+    span = Span(
+        span_id=uuid4(),
+        trace_id=uuid4(),
+        kind=SpanKind.GENERATION,
+        name="offset-span",
+        started_at=started,
+        ended_at=started + timedelta(seconds=1),
+        attributes={},
+    )
+
+    record = SpanRecord.from_span(span)
+    reconstructed = record.to_span()
+
+    assert record.started_at == "2026-01-01T00:00:00+00:00"
+    assert reconstructed.started_at == started.astimezone(UTC)
+    assert reconstructed.ended_at == (started + timedelta(seconds=1)).astimezone(UTC)

@@ -1,9 +1,10 @@
-# src\nirizan\instrumentation\tracer.py
-from contextlib import asynccontextmanager
+# src/nirizan/instrumentation/tracer.py
 import contextvars
+from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from datetime import datetime, timezone
-from typing import Any, AsyncGenerator
+from datetime import UTC, datetime
+from typing import Any
 from uuid import UUID, uuid4
 
 from nirizan.instrumentation.exporters import BaseExporter
@@ -60,16 +61,19 @@ class Tracer:
         input_payload: str | None = None,
     ) -> AsyncGenerator[SpanHandle, None]:
         """Open, track, and close an execution span; yields a SpanHandle for setting output_payload before the block exits."""
-        trace_id = _CURRENT_TRACE_ID.get()
-        is_root = trace_id is None
+        existing_trace_id = _CURRENT_TRACE_ID.get()
+        is_root = existing_trace_id is None
+        # A ternary narrows cleanly for mypy: trace_id is UUID whichever
+        # branch is taken, so the Span(...) constructor below needs no
+        # `# type: ignore` to accept it.
+        trace_id: UUID = existing_trace_id if existing_trace_id is not None else uuid4()
 
         if is_root:
-            trace_id = uuid4()
             _CURRENT_TRACE_ID.set(trace_id)
 
         parent_span_id = _CURRENT_SPAN_ID.get()
         span_id = uuid4()
-        started_at = datetime.now(timezone.utc)
+        started_at = datetime.now(UTC)
 
         # Update current active span context token
         token_span = _CURRENT_SPAN_ID.set(span_id)
@@ -78,7 +82,7 @@ class Tracer:
         try:
             yield handle
         finally:
-            ended_at = datetime.now(timezone.utc)
+            ended_at = datetime.now(UTC)
 
             # Restrict attributes to valid primitive types
             clean_attrs: dict[str, str | int | float | bool] = {}
@@ -91,7 +95,7 @@ class Tracer:
 
             completed_span = Span(
                 span_id=span_id,
-                trace_id=trace_id,  # type: ignore[arg-type]
+                trace_id=trace_id,
                 parent_span_id=parent_span_id,
                 kind=kind,
                 name=name,
@@ -122,7 +126,7 @@ class Tracer:
             trace_id=target_id,
             application_name=self.application_name,
             spans=matching_spans,
-            created_at=datetime.now(timezone.utc),
+            created_at=datetime.now(UTC),
             session_id=_CURRENT_SESSION_ID.get(),
         )
 

@@ -51,6 +51,10 @@ dev = [
     "mypy>=1.10",
     "scipy-stubs",
 ]
+otel = [
+    "opentelemetry-api>=1.27",
+    "opentelemetry-sdk>=1.27",
+]
 
 [build-system]
 requires = ["hatchling"]
@@ -75,6 +79,54 @@ ban-relative-imports = "all"
 
 [tool.importlinter]
 root_packages = ["nirizan"]
+include_external_packages = true
+
+# The OTel bridge is optional. Core packages must never import it (directly or
+# through the adapter package), or a core-only install breaks at import time.
+# `nirizan/__init__.py` is checked by an AST test in tests/test_otel_isolation.py
+# instead, since the root package cannot be listed as a contract source here
+# without also constraining its own exports.
+[[tool.importlinter.contracts]]
+name = "Core packages do not import OpenTelemetry"
+type = "forbidden"
+source_modules = [
+    "nirizan.storage",
+    "nirizan.orchestrator",
+    "nirizan.metrics",
+    "nirizan.trust",
+    "nirizan.regression",
+    "nirizan.gate",
+    "nirizan.reporting",
+    "nirizan._logging",
+    "nirizan.instrumentation.exporters",
+    "nirizan.instrumentation.sdk",
+    "nirizan.instrumentation.sessions",
+    "nirizan.instrumentation.spans",
+    "nirizan.instrumentation.tracer",
+]
+forbidden_modules = ["opentelemetry"]
+
+
+[[tool.importlinter.contracts]]
+name = "Core packages do not import the OTel adapter"
+type = "forbidden"
+source_modules = [
+    "nirizan.storage",
+    "nirizan.orchestrator",
+    "nirizan.metrics",
+    "nirizan.trust",
+    "nirizan.regression",
+    "nirizan.gate",
+    "nirizan.reporting",
+    "nirizan._logging",
+    "nirizan.instrumentation.exporters",
+    "nirizan.instrumentation.sdk",
+    "nirizan.instrumentation.sessions",
+    "nirizan.instrumentation.spans",
+    "nirizan.instrumentation.tracer",
+]
+forbidden_modules = ["nirizan.instrumentation.otel"]
+
 
 [[tool.importlinter.contracts]]
 name = "NiriZan layer direction"
@@ -101,6 +153,9 @@ forbidden_modules = ["nirizan.regression", "nirizan.gate", "nirizan.reporting", 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+markers = [
+    "otel: requires the optional opentelemetry extra; skipped when it is not installed (run with -m 'not otel' to deselect)",
+]
 
 [tool.mypy]
 python_version = "3.11"

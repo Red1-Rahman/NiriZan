@@ -58,6 +58,9 @@ class Span(BaseModel):
 A trace is the ordered collection of spans belonging to one application invocation.
 
 ```python
+from pydantic import model_validator
+
+
 class Trace(BaseModel):
     model_config = ConfigDict(strict=True)
 
@@ -69,52 +72,313 @@ class Trace(BaseModel):
     data_snapshot_id: str | None = None  # Phase 3: stamped by collector.py at ingest
     session_id: UUID | None = None  # Phase 3: set when captured inside Tracer.session(...)
 
+    @model_validator(mode="after")
+    def validate_span_trace_ids(self) -> Trace:
+        known_span_ids = {span.span_id for span in self.spans}
+        for span in self.spans:
+            if span.trace_id != self.trace_id:
+                raise ValueError("Span trace_id must match Trace trace_id")
+            if (
+                span.parent_span_id is not None
+                and span.parent_span_id not in known_span_ids
+                and span.attributes.get("nirizan.parent.synthetic") is not True
+            ):
+                raise ValueError("Unmarked dangling parent link")
+        return self
+
     def spans_of_kind(self, kind: SpanKind) -> list[Span]:
         return [s for s in self.spans if s.kind == kind]
 ```
 
 **Contract guarantees:**
 
-* Every `Span` in `spans` must share the same `trace_id` as the `Trace` itself. Enforce this with a `model_validator`, do not rely on callers to get it right.
+* Every `Span` in `spans` must share the same `trace_id` as the `Trace` itself. A parent link may point outside the trace only when the span is explicitly marked with `nirizan.parent.synthetic=True`; otherwise the model validator rejects it.
 * `Trace` is the only object the Instrumentation Layer hands to the Orchestrator. Nothing calls `Span` in isolation across that boundary.
 * `code_commit`, `data_snapshot_id`, and `session_id` are additive Phase 3 fields, all optional with a `None` default, per this document's Versioning Rule. `None` means the value genuinely wasn't available at ingest (e.g. traces captured outside a git checkout, or outside a `Tracer.session(...)` block); callers must not treat `None` as a placeholder to be filled in later, only as "not applicable to this trace."
 
-### `TraceExporter` protocol (`instrumentation/exporters.py`)
+### `BaseExporter` interface (`instrumentation/exporters.py`)
 
 ```python
-from typing import Protocol
+from abc import ABC, abstractmethod
 
 
-class TraceExporter(Protocol):
+class BaseExporter(ABC):
+    @abstractmethod
     async def export(self, trace: Trace) -> None:
-        """Send a completed trace to the orchestrator's Trace Collector.
+        ...
 
-        Must not raise on transient failure; implementations are
-        responsible for their own retry/backoff. Must not block the
-        instrumented application's request/response path (Design Principle
-        2 in docs/architecture.md): callers await this from a background task,
-        never inline in the request handler.
-        """
+    async def shutdown(self) -> None:
         ...
 ```
 
 **Contract guarantees:**
 
-* This is the seam between Instrumentation and Orchestrator. Anything on the application side depends only on this `Protocol`, never on a concrete Trace Collector implementation. That is what keeps instrumentation swappable per framework without touching the orchestrator.
+* `export` is asynchronous, but the base interface does not guarantee background execution, retries, or failure suppression. `Tracer` awaits the configured exporter inline when the root span closes, so an exporter implementation must document and handle its own failure behavior.
+* `shutdown` is an optional lifecycle hook for releasing exporter resources.
+* `CollectorExporter` and other adapters may implement this interface without exposing a concrete Trace Collector to the instrumentation layer.
 
-### `TraceRepository` interface (`storage/trace_repository.py`)
+### `BaseTraceRepository` interface (`storage/trace_repository.py`)
 
 ```python
-class TraceRepository(Protocol):
+from abc import ABC, abstractmethod
+
+
+class BaseTraceRepository(ABC):
+    @abstractmethod
     async def save(self, trace: Trace) -> None: ...
+
+    @abstractmethod
     async def get(self, trace_id: UUID) -> Trace | None: ...
-    async def list_by_application(self, application_name: str, limit: int = 100) -> list[Trace]: ...
+
+    @abstractmethod
+    async def list_by_application(
+        self,
+        application_name: str,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[Trace]: ...
+
+    @abstractmethod
+    async def purge_older_than(self, created_before_iso: str) -> int: ...
 ```
 
 **Contract guarantees:**
 
 * `get` returns `None` for a missing trace, it does not raise. Callers that need "trace must exist" semantics wrap this themselves; the repository stays a dumb, honest store.
+* `list_by_application` returns descending creation-time results with limit/offset pagination. Instants are compared at millisecond resolution, and a tie is broken by stored `created_at` text descending, then by `trace_id` ascending, so paginating a set of traces whose creation instants land in the same millisecond still returns a total, gap-free order with no duplicates across pages.
+* `save` is a replacement, not a merge: the stored span set for a trace becomes exactly the span set of the incoming `Trace`, including the empty set. A `span_id` that already belongs to a different trace is rejected with `ValueError`, and the whole save is rolled back.
+* `save` and `purge_older_than` reject naive (offset-less) datetimes. Every timestamp written is canonical UTC ISO-8601 text (`datetime.isoformat()` of the value converted with `astimezone(UTC)`).
+* `purge_older_than` requires a timezone-aware ISO-8601 timestamp, normalizes the cutoff to UTC, removes traces strictly older than that instant at the full precision of the stored timestamp (microseconds), for canonical and legacy rows alike, and returns the number of deleted trace rows. A trace exactly at the cutoff is kept, and a trace that is a microsecond inside the cutoff's millisecond is removed.
+* Reads are tolerant: a stored timestamp with no offset is a legacy row, it is interpreted as UTC, returned as a timezone-aware UTC `datetime`, and logged once per process. A stored timestamp that is not ISO-8601 at all raises `ValueError` naming the stored text. A legacy row is never rewritten on read.
+* Listing orders legacy offset-bearing rows by instant rather than by string, at millisecond resolution: two traces whose instants land in the same millisecond fall back to stored text order and then `trace_id` (tracked for a future normalization migration in #84). Spans of one trace are ordered by the exact instant, and `purge_older_than` compares instants exactly, so neither is subject to that millisecond limit. Rows written since 0.5.0 are canonical UTC, where text order equals instant order, so every comparison is exact for them.
 * No method here accepts or returns anything from `metrics/`, `regression/`, or `reporting/`. This is Phase 1's boundary and it stays that narrow.
+
+The 0.5.0 changes to these guarantees, and the migration path for existing databases, are recorded in the **Release 0.5.0 Breaking Change** section below.
+
+### OpenTelemetry adapter contracts (`instrumentation/otel/`)
+
+The OpenTelemetry bridge is an optional adapter layer. Installing the `otel`
+extra adds the bridge without changing the core `Span`, `Trace`,
+`BaseExporter`, or `BaseTraceRepository` contracts above.
+
+#### `NiriZanToOTelExporter` and `export_trace_to_otel`
+
+The NiriZan-to-OTel direction exports a validated `Trace` through the
+OpenTelemetry SDK. Spans are emitted in parent-first order, with explicit
+parent contexts for in-trace links. Roots and orphaned parent links are
+anchored to a synthetic remote parent when `link_roots_to_trace_id=True` (the
+default), keeping all spans in the NiriZan trace under one OTel trace ID.
+`OTelExporterConfig.link_roots_to_trace_id=False` instead lets each root start
+its own OTel trace.
+
+`OTelExporterConfig.capture_content` defaults to `False`. Structural metadata
+is exported, but prompt, completion, retrieval, tool, and planning content is
+withheld unless capture is explicitly enabled. Legacy semantic-convention
+aliases remain enabled by default and can be disabled with
+`emit_legacy_attributes=False`. `capture_content=False` covers the known
+content attributes listed in `semconv.CONTENT_ATTRIBUTE_KEYS` and nothing
+else: an attribute NiriZan does not own is copied through unchanged whether
+capture is on or off, on both the export and the ingest side. A caller who
+puts prompt text under a custom attribute key is responsible for that key.
+
+#### `NiriZanSpanProcessor` and `ThreadSafeTraceSink`
+
+The OTel-to-NiriZan direction implements the SDK's synchronous
+`SpanProcessor` interface. It buffers completed OTel spans by OTel trace ID,
+assembles a NiriZan `Trace`, and calls a synchronous sink:
+
+```python
+class ThreadSafeTraceSink(Protocol):
+    def enqueue_trace(self, trace: Trace) -> None: ...
+```
+
+Its defensive defaults are `trust_stashed_ids=False`,
+`capture_content=False`, `orphan_policy="emit"`, and
+`unrecognized_span_policy="drop"`. Stashed NiriZan IDs are used only when
+`trust_stashed_ids=True`; otherwise IDs are derived from OTel IDs and
+provenance is recorded as `derived`. A trace ID is derived whenever the stash
+is untrusted *or* nothing trustworthy was stashed, and derivation means the
+namespaced mapping described under ID mapping below, never the exact inverse of
+the OTel ID. Stashed session IDs require both
+`trust_stashed_ids=True` and membership in the explicitly configured
+`trusted_session_ids` allowlist; a session ID supplied by an otherwise
+untrusted OTel producer is ignored.
+
+The processor buffers at most `max_buffered_traces` traces and
+`max_buffered_spans` spans at any moment, on every intake path: the live
+consumer loop and the drain that `shutdown` performs. A backlog that
+accumulated while the consumer was blocked is drained under the same cap, so
+the peak buffer size does not depend on how much was queued while the
+processor was not draining. Exceeding a cap evicts the oldest traces, which
+logs a warning and counts `evicted_open_trace`; `force_flush` requests are not
+buffered and therefore never cause an eviction.
+
+`LoopTraceSink` is the supported bridge from this synchronous sink to the
+async `TraceCollector`. It schedules `enqueue_trace` on the collector's event
+loop with `asyncio.run_coroutine_threadsafe` and returns without blocking the
+OTel consumer thread. Sink and loop failures are logged rather than raised
+into the processor callback.
+
+#### Conversion helpers (`convert_span_to_otel_attributes`, `export_span_to_otel`)
+
+`convert_span_to_otel_attributes(span, session_id=None, *, config=None)` maps a
+single NiriZan `Span` to the OpenTelemetry attribute dictionary without emitting
+anything. `export_span_to_otel(span, tracer=None, parent_context=None,
+session_id=None, *, config=None)` converts that single span and emits it through
+an explicit parent context (or as a root when none is given). Both take the same
+`OTelExporterConfig` as the whole-trace path; `export_trace_to_otel` and
+`NiriZanToOTelExporter` are built on top of them, so a caller that only wants one
+span does not have to assemble a `Trace` first.
+
+#### `ProcessorConfig` and `StatReason` (`instrumentation/otel/from_otel.py`)
+
+`ProcessorConfig` is the frozen, strictly validated settings model behind
+`NiriZanSpanProcessor`'s keyword arguments; `NiriZanSpanProcessor.from_config`
+and the read-only `config` property expose it. `StatReason` is a `StrEnum` of
+every drop or skip reason the processor counts in `get_stats()` (queue
+saturation, duplicates, unrecognized kinds, orphan and cycle handling,
+eviction and span-cap events, and the `own_scope_skipped` loop guard).
+Consumers key on these enum values, never on free-form strings.
+
+#### Adapter package surface (`instrumentation/otel/__init__.py`)
+
+The package `__init__` re-exports exactly `_id_mapping` and `semconv`, and
+nothing else. Importing `nirizan.instrumentation.otel` therefore never
+requires the optional `opentelemetry` packages; `to_otel` and `from_otel`
+must be imported explicitly by callers that installed the `otel` extra.
+
+#### ID mapping (`instrumentation/otel/_id_mapping.py`)
+
+Seven conversion helpers with no OpenTelemetry dependency: `uuid_to_otel_trace_id`
+and `uuid_to_otel_span_id` turn NiriZan UUIDs into the 128-bit and 64-bit OTel
+integers, `otel_trace_id_to_uuid` and `otel_span_id_to_uuid` invert them, and
+`is_valid_otel_trace_id` / `is_valid_otel_span_id` perform the range checks the
+ingest path uses before converting. A conversion whose result would be an
+all-zeros OTel ID raises `ValueError`; the validation helpers return `bool` and
+never raise. `otel_span_id_to_uuid` derives its UUID deterministically (UUIDv5
+over the fixed NiriZan namespace), so the same OTel span ID yields the same
+NiriZan UUID on every platform and Python version.
+
+There are two distinct trace-ID mappings, and which one a caller gets is a
+contract, not an implementation detail:
+
+* `uuid_to_otel_trace_id` and `otel_trace_id_to_uuid` are an exact inverse pair.
+  They are the mapping for **native export and trusted round trips**, where
+  NiriZan is the identity authority and one NiriZan trace must come back as the
+  same NiriZan trace.
+* `otel_trace_id_to_derived_uuid` is a **namespaced derivation**: a UUIDv5 over a
+  fixed NiriZan namespace UUID and the 32-character lowercase hex form of the
+  OTel trace ID. It is the mapping for **ingest of an untrusted or unstashed OTel
+  trace ID**, and it is deliberately not the inverse.
+
+The guarantee the derived mapping provides: **an ingested trace whose OTel trace
+ID is not trusted never takes a stored native trace's ID.** The OTel trace ID
+arrives from the producer (a W3C `traceparent` header), so it is
+attacker-influenced; the exact inverse would let any producer name an incoming
+trace after a stored native trace it has observed, and `save` would then replace
+that trace's metadata and its whole span set. Hashing into a private namespace
+confines an untrusted OTel trace ID to the derived image of that namespace,
+which is disjoint from the IDs native traces are created with. The derived ID is
+still a deterministic function of the OTel trace ID, so the same OTel trace
+always ingests to the same NiriZan trace, and `ID_SOURCE_DERIVED` provenance is
+recorded in both derived paths.
+
+The derivation namespace is **part of persisted identity**: changing it changes
+every derived trace ID ever stored, so old and new derived traces stop being the
+same trace and neither can be re-derived after an upgrade. It is therefore
+fixed for the life of the format, and a change to it is a breaking change under
+the Versioning Rule.
+
+For correlation and audit, ingestion records the original OTel trace ID on every
+assembled span as the `otel.trace_id` attribute (32 lowercase hex characters),
+next to `otel.span_id`. That is the only route from a derived NiriZan trace ID
+back to the producer's own trace, and it is structural metadata rather than
+content, so `capture_content` never gates it.
+
+#### Semantic conventions (`instrumentation/otel/semconv.py`)
+
+`semconv` is the single owner of every attribute key, provenance marker, and
+limit the bridge reads or writes, so neither adapter hard-codes a wire name.
+It is pure Python with no OpenTelemetry dependency. Its complete export list,
+which is the contract with OpenTelemetry backends, is:
+
+```python
+__all__ = [
+    "CONTENT_ATTRIBUTE_KEYS",
+    "GEN_AI_COMPLETION",
+    "GEN_AI_OPERATION_NAME",
+    "GEN_AI_PROMPT",
+    "GEN_AI_PROVIDER_NAME",
+    "GEN_AI_REQUEST_MODEL",
+    "GEN_AI_RESPONSE_MODEL",
+    "GEN_AI_SYSTEM",
+    "GEN_AI_USAGE_COMPLETION_TOKENS",
+    "GEN_AI_USAGE_INPUT_TOKENS",
+    "GEN_AI_USAGE_OUTPUT_TOKENS",
+    "GEN_AI_USAGE_PROMPT_TOKENS",
+    "ID_SOURCE_DERIVED",
+    "ID_SOURCE_ROUNDTRIP",
+    "MAX_ATTR_VALUE_LENGTH",
+    "NIRIZAN_INSTRUMENTATION_SCOPE",
+    "NIRIZAN_PLANNING_CONTEXT",
+    "NIRIZAN_PLANNING_OUTPUT",
+    "NIRIZAN_RETRIEVAL_QUERY",
+    "NIRIZAN_RETRIEVAL_RESULTS",
+    "NIRIZAN_RETRIEVAL_TOP_K",
+    "NIRIZAN_SESSION_ID",
+    "NIRIZAN_SPAN_ID",
+    "NIRIZAN_SPAN_ID_SOURCE",
+    "NIRIZAN_SPAN_KIND",
+    "NIRIZAN_TOOL_ARGUMENTS",
+    "NIRIZAN_TOOL_NAME",
+    "NIRIZAN_TOOL_RESULT",
+    "NIRIZAN_TRACE_ID",
+    "NIRIZAN_TRACE_ID_SOURCE",
+    "OTEL_SAMPLED",
+    "OTEL_SPAN_ID",
+    "OTEL_STATUS_CODE",
+    "OTEL_STATUS_DESCRIPTION",
+    "OTEL_TRACE_ID",
+    "OTEL_TRACE_STATE",
+    "SEMCONV_VERSION",
+    "SEQ_ATTR_PREFIX",
+    "SPAN_ID_SOURCE_DERIVED",
+    "SPAN_ID_SOURCE_ROUNDTRIP",
+    "TRUNCATION_SUFFIX",
+    "decode_sequence_key",
+    "dumps_attribute_json",
+    "encode_sequence_attribute_value",
+    "encode_sequence_key",
+    "is_sequence_key",
+    "truncate_attribute_value",
+]
+```
+
+Adding, renaming, or removing a name here changes what the bridge emits on the
+wire and is therefore a contract change under the Versioning Rule at the bottom
+of this document.
+
+#### Parent-link integrity
+
+`Trace` accepts a `parent_span_id` that is not present in the trace only when
+the span's attributes contain
+`SYNTHETIC_PARENT_ATTRIBUTE = "nirizan.parent.synthetic"` with the value
+`True`. In OTel ingestion, this is applied only when a span's local OTel
+parent is missing and `orphan_policy="emit"`; the parent ID is the UUID
+derived from that missing OTel parent span ID. Children of dropped spans
+(including unrecognized, unconvertible, or duplicate-ID spans) are instead
+re-attached to a surviving in-trace ancestor through `_SIG_ATTACH` and are not
+marked synthetic solely because of that re-attachment. A span whose parent is
+remote becomes a root. An unmarked dangling parent is rejected as a
+data-integrity error.
+
+A synthetic parent does not survive a full export-then-ingest round trip: the
+exporter anchors such a span under a synthetic *remote* OTel parent, and
+ingestion maps a remote parent back to a root, so the span returns as a root
+that still carries the marker. This is the documented consequence of the rule
+above, not data loss of the span or its marker; a consumer that needs to know
+the span was orphaned upstream must read the marker attribute, because the
+parent link is not the durable fact here.
 
 ---
 
@@ -760,6 +1024,34 @@ class MultivariateComparator:
 * Permutation seeds are derived deterministically from `(run_id, baseline_id)`. The two methods use seeds `seed` and `seed + 1`, so two evaluations of the same comparison produce byte-identical results, including across process restarts.
 * `MetricResult` is only accepted through `compare_metric_results`, never `compare` directly. `compare` requires pre-built `ScoreMatrix` objects, since building them is the step that enforces the row-alignment the structure tests depend on.
 * The comparator is stateless apart from its frozen `MultivariateConfig`. Two instances constructed with the same config behave identically for the same inputs.
+
+---
+
+## Release 0.5.0 (2026-10-16): Breaking Change, canonical UTC storage, `save` replacement semantics, and marked synthetic parents
+
+This section documents the breaking changes made to the Phase 1 `Trace` contract and to `BaseTraceRepository` in release 0.5.0, per the Versioning Rule at the bottom of this document. The OpenTelemetry adapter contracts above are unchanged by this section.
+
+**What changed:**
+
+1. **Naive datetimes are rejected by `save`.** A `Trace` (or `Span`) whose `created_at`, `started_at`, or `ended_at` is naive, meaning it carries no UTC offset, raises `ValueError` before any row is written. The save is rejected whole: a naive span inside an otherwise valid trace leaves the database exactly as it was. Previously a naive value was written as text and read back as whatever the reader assumed its offset was.
+2. **`purge_older_than` requires a timezone-aware cutoff and normalizes it to UTC.** A cutoff with no offset raises `ValueError`; a cutoff that is not ISO-8601 at all raises `ValueError`. A trailing `Z` is accepted on every supported Python version. The normalized cutoff is compared by instant, so a trace exactly at the cutoff is kept and only strictly older traces are deleted.
+3. **Stored legacy rows without an offset are read as UTC.** A stored timestamp with no offset is interpreted as UTC (matching SQLite `julianday()` semantics for offset-less text), and the `datetime` handed back to a caller is timezone-aware UTC. This is a type change for consumers: code that previously read `trace.created_at` as a naive `datetime` and re-attached its own local offset now sees a value that is already UTC, so such code double-shifts its timestamps. One warning is logged per process the first time such a row is read. The stored row is never rewritten on read, and the read path does not re-validate the reconstructed `Trace`, so a legacy row with data a current validator would reject still reads successfully.
+4. **`save` replaces the stored span set and rejects a cross-trace span id collision.** Saving an existing trace now makes the stored spans exactly the incoming spans: mutable fields are updated and spans absent from the incoming trace are removed, including when the incoming trace has no spans at all. A `span_id` already stored under a different `trace_id` raises `ValueError` and rolls the whole save back, instead of silently overwriting the other trace's span. Previously `save` upserted and cascaded.
+5. **`Trace` accepts an out-of-trace parent only when it is marked synthetic.** A span whose `parent_span_id` is not among the trace's own spans is rejected by the model validator unless its attributes contain `SYNTHETIC_PARENT_ATTRIBUTE = "nirizan.parent.synthetic"` with the value `True`. This narrows what `Trace` accepts: a `Trace` that used to validate with an unmarked dangling parent now raises.
+
+**Why this is breaking, not additive:** the Versioning Rule treats a narrowed type, a changed field meaning, and a new failure mode as breaking even when no field was removed. Points 1, 2, 3, and 4 each turn a previously accepted input into a `ValueError` or change the value a caller reads back; point 5 rejects a shape the model previously accepted. None of them is reachable by a caller who already passes aware datetimes and single-owner spans, which is why they ship together as one documented policy rather than as silent behavior drift.
+
+**Migration path for callers:**
+
+- Callers must pass timezone-aware datetimes to `save`. Where a value is produced with `datetime.now()` or `datetime.utcnow()`, use `datetime.now(UTC)`. Where a value arrives as text, parse it and attach the offset the source actually means; if the source does not say, treat it as UTC, which is what the reader now does.
+- Callers must pass a timezone-aware cutoff to `purge_older_than`. `"2026-01-01T00:00:00Z"` and `"2026-01-01T00:00:00+00:00"` are both accepted and mean the same instant; `"2026-01-01T00:00:00"` is now an error.
+- Consumers that read `trace.created_at`, `span.started_at`, or `span.ended_at` from a repository must stop re-interpreting them as local time. The values are already UTC, so the migration is to delete the local-offset re-attachment, not to add one.
+- Callers that relied on `save` merging into an existing trace must send the full span set on every save. A partial save is a replacement, so a caller that saves an unrelated subset of spans will delete the rest.
+- Callers that assembled a `Trace` with a dangling parent must set `SYNTHETIC_PARENT_ATTRIBUTE` on the orphaned span, or re-attach the parent into the trace.
+
+**Migration path for persisted data:** existing databases need no migration step and no rewrite. Rows are read as they are: offset-bearing rows are returned by their exact instant, offset-less rows are interpreted as UTC and returned aware, and `purge_older_than` deletes by exact instant for both. Listing is the one place where a legacy row can be ordered by stored text rather than by its instant, and only when two instants land in the same millisecond, in which case the tiebreak is stored text and then `trace_id`. The canonical-UTC text form applies to rows written after this release; a stored legacy row keeps its stored text until the trace is saved again. Opening an existing database creates the `idx_traces_app_julianday` expression index if it is absent, which is a schema addition only: no row is rewritten or deleted. Normalizing legacy rows to canonical UTC text is an optional migration tracked separately in #84, and nothing in this release depends on it.
+
+**Version bump:** ships in 0.5.0.
 
 ---
 

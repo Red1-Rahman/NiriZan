@@ -1,13 +1,86 @@
 # src/nirizan/storage/models.py
 import json
-from datetime import datetime
-from typing import Optional
+import threading
+from datetime import UTC, datetime
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from nirizan._logging import get_logger
 from nirizan.instrumentation.spans import Span, SpanKind, Trace
 from nirizan.metrics.base import MetricResult as MetricResult
+
+logger = get_logger(__name__)
+
+
+class _OnceLatch:
+    """A thread-safe latch that only the first caller can claim.
+
+    The legacy-row warning is emitted at most once per process, and a
+    repository is read from worker threads, so the check-and-set has to be a
+    single atomic step: two threads hitting a legacy row for the first time at
+    the same moment must not both warn. Holding the lock for the claim only
+    keeps the logging call itself outside the critical section.
+
+    The flag lives on an instance rather than in a module-level global so that
+    it cannot be read and written without the lock that protects it.
+    """
+
+    def __init__(self) -> None:
+        self.lock = threading.Lock()
+        self.claimed = False
+
+    def claim(self) -> bool:
+        """Return ``True`` for the first caller only, ``False`` for every later one."""
+        with self.lock:
+            if self.claimed:
+                return False
+            self.claimed = True
+            return True
+
+
+# A test resets the warning count by replacing this latch (never by mutating
+# ``claimed`` behind the lock's back).
+_legacy_naive_warning_latch = _OnceLatch()
+
+
+def _utc_isoformat(value: datetime) -> str:
+    """Serialize an aware datetime in canonical UTC ISO-8601 form (write path, strict)."""
+    if value.tzinfo is None or value.utcoffset() is None:
+        raise ValueError("Persisted datetimes must be timezone-aware.")
+    return value.astimezone(UTC).isoformat()
+
+
+def _parse_utc_datetime(value: str) -> datetime:
+    """Parse a persisted datetime and normalize it to UTC (read path, tolerant).
+
+    A value with no offset is a legacy row written before the canonical-UTC
+    policy. It is interpreted as UTC (matching SQLite ``julianday()`` semantics
+    for offset-less strings), returned as an aware UTC datetime, and logged
+    once per process. The stored row is never rewritten on read.
+
+    A value that is not a valid ISO-8601 datetime raises a clear ``ValueError``
+    naming the stored text, rather than being silently skipped.
+    """
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError as err:
+        raise ValueError(f"Stored timestamp {value!r} is not a valid ISO-8601 datetime.") from err
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        _warn_legacy_naive_once(value)
+        return parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
+
+
+def _warn_legacy_naive_once(stored_value: str) -> None:
+    """Emit the legacy-row warning at most once per process."""
+    if not _legacy_naive_warning_latch.claim():
+        return
+    logger.warning(
+        "Stored timestamp %r has no timezone offset; reading it as UTC "
+        "(legacy row, stored value left unchanged).",
+        stored_value,
+    )
 
 
 class SpanRecord(BaseModel):
@@ -15,14 +88,14 @@ class SpanRecord(BaseModel):
 
     span_id: str
     trace_id: str
-    parent_span_id: Optional[str] = None
+    parent_span_id: str | None = None
     kind: str
     name: str
     started_at: str
     ended_at: str
     attributes_json: str = "{}"
-    input_payload: Optional[str] = None
-    output_payload: Optional[str] = None
+    input_payload: str | None = None
+    output_payload: str | None = None
 
     @classmethod
     def from_span(cls, span: Span) -> "SpanRecord":
@@ -32,23 +105,24 @@ class SpanRecord(BaseModel):
             parent_span_id=str(span.parent_span_id) if span.parent_span_id else None,
             kind=span.kind.value,
             name=span.name,
-            started_at=span.started_at.isoformat(),
-            ended_at=span.ended_at.isoformat(),
+            started_at=_utc_isoformat(span.started_at),
+            ended_at=_utc_isoformat(span.ended_at),
             attributes_json=json.dumps(span.attributes),
             input_payload=span.input_payload,
             output_payload=span.output_payload,
         )
 
     def to_span(self) -> Span:
-        """Inverse of from_span; keeps this record shape an internal storage detail on the read path too."""
+        """Inverse of from_span; keeps this record shape an internal storage detail
+        on the read path too."""
         return Span(
             span_id=UUID(self.span_id),
             trace_id=UUID(self.trace_id),
             parent_span_id=UUID(self.parent_span_id) if self.parent_span_id else None,
             kind=SpanKind(self.kind),
             name=self.name,
-            started_at=datetime.fromisoformat(self.started_at),
-            ended_at=datetime.fromisoformat(self.ended_at),
+            started_at=_parse_utc_datetime(self.started_at),
+            ended_at=_parse_utc_datetime(self.ended_at),
             attributes=json.loads(self.attributes_json),
             input_payload=self.input_payload,
             output_payload=self.output_payload,
@@ -62,28 +136,43 @@ class TraceRecord(BaseModel):
     application_name: str
     created_at: str
     spans: list[SpanRecord] = Field(default_factory=list)
-    code_commit: Optional[str] = None
-    data_snapshot_id: Optional[str] = None
-    session_id: Optional[str] = None
+    code_commit: str | None = None
+    data_snapshot_id: str | None = None
+    session_id: str | None = None
 
     @classmethod
     def from_trace(cls, trace: Trace) -> "TraceRecord":
         return cls(
             trace_id=str(trace.trace_id),
             application_name=trace.application_name,
-            created_at=trace.created_at.isoformat(),
+            created_at=_utc_isoformat(trace.created_at),
             spans=[SpanRecord.from_span(s) for s in trace.spans],
             code_commit=trace.code_commit,
             data_snapshot_id=trace.data_snapshot_id,
             session_id=str(trace.session_id) if trace.session_id else None,
         )
 
-    def to_trace(self) -> Trace:
-        """Inverse of from_trace."""
-        return Trace(
+    def to_trace(self, *, validate: bool = True) -> Trace:
+        """Inverse of from_trace.
+
+        Persisted records can predate validators added to ``Trace``. The
+        repository uses ``validate=False`` when reading those records so a
+        legacy row cannot make an otherwise valid query fail.
+        """
+        if validate:
+            return Trace(
+                trace_id=UUID(self.trace_id),
+                application_name=self.application_name,
+                created_at=_parse_utc_datetime(self.created_at),
+                spans=[s.to_span() for s in self.spans],
+                code_commit=self.code_commit,
+                data_snapshot_id=self.data_snapshot_id,
+                session_id=UUID(self.session_id) if self.session_id else None,
+            )
+        return Trace.model_construct(
             trace_id=UUID(self.trace_id),
             application_name=self.application_name,
-            created_at=datetime.fromisoformat(self.created_at),
+            created_at=_parse_utc_datetime(self.created_at),
             spans=[s.to_span() for s in self.spans],
             code_commit=self.code_commit,
             data_snapshot_id=self.data_snapshot_id,
@@ -92,7 +181,8 @@ class TraceRecord(BaseModel):
 
 
 class Run(BaseModel):
-    """A trace plus the MetricResults computed against it, versioned by code commit and data snapshot."""
+    """A trace plus the MetricResults computed against it, versioned by code
+    commit and data snapshot."""
 
     model_config = ConfigDict(strict=True)
 
@@ -105,7 +195,8 @@ class Run(BaseModel):
 
 
 class Baseline(BaseModel):
-    """A named, queryable set of 'known good' historical runs; references Run objects by ID, never embeds them."""
+    """A named, queryable set of 'known good' historical runs; references Run
+    objects by ID, never embeds them."""
 
     model_config = ConfigDict(strict=True)
 

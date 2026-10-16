@@ -12,23 +12,42 @@ permissions:
 jobs:
   checks:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Two dimensions: the extras actually installed (core only, or core
+        # plus the optional OTel bridge) and the Python range (floor, and the
+        # latest stable). The core-only legs are what keep the optional-extra
+        # promise honest: they fail if OpenTelemetry leaks into a core install.
+        python-version: ["3.11", "3.x"]
+        extras: ["dev", "dev,otel"]
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-      - name: Set up Python
+      - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
-          python-version: "3.11"
+          python-version: ${{ matrix.python-version }}
 
-      - name: Install project with dev dependencies
-        run: pip install -e ".[dev]"
+      - name: Install project with ${{ matrix.extras }} extras
+        run: pip install -e ".[${{ matrix.extras }}]"
+
+      - name: Assert OpenTelemetry is absent in the core-only leg
+        if: matrix.extras == 'dev'
+        run: |
+          if python -c "import opentelemetry"; then
+            echo "::error::opentelemetry imported in a core-only install"
+            exit 1
+          fi
 
       - name: Run pytest
-        run: pytest
+        run: pytest -rs
 
       - name: Run mypy --strict
+        if: matrix.extras == 'dev,otel'
         run: mypy
 
-      - name: Run import-linter (layer contract)
+      - name: Run import-linter (layer contracts)
+        if: matrix.extras == 'dev,otel'
         run: lint-imports
