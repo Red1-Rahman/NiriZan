@@ -1,0 +1,42 @@
+{
+  "title": "NiriZan: Continuous Evaluation Infrastructure for Production AI Systems",
+  "upload_type": "software",
+  "description": "<p>NiriZan is an open-source continuous evaluation infrastructure for production AI systems. It provides automated judge-drift attribution with fixed anchor sets, statistically rigorous regression gating (Mann-Whitney U with Holm-Bonferroni correction), multivariate structure-drift detection, trust-weighted health scoring, and CI/CD-integrated quality gates for RAG pipelines, AI agents, and LLM applications.</p>",
+  "creators": [
+    {
+      "name": "Rahman, Redwan",
+      "orcid": "0009-0005-8407-8941"
+    }
+  ],
+  "license": "apache-2.0",
+  "access_right": "open",
+  "language": "eng",
+  "keywords": [
+    "AI evaluation",
+    "LLM evaluation",
+    "retrieval-augmented generation",
+    "RAG evaluation",
+    "AI agents",
+    "regression detection",
+    "MLOps",
+    "LLMOps",
+    "continuous evaluation",
+    "software quality",
+    "LLM-as-a-judge",
+    "drift detection",
+    "statistical gating",
+    "OpenTelemetry"
+  ],
+  "related_identifiers": [
+    {
+      "identifier": "https://github.com/Red1-Rahman/NiriZan",
+      "relation": "isSupplementTo",
+      "scheme": "url"
+    },
+    {
+      "identifier": "https://nirizan.readthedocs.io/en/latest/",
+      "relation": "isDocumentedBy",
+      "scheme": "url"
+    }
+  ]
+}
