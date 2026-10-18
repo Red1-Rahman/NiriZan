@@ -13,8 +13,12 @@ from typing import Literal
 import yaml
 from pydantic import BaseModel, ConfigDict, Field
 
+ORCID_URL_PREFIX = "https://orcid.org/"
+
 
 class Creator(BaseModel):
+    """One creator entry in .zenodo.json."""
+
     model_config = ConfigDict(strict=True, frozen=True, extra="forbid")
 
     name: str = Field(min_length=1)
@@ -23,6 +27,8 @@ class Creator(BaseModel):
 
 
 class RelatedIdentifier(BaseModel):
+    """One related identifier entry in .zenodo.json."""
+
     model_config = ConfigDict(strict=True, frozen=True, extra="forbid")
 
     identifier: str = Field(min_length=1)
@@ -32,6 +38,8 @@ class RelatedIdentifier(BaseModel):
 
 
 class ZenodoMetadata(BaseModel):
+    """The subset of Zenodo deposit metadata that NiriZan maintains."""
+
     model_config = ConfigDict(strict=True, frozen=True, extra="forbid")
 
     title: str = Field(min_length=1)
@@ -45,28 +53,80 @@ class ZenodoMetadata(BaseModel):
     related_identifiers: list[RelatedIdentifier] = Field(default_factory=list)
 
 
-def main(tag: str | None) -> None:
-    meta = ZenodoMetadata.model_validate(json.loads(Path(".zenodo.json").read_text("utf-8")))
-    cff = yaml.safe_load(Path("CITATION.cff").read_text("utf-8"))
-    version: str = tomllib.loads(Path("pyproject.toml").read_text("utf-8"))["project"]["version"]
+class CffAuthor(BaseModel):
+    """One author entry in CITATION.cff."""
 
+    model_config = ConfigDict(frozen=True, extra="ignore")
+
+    family_names: str = Field(alias="family-names", min_length=1)
+    given_names: str = Field(alias="given-names", min_length=1)
+    orcid: str | None = None
+
+    def zenodo_name(self) -> str:
+        """Return the name in Zenodo's "Family, Given" form."""
+        return f"{self.family_names}, {self.given_names}"
+
+    def bare_orcid(self) -> str | None:
+        """Return the ORCID without the URL prefix, or None if absent."""
+        if self.orcid is None:
+            return None
+        return self.orcid.removeprefix(ORCID_URL_PREFIX)
+
+
+class CitationFile(BaseModel):
+    """The subset of CITATION.cff that must agree with .zenodo.json."""
+
+    model_config = ConfigDict(frozen=True, extra="ignore")
+
+    version: str
+    license: str
+    keywords: list[str] = Field(min_length=1)
+    authors: list[CffAuthor] = Field(min_length=1)
+
+
+def check_consistency(
+    meta: ZenodoMetadata, cff: CitationFile, version: str, tag: str | None
+) -> list[str]:
+    """Return a list of human-readable mismatches between the metadata sources."""
     errors: list[str] = []
-    if str(cff["version"]) != version:
-        errors.append(f"CITATION.cff version {cff['version']} != pyproject version {version}")
+
+    if cff.version != version:
+        errors.append(f"CITATION.cff version {cff.version} != pyproject version {version}")
     if tag is not None and tag.removeprefix("v") != version:
         errors.append(f"release tag {tag} != pyproject version {version}")
-    if meta.license.casefold() != str(cff["license"]).casefold():
+    if meta.license.casefold() != cff.license.casefold():
         errors.append("license differs between .zenodo.json and CITATION.cff")
 
     zen_keywords = {k.casefold() for k in meta.keywords}
-    cff_keywords = {str(k).casefold() for k in cff["keywords"]}
+    cff_keywords = {k.casefold() for k in cff.keywords}
     if zen_keywords != cff_keywords:
         errors.append(f"keywords differ: {sorted(zen_keywords ^ cff_keywords)}")
 
-    cff_orcid = str(cff["authors"][0].get("orcid", "")).removeprefix("https://orcid.org/")
-    if (meta.creators[0].orcid or "") != cff_orcid:
-        errors.append("first author ORCID differs between .zenodo.json and CITATION.cff")
+    if len(meta.creators) != len(cff.authors):
+        errors.append(
+            f"creator count differs: .zenodo.json has {len(meta.creators)}, "
+            f"CITATION.cff has {len(cff.authors)}"
+        )
+    for index, (creator, author) in enumerate(zip(meta.creators, cff.authors, strict=False)):
+        if creator.name != author.zenodo_name():
+            errors.append(
+                f"creator {index} name differs: {creator.name!r} != {author.zenodo_name()!r}"
+            )
+        if creator.orcid != author.bare_orcid():
+            errors.append(
+                f"creator {index} ORCID differs: {creator.orcid!r} != {author.bare_orcid()!r}"
+            )
 
+    return errors
+
+
+def main(tag: str | None) -> None:
+    """Load all three sources, report mismatches, and emit the version for CI."""
+    meta = ZenodoMetadata.model_validate(json.loads(Path(".zenodo.json").read_text("utf-8")))
+    cff = CitationFile.model_validate(yaml.safe_load(Path("CITATION.cff").read_text("utf-8")))
+    version: str = tomllib.loads(Path("pyproject.toml").read_text("utf-8"))["project"]["version"]
+
+    errors = check_consistency(meta, cff, version, tag)
     if errors:
         for message in errors:
             print(f"::error::{message}")
