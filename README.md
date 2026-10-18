@@ -9,15 +9,22 @@
 
 <br>
 
-[![CI](https://github.com/Red1-Rahman/NiriZan/actions/workflows/ci.yml/badge.svg)](https://github.com/Red1-Rahman/NiriZan/actions/workflows/ci.yml)
-[![Packaging](https://github.com/Red1-Rahman/NiriZan/actions/workflows/packaging.yml/badge.svg)](https://github.com/Red1-Rahman/NiriZan/actions/workflows/packaging.yml)
-[![Cross-platform](https://github.com/Red1-Rahman/NiriZan/actions/workflows/cross-platform.yml/badge.svg)](https://github.com/Red1-Rahman/NiriZan/actions/workflows/cross-platform.yml)   
-[![Security (CIA)](https://github.com/Red1-Rahman/NiriZan/actions/workflows/security.yml/badge.svg)](https://github.com/Red1-Rahman/NiriZan/actions/workflows/security.yml)
-[![Scorecard supply-chain security](https://github.com/Red1-Rahman/NiriZan/actions/workflows/scorecard.yml/badge.svg)](https://github.com/Red1-Rahman/NiriZan/actions/workflows/scorecard.yml)   
-[![Documentation](https://img.shields.io/badge/Docs-Read%20the%20Docs-blue)](https://nirizan.readthedocs.io/en/latest/)
+<!-- Identity & Scholarship: provenance, permanence, licensing -->
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.23448537.svg)](https://doi.org/10.5281/zenodo.23448537)
 [![Wikidata](https://img.shields.io/badge/Wikidata-Q141130494-990000)](https://www.wikidata.org/wiki/Q141130494)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
-
+<br>
+<!-- Build & Release: does it run, pack, and port? -->
+[![CI](https://github.com/Red1-Rahman/NiriZan/actions/workflows/ci.yml/badge.svg)](https://github.com/Red1-Rahman/NiriZan/actions/workflows/ci.yml)
+[![Packaging](https://github.com/Red1-Rahman/NiriZan/actions/workflows/packaging.yml/badge.svg)](https://github.com/Red1-Rahman/NiriZan/actions/workflows/packaging.yml)
+[![Cross-platform](https://github.com/Red1-Rahman/NiriZan/actions/workflows/cross-platform.yml/badge.svg)](https://github.com/Red1-Rahman/NiriZan/actions/workflows/cross-platform.yml)
+<br>
+<!-- Security & Supply Chain: is it safe to depend on? -->
+[![Security (CIA)](https://github.com/Red1-Rahman/NiriZan/actions/workflows/security.yml/badge.svg)](https://github.com/Red1-Rahman/NiriZan/actions/workflows/security.yml)
+[![Scorecard supply-chain security](https://github.com/Red1-Rahman/NiriZan/actions/workflows/scorecard.yml/badge.svg)](https://github.com/Red1-Rahman/NiriZan/actions/workflows/scorecard.yml)
+<br>
+<!-- Documentation: how to learn it -->
+[![Documentation](https://img.shields.io/badge/Docs-Read%20the%20Docs-blue)](https://nirizan.readthedocs.io/en/latest/)
 </div>
 
 ---
