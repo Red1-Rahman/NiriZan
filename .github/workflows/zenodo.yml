@@ -1,0 +1,145 @@
+name: Zenodo archive
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: zenodo-archive
+  queue: max
+  cancel-in-progress: false
+
+jobs:
+  archive:
+    name: Archive release on Zenodo
+    if: ${{ !github.event.release.prerelease }}
+    runs-on: ubuntu-latest
+
+    environment:
+      name: zenodo
+
+    env:
+      ZENODO_API: ${{ vars.ZENODO_API_URL || 'https://zenodo.org/api' }}
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.11'
+
+      - name: Install metadata check dependencies
+        run: python -m pip install pydantic pyyaml
+
+      - name: Validate release metadata
+        id: version
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: python .github/scripts/check_zenodo_metadata.py "$TAG"
+
+      - name: Look up existing versions and the latest deposition
+        id: check
+        env:
+          ZENODO_TOKEN: ${{ secrets.ZENODO_TOKEN }}
+          CONCEPT_ID: ${{ vars.ZENODO_CONCEPT_ID }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          : "${CONCEPT_ID:?ZENODO_CONCEPT_ID variable is not set in the zenodo environment}"
+          AUTH="Authorization: Bearer ${ZENODO_TOKEN}"
+
+          # Authenticated requests may use size=100; anonymous ones are capped lower.
+          all=$(curl -fsS -G -H "$AUTH" "${ZENODO_API}/records" \
+            --data-urlencode "q=conceptrecid:${CONCEPT_ID}" \
+            --data-urlencode "all_versions=true" \
+            --data-urlencode "size=100")
+
+          if jq -e --arg v "$VERSION" \
+            '.hits.hits[] | select(.metadata.version == $v)' \
+            <<<"$all" >/dev/null; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+          # Zenodo requires newversion on the latest published version.
+          latest=$(curl -fsS -G -H "$AUTH" "${ZENODO_API}/records" \
+            --data-urlencode "q=conceptrecid:${CONCEPT_ID}" \
+            --data-urlencode "all_versions=true" \
+            --data-urlencode "sort=mostrecent" \
+            --data-urlencode "size=1" \
+            | jq -r '.hits.hits[0].id // empty')
+
+          if [ -z "$latest" ]; then
+            echo "::error::No published record found for concept ${CONCEPT_ID}. Create the first record manually."
+            exit 1
+          fi
+          echo "latest_id=${latest}" >> "$GITHUB_OUTPUT"
+          echo "Latest published record id: ${latest}"
+
+      - name: Build release files
+        if: ${{ steps.check.outputs.exists == 'false' }}
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          mkdir release
+          git archive --format=zip --prefix="nirizan-${TAG}/" \
+            -o "release/nirizan-${TAG}-source.zip" HEAD
+          python -m pip install --upgrade pip build
+          python -m build --outdir release/
+          ls -lah release/
+
+      - name: Create new Zenodo version and publish
+        if: ${{ steps.check.outputs.exists == 'false' }}
+        env:
+          ZENODO_TOKEN: ${{ secrets.ZENODO_TOKEN }}
+          LATEST_ID: ${{ steps.check.outputs.latest_id }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          AUTH="Authorization: Bearer ${ZENODO_TOKEN}"
+          DEPOSITS="${ZENODO_API}/deposit/depositions"
+
+          # 1. Create a draft of a new version from the latest published version
+          draft_url=$(curl -fsS -X POST -H "$AUTH" \
+            "${DEPOSITS}/${LATEST_ID}/actions/newversion" \
+            | jq -r '.links.latest_draft')
+          draft=$(curl -fsS -H "$AUTH" "$draft_url")
+          draft_id=$(jq -r '.id' <<<"$draft")
+          bucket=$(jq -r '.links.bucket' <<<"$draft")
+
+          # 2. Remove files inherited from the previous version
+          for fid in $(jq -r '.files[].id' <<<"$draft"); do
+            curl -fsS -X DELETE -H "$AUTH" "${DEPOSITS}/${draft_id}/files/${fid}"
+          done
+
+          # 3. Upload this release's files
+          for f in release/*; do
+            curl -fsS -H "$AUTH" --upload-file "$f" "${bucket}/$(basename "$f")"
+          done
+
+          # 4. Replace the draft metadata with .zenodo.json plus version and date
+          today=$(date -u +%F)
+          jq --arg v "$VERSION" --arg d "$today" \
+            '{metadata: (. + {version: $v, publication_date: $d})}' \
+            .zenodo.json \
+            | curl -fsS -X PUT -H "$AUTH" -H "Content-Type: application/json" \
+                -d @- "${DEPOSITS}/${draft_id}" >/dev/null
+
+          # 5. Publish (irreversible)
+          curl -fsS -X POST -H "$AUTH" \
+            "${DEPOSITS}/${draft_id}/actions/publish" >/dev/null
+
+      - name: Skip archive
+        if: ${{ steps.check.outputs.exists == 'true' }}
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          echo "Version ${VERSION} already exists on Zenodo."
+          echo "No archive is necessary."
+          echo "This is a successful no-op."
