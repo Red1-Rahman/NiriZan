@@ -44,7 +44,7 @@ from nirizan._logging import (
     set_log_level,
 )
 
-__version__ = "0.5.3"
+__version__ = "0.5.4"
 
 __all__ = [
     "__version__",

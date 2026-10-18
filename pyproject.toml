@@ -1,6 +1,6 @@
 [project]
 name = "nirizan"
-version = "0.5.3"
+version = "0.5.4"
 description = "Continuous evaluation infrastructure for production AI systems"
 readme = "README.md"
 license = { text = "Apache-2.0" }

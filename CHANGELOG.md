@@ -12,6 +12,8 @@ considered stable.
 
 ## [Unreleased]
 
+## [0.5.4] - 2026-10-18
+
 ### Added
 
 - **Automated Zenodo archiving** for published, non-prerelease GitHub Releases through `.github/workflows/zenodo.yml`. The workflow validates the release metadata, skips versions already archived, builds the source zip, wheel, and sdist, creates a new Zenodo version from the latest published record, uploads the files, applies the metadata from `.zenodo.json`, and publishes. Runs share one concurrency group with `queue: max`, so pending runs wait instead of replacing one another, and each run is gated by the `zenodo` environment.
@@ -278,7 +280,8 @@ published on 2026-08-23.
 - Security-focused CI/CD and supply-chain controls; PyPI publishing via
   GitHub Actions Trusted Publishing.
 
-[Unreleased]: https://github.com/Red1-Rahman/NiriZan/compare/v0.5.3...HEAD
+[Unreleased]: https://github.com/Red1-Rahman/NiriZan/compare/v0.5.4...HEAD
+[0.5.4]: https://github.com/Red1-Rahman/NiriZan/releases/tag/v0.5.4
 [0.5.3]: https://github.com/Red1-Rahman/NiriZan/releases/tag/v0.5.3
 [0.5.2]: https://github.com/Red1-Rahman/NiriZan/releases/tag/v0.5.2
 [0.5.1]: https://github.com/Red1-Rahman/NiriZan/releases/tag/v0.5.1
