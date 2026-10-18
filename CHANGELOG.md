@@ -10,7 +10,7 @@ While NiriZan is on a `0.x` version, breaking changes are reflected in a
 jump to `1.0.0` is reserved for the point the public contract surface is
 considered stable.
 
-## [0.5.4] - [Unreleased]
+## [Unreleased]
 
 ### Added
 
