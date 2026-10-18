@@ -7,6 +7,12 @@ on:
 permissions:
   contents: read
 
+# One archive run at a time for this Zenodo record. Queue, never cancel:
+# a cancelled run could leave a half-edited draft behind.
+concurrency:
+  group: zenodo-archive
+  cancel-in-progress: false
+
 jobs:
   archive:
     name: Archive release on Zenodo
@@ -37,24 +43,43 @@ jobs:
           TAG: ${{ github.event.release.tag_name }}
         run: python .github/scripts/check_zenodo_metadata.py "$TAG"
 
-      - name: Check whether version exists on Zenodo
+      - name: Look up existing versions and the latest deposition
         id: check
         env:
+          ZENODO_TOKEN: ${{ secrets.ZENODO_TOKEN }}
           CONCEPT_ID: ${{ vars.ZENODO_CONCEPT_ID }}
           VERSION: ${{ steps.version.outputs.version }}
         run: |
-          resp=$(curl -fsS -G "${ZENODO_API}/records" \
+          set -euo pipefail
+          AUTH="Authorization: Bearer ${ZENODO_TOKEN}"
+
+          # Authenticated requests may use size=100; anonymous ones are capped lower.
+          all=$(curl -fsS -G -H "$AUTH" "${ZENODO_API}/records" \
             --data-urlencode "q=conceptrecid:${CONCEPT_ID}" \
             --data-urlencode "all_versions=true" \
             --data-urlencode "size=100")
 
           if jq -e --arg v "$VERSION" \
             '.hits.hits[] | select(.metadata.version == $v)' \
-            <<<"$resp" >/dev/null; then
+            <<<"$all" >/dev/null; then
             echo "exists=true" >> "$GITHUB_OUTPUT"
           else
             echo "exists=false" >> "$GITHUB_OUTPUT"
           fi
+
+          # Zenodo requires newversion on the latest published version.
+          latest=$(curl -fsS -G -H "$AUTH" "${ZENODO_API}/records" \
+            --data-urlencode "q=conceptrecid:${CONCEPT_ID}" \
+            --data-urlencode "all_versions=true" \
+            --data-urlencode "sort=mostrecent" \
+            --data-urlencode "size=1" \
+            | jq -r '.hits.hits[0].id // empty')
+
+          if [ -z "$latest" ]; then
+            echo "::error::No published record found for concept ${CONCEPT_ID}. Create the first record manually."
+            exit 1
+          fi
+          echo "latest_id=${latest}" >> "$GITHUB_OUTPUT"
 
       - name: Build release files
         if: ${{ steps.check.outputs.exists == 'false' }}
@@ -72,16 +97,16 @@ jobs:
         if: ${{ steps.check.outputs.exists == 'false' }}
         env:
           ZENODO_TOKEN: ${{ secrets.ZENODO_TOKEN }}
-          DEPOSITION_ID: ${{ vars.ZENODO_DEPOSITION_ID }}
+          LATEST_ID: ${{ steps.check.outputs.latest_id }}
           VERSION: ${{ steps.version.outputs.version }}
         run: |
           set -euo pipefail
           AUTH="Authorization: Bearer ${ZENODO_TOKEN}"
           DEPOSITS="${ZENODO_API}/deposit/depositions"
 
-          # 1. Create a draft of a new version
+          # 1. Create a draft of a new version from the latest published version
           draft_url=$(curl -fsS -X POST -H "$AUTH" \
-            "${DEPOSITS}/${DEPOSITION_ID}/actions/newversion" \
+            "${DEPOSITS}/${LATEST_ID}/actions/newversion" \
             | jq -r '.links.latest_draft')
           draft=$(curl -fsS -H "$AUTH" "$draft_url")
           draft_id=$(jq -r '.id' <<<"$draft")
