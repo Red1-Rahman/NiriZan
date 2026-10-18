@@ -26,6 +26,7 @@ considered stable.
 ### Documentation
 
 - Added `docs/releasing.md`, the runbook for merging pull requests, bumping the version, publishing a release, and recovering from a failed release.
+- Updated the README: added the Zenodo concept DOI badge, regrouped the badges by purpose, and aligned the subtitle with the Zenodo record title.
 
 ## [0.5.3] - 2026-10-16
 
