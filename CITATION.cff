@@ -29,4 +29,8 @@ keywords:
   - "LLMOps"
   - "continuous evaluation"
   - "software quality"
+  - "LLM-as-a-judge"
+  - "drift detection"
+  - "statistical gating"
+  - "OpenTelemetry"
 version: "0.5.3"
