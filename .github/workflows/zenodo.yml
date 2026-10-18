@@ -51,6 +51,7 @@ jobs:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
           set -euo pipefail
+          : "${CONCEPT_ID:?ZENODO_CONCEPT_ID variable is not set in the zenodo environment}"
           AUTH="Authorization: Bearer ${ZENODO_TOKEN}"
 
           # Authenticated requests may use size=100; anonymous ones are capped lower.
@@ -80,6 +81,7 @@ jobs:
             exit 1
           fi
           echo "latest_id=${latest}" >> "$GITHUB_OUTPUT"
+          echo "Latest published record id: ${latest}"
 
       - name: Build release files
         if: ${{ steps.check.outputs.exists == 'false' }}
