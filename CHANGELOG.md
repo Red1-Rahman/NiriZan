@@ -10,6 +10,23 @@ While NiriZan is on a `0.x` version, breaking changes are reflected in a
 jump to `1.0.0` is reserved for the point the public contract surface is
 considered stable.
 
+## [0.5.4] - [Unreleased]
+
+### Added
+
+- **Automated Zenodo archiving** for published, non-prerelease GitHub Releases through `.github/workflows/zenodo.yml`. The workflow validates the release metadata, skips versions already archived, builds the source zip, wheel, and sdist, creates a new Zenodo version from the latest published record, uploads the files, applies the metadata from `.zenodo.json`, and publishes. Runs share one concurrency group with `queue: max`, so pending runs wait instead of replacing one another, and each run is gated by the `zenodo` environment.
+- **`.zenodo.json`** with the Zenodo metadata for the software record: title, creator with ORCID and affiliations, license, keywords, and related works.
+- **`.github/scripts/check_zenodo_metadata.py`**, a Pydantic-based consistency check. It validates `.zenodo.json` and `CITATION.cff`, and compares the version (against `pyproject.toml` and the release tag), license, keywords, and each creator's name, ORCID, and affiliation. It requires a well-formed `date-released`.
+
+### Changed
+
+- `CITATION.cff` now carries `date-released`, the author affiliation, the Zenodo concept DOI (`10.5281/zenodo.23448537`), and four additional keywords (`LLM-as-a-judge`, `drift detection`, `statistical gating`, `OpenTelemetry`).
+- No runtime or API change.
+
+### Documentation
+
+- Added `docs/releasing.md`, the runbook for merging pull requests, bumping the version, publishing a release, and recovering from a failed release.
+
 ## [0.5.3] - 2026-10-16
 
 ### Changed
@@ -260,6 +277,7 @@ published on 2026-08-23.
 - Security-focused CI/CD and supply-chain controls; PyPI publishing via
   GitHub Actions Trusted Publishing.
 
+[Unreleased]: https://github.com/Red1-Rahman/NiriZan/compare/v0.5.3...HEAD
 [0.5.3]: https://github.com/Red1-Rahman/NiriZan/releases/tag/v0.5.3
 [0.5.2]: https://github.com/Red1-Rahman/NiriZan/releases/tag/v0.5.2
 [0.5.1]: https://github.com/Red1-Rahman/NiriZan/releases/tag/v0.5.1
