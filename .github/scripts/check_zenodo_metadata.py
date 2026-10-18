@@ -14,6 +14,7 @@ import yaml
 from pydantic import BaseModel, ConfigDict, Field
 
 ORCID_URL_PREFIX = "https://orcid.org/"
+ISO_DATE_PATTERN = r"^\d{4}-\d{2}-\d{2}$"
 
 
 class Creator(BaseModel):
@@ -33,7 +34,7 @@ class RelatedIdentifier(BaseModel):
 
     identifier: str = Field(min_length=1)
     relation: str = Field(min_length=1)
-    scheme: str = Field(min_length=1)
+    scheme: str | None = None
     resource_type: str | None = None
 
 
@@ -61,6 +62,7 @@ class CffAuthor(BaseModel):
     family_names: str = Field(alias="family-names", min_length=1)
     given_names: str = Field(alias="given-names", min_length=1)
     orcid: str | None = None
+    affiliation: str | None = None
 
     def zenodo_name(self) -> str:
         """Return the name in Zenodo's "Family, Given" form."""
@@ -79,6 +81,7 @@ class CitationFile(BaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore")
 
     version: str
+    date_released: str = Field(alias="date-released", pattern=ISO_DATE_PATTERN)
     license: str
     keywords: list[str] = Field(min_length=1)
     authors: list[CffAuthor] = Field(min_length=1)
@@ -116,6 +119,11 @@ def check_consistency(
             errors.append(
                 f"creator {index} ORCID differs: {creator.orcid!r} != {author.bare_orcid()!r}"
             )
+        if creator.affiliation != author.affiliation:
+            errors.append(
+                f"creator {index} affiliation differs: "
+                f"{creator.affiliation!r} != {author.affiliation!r}"
+            )
 
     return errors
 
@@ -132,7 +140,7 @@ def main(tag: str | None) -> None:
             print(f"::error::{message}")
         raise SystemExit(1)
 
-    print(f"Metadata OK, version {version}")
+    print(f"Metadata OK, version {version}, released {cff.date_released}")
     output = os.environ.get("GITHUB_OUTPUT")
     if output:
         with open(output, "a", encoding="utf-8") as handle:
