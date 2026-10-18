@@ -12,6 +12,8 @@ considered stable.
 
 ## [Unreleased]
 
+- Clarified in `CITATION.cff` that the Zenodo concept DOI covers archived releases from 0.5.3.
+
 ## [0.5.4] - 2026-10-18
 
 ### Added

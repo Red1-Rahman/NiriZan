@@ -22,7 +22,7 @@ license: "Apache-2.0"
 identifiers:
   - type: doi
     value: 10.5281/zenodo.23448537
-    description: "Concept DOI (all versions)"
+    description: "Zenodo concept DOI, resolves to the latest archived version (archived releases start at 0.5.3)"
 keywords:
   - "AI evaluation"
   - "LLM evaluation"
