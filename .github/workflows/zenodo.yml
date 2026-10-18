@@ -7,10 +7,9 @@ on:
 permissions:
   contents: read
 
-# One archive run at a time for this Zenodo record. Queue, never cancel:
-# a cancelled run could leave a half-edited draft behind.
 concurrency:
   group: zenodo-archive
+  queue: max
   cancel-in-progress: false
 
 jobs:
