@@ -15,9 +15,14 @@ authors:
     given-names: "Redwan"
     email: "redwanrahman2002@outlook.com"
     orcid: "https://orcid.org/0009-0005-8407-8941"
+    affiliation: "BRAC University; Daffodil International University"
 repository-code: "https://github.com/Red1-Rahman/NiriZan"
 url: "https://github.com/Red1-Rahman/NiriZan"
 license: "Apache-2.0"
+identifiers:
+  - type: doi
+    value: 10.5281/zenodo.23448537
+    description: "Concept DOI (all versions)"
 keywords:
   - "AI evaluation"
   - "LLM evaluation"
@@ -34,3 +39,4 @@ keywords:
   - "statistical gating"
   - "OpenTelemetry"
 version: "0.5.3"
+date-released: "2026-10-16"
