@@ -2,7 +2,7 @@
 
 # NiriZan
 
-### Continuous Evaluation Infrastructure for Production AI
+### Continuous Evaluation Infrastructure and Python Framework for Production AI
 
 *"Inspection through Measurement"*
 *"Engineering Trust Through Continuous Evaluation"*
