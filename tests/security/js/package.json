@@ -1,0 +1,8 @@
+{
+  "name": "nirizan-security-static-checks",
+  "version": "1.0.0",
+  "private": true,
+  "devDependencies": {
+    "js-yaml": "^4.3.2"
+  }
+}

@@ -42,7 +42,7 @@ jobs:
           fi
 
       - name: Run pytest
-        run: pytest -rs
+        run: pytest -rs --ignore=tests/security
 
       - name: Run mypy --strict
         if: matrix.extras == 'dev,otel'

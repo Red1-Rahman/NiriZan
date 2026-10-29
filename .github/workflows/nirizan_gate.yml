@@ -34,7 +34,7 @@ jobs:
 
       - name: Run Test Suite
         run: |
-          python -m pytest
+          python -m pytest --ignore=tests/security
 
       - name: Execute Nirizan Statistical Gate
         env:
