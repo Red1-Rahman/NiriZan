@@ -12,6 +12,36 @@ considered stable.
 
 ## [Unreleased]
 
+### Added
+
+- **Standalone security regression suite** under `tests/security/`, kept separate from the regular test run. Each tracked weakness is pinned by a test marked `xfail(strict=True)` and linked to a finding ID (`NZ-SEC-00x`). When a fix lands, the test turns into an XPASS and fails the run, which forces the finding to be reviewed and its exception removed. The suite covers:
+  - `test_boundary_isolation.py`: atomic rejection of cross-trace span-ID collisions (passing check), plus tracked findings for producer-controlled OTel `service.name` (NZ-SEC-002) and trace upsert application takeover (NZ-SEC-003).
+  - `test_resource_bounds.py`: unbounded native tracer span retention (NZ-SEC-004), unbounded collector queue (NZ-SEC-007), and `cohens_d` returning NaN for singleton samples (NZ-SEC-005).
+  - `test_judge_integrity.py`: the LLM judge silently clamping or accepting invalid scores (NZ-SEC-006) and `LLMJudgeResponse` never being validated in `evaluate()` (NZ-SEC-006b).
+  - `test_ast_security_gate.py`: the dangerous-call gate missing `from os import system` style aliases (NZ-SEC-001).
+  - `test_logging_hygiene.py`: CR/LF escaping in plain messages, bare LF, and exception messages (NZ-SEC-008).
+  - `test_supply_chain_static.py`: full-SHA action pinning, unpinned installs in `id-token` jobs, `persist-credentials: false` on checkouts under write permissions, and a review notice for `workflow_run` branch filters. Both `.yml` and `.yaml` workflows are scanned.
+- **Node static checks** under `tests/security/js/`, with a pinned `package.json` (`js-yaml`):
+  - `check-workflow-pins.cjs` verifies SHA-pinned actions, explicit token permissions for jobs that install packages, no package installs under privileged permissions (including `write-all` and any write scope), `persist-credentials: false` on checkouts, and a `head_repository.full_name == github.repository` guard on every job in `workflow_run` workflows.
+  - `validate-findings-schema.cjs` validates `known-findings.json`: required fields, status values, confidence range, `source_refs` shape, and positive, ascending line numbers or ranges.
+  - `known-findings.json` is the machine-readable register of findings NZ-SEC-002 to NZ-SEC-008.
+- **`.github/workflows/security-tests.yml`**, a manually dispatched workflow with two independent jobs (Python security tests and workflow static analysis). Actions are pinned to full SHAs, permissions are `contents: read`, checkouts use `persist-credentials: false`, and the command output is uploaded as artifacts.
+- **Launch scripts for local runs**: `console/linux/run-security-tests.sh`, `console/macOS/run-security-tests.sh`, and `console/windows/run-security-tests.ps1`. Each runs the pytest suite and the Node checks independently and returns a failure status if any step fails.
+
+### Changed
+
+- `.github/workflows/ci.yml` and `.github/workflows/nirizan_gate.yml` now run pytest with `--ignore=tests/security`, so the security suite only runs when dispatched or launched locally.
+- `.gitignore` now ignores `node_modules/`.
+
+### Security
+
+- **Log injection hardening (NZ-SEC-008).** `NiriZanFormatter` now escapes CR and LF in the formatted message, in exception text, and in stack info. Producer or model influenced strings (span names, raw completions, attribute values, exception messages) can no longer forge additional log records, and one log call always renders as one line. The original content is preserved in escaped form (`\r`, `\n`) rather than stripped. A benign newline inside a traceback is also escaped, which is an accepted tradeoff.
+- Findings NZ-SEC-002 to NZ-SEC-007 are now tracked and unresolved. They are pinned by strict `xfail` tests and listed in `tests/security/js/known-findings.json`; no behavior change is made for them in this entry.
+
+### Documentation
+
+- Added `tests/security/README.md` describing the suite, the `xfail(strict=True)` convention, and the mapping from finding IDs to tests.
+- Added a README for each platform under `console/` with instructions for running the security checks.
 - Clarified in `CITATION.cff` that the Zenodo concept DOI covers archived releases from 0.5.3.
 
 ## [0.5.4] - 2026-10-18
