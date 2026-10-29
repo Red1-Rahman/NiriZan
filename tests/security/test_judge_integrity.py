@@ -1,8 +1,6 @@
 # tests/security/test_judge_integrity.py
 """LLM judge output validation regression coverage."""
 
-import math
-
 import pytest
 
 from nirizan.metrics.llm_judge import LLMJudge, LLMJudgeResponse
@@ -34,7 +32,10 @@ def test_judge_rejects_nonfinite_or_out_of_range_scores(completion):
     else:
         # Accept any explicit invalidity signal the eventual fix chooses to
         # expose; adjust this once NZ-SEC-006's result contract is decided.
-        raised_or_marked_invalid = getattr(result, "score", None) is None or getattr(result, "is_valid", True) is False
+        raised_or_marked_invalid = (
+            getattr(result, "score", None) is None
+            or getattr(result, "is_valid", True) is False
+        )
 
     assert raised_or_marked_invalid, (
         "judge.evaluate() must reject or explicitly flag a non-finite/"
@@ -52,9 +53,11 @@ def test_evaluate_constructs_and_validates_response_model(monkeypatch):
                      completion_fn=lambda _: '{"score": 0.5, "reasoning": "ok"}')
     constructed = []
     original = LLMJudgeResponse.model_validate
+
     def recording_validate(value, *args, **kwargs):
         constructed.append(value)
         return original(value, *args, **kwargs)
+
     monkeypatch.setattr(LLMJudgeResponse, "model_validate", classmethod(recording_validate))
     judge.evaluate(input_text="x", output_text="y")
     assert constructed, "LLMJudgeResponse remains dead/unvalidated code in evaluate()"

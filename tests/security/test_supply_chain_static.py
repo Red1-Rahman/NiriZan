@@ -10,6 +10,8 @@ ROOT = Path(__file__).resolve().parents[2]
 # *.yml silently skips any workflow using the .yaml extension.
 WORKFLOW_PATTERNS = ("*.yml", "*.yaml")
 
+_UNPINNED_INSTALL_ALLOWLIST = r"--require-hashes|@[0-9a-f]{40}"
+
 
 def _workflow_paths():
     paths = []
@@ -34,7 +36,9 @@ def test_privileged_workflows_do_not_install_unpinned_packages_before_publish():
         text = path.read_text(encoding="utf-8")
         if "id-token: write" in text:
             for n, line in enumerate(text.splitlines(), 1):
-                if re.search(r"\bpip install\b", line) and not re.search(r"--require-hashes|@[0-9a-f]{40}", line):
+                has_install = re.search(r"\bpip install\b", line)
+                is_allowlisted = re.search(_UNPINNED_INSTALL_ALLOWLIST, line)
+                if has_install and not is_allowlisted:
                     issues.append(f"{path.name}:{n}: {line.strip()}")
     assert not issues, "Unpinned installs in id-token jobs:\n" + "\n".join(issues)
 
@@ -47,7 +51,10 @@ def test_write_permission_checkout_disables_persisted_credentials():
             continue
         for block in re.findall(r"(?ms)^\s*- uses:\s*actions/checkout@.*?(?=^\s*- |\Z)", text):
             if "persist-credentials: false" not in block:
-                issues.append(f"{path.name}: checkout under write permissions lacks persist-credentials: false")
+                issues.append(
+                    f"{path.name}: checkout under write permissions "
+                    "lacks persist-credentials: false"
+                )
     assert not issues, "Unsafe checkout configuration:\n" + "\n".join(issues)
 
 
