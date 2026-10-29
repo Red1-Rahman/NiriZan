@@ -11,6 +11,23 @@ if (!Array.isArray(entries)) entries = entries?.findings;
 const required = ['fingerprint_id','title','severity','confidence','preconditions','source_refs','sink','data_flow','security_impact','reproduction_steps','expected_finding_if_exploited','affected_scope','recommended_mitigation','false_positive_considerations','unresolved','status'];
 const errors = [];
 if (!Array.isArray(entries)) errors.push('1: expected an array of findings');
+
+function isValidLine(lineVal) {
+  if (typeof lineVal === 'number') return Number.isInteger(lineVal) && lineVal > 0;
+  if (typeof lineVal !== 'string') return false;
+  const trimmed = lineVal.trim();
+  const single = /^\d+$/.exec(trimmed);
+  if (single) return Number(trimmed) > 0;
+  const range = /^(\d+)-(\d+)$/.exec(trimmed);
+  if (!range) return false;
+  const start = Number(range[1]);
+  const end = Number(range[2]);
+  // Both endpoints must be positive and strictly ascending -- "0", "0-0"
+  // and "9-3" previously passed because the regex only checked shape, not
+  // that the range actually identifies a valid, ascending span of lines.
+  return start > 0 && end > 0 && start < end;
+}
+
 for (const [i, f] of (entries || []).entries()) {
   const line = i + 1;
   if (!f || typeof f !== 'object' || Array.isArray(f)) { errors.push(`${line}: expected object`); continue; }
@@ -24,21 +41,14 @@ for (const [i, f] of (entries || []).entries()) {
   } else {
     f.source_refs.forEach((r, n) => {
       if (!r || typeof r !== 'object' || Array.isArray(r)) { errors.push(`${line}: source_refs[${n}] must be an object`); return; }
-      // Presence alone is not enough: {file:null, function:false, line:"?", statement:""}
-      // satisfies `k in r` for every key while carrying no usable attribution.
-      // Require file/function/statement to be populated strings and line to be
-      // a positive integer (or a string that parses as one, for "12-34" ranges).
       for (const k of ['file', 'function', 'statement']) {
         if (!(k in r)) errors.push(`${line}: source_refs[${n}] missing ${k}`);
         else if (typeof r[k] !== 'string' || !r[k].trim()) errors.push(`${line}: source_refs[${n}].${k} must be a non-empty string`);
       }
       if (!('line' in r)) {
         errors.push(`${line}: source_refs[${n}] missing line`);
-      } else {
-        const lineVal = r.line;
-        const isPositiveInt = typeof lineVal === 'number' && Number.isInteger(lineVal) && lineVal > 0;
-        const isValidRangeString = typeof lineVal === 'string' && /^\d+(-\d+)?$/.test(lineVal.trim());
-        if (!isPositiveInt && !isValidRangeString) errors.push(`${line}: source_refs[${n}].line must be a positive integer or a "N" / "N-M" string`);
+      } else if (!isValidLine(r.line)) {
+        errors.push(`${line}: source_refs[${n}].line must be a positive integer, or a "N-M" string with both endpoints positive and N < M`);
       }
     });
   }
