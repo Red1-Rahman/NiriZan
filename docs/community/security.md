@@ -20,7 +20,7 @@ NiriZan currently has a single branch, `main`. There are no separate long-term m
 
 The latest released version is `0.5.4` (released 2026-10-18). The `CHANGELOG.md` is the authoritative record of NiriZan's released versions and changes.
 
-`main` may contain changes that have not yet been released. Security fixes are developed on `main` and incorporated into subsequent releases as appropriate.
+`main` may contain changes that have not yet been released. Security fixes are developed on `main` and incorporated into subsequent releases as appropriate. For example, the log injection fix (NZ-SEC-008) is on `main` and is not part of `0.5.4`.
 
 | Version / Branch                      | Supported                         |
 | ------------------------------------- | --------------------------------- |
@@ -124,6 +124,7 @@ NiriZan maintains automated security checks as part of its development and CI/CD
 The current security tooling includes:
 
 - AST-based security regression tests for project-specific security invariants
+- A standalone security regression suite (`tests/security/`) with finding-linked tests, Node-based workflow pin and permission checks, and a findings schema validator
 - Bandit for Python security analysis
 - flake8, dlint, and dodgy for additional source-level checks
 - Semgrep for static security analysis
@@ -140,6 +141,31 @@ The current security tooling includes:
 These controls are intended to provide multiple layers of detection across source code, dependencies, package artifacts, secrets, and the project's software supply chain.
 
 The security checks are automated safeguards, not a guarantee that the project is free from vulnerabilities.
+
+### Security Regression Suite
+
+The standalone suite lives in `tests/security/` and is excluded from the regular CI test run. It can be run in two ways:
+
+- On demand through the manually dispatched `Security Regression Tests` GitHub Actions workflow (`.github/workflows/security-tests.yml`).
+- Locally, with `console/linux/run-security-tests.sh`, `console/macOS/run-security-tests.sh`, or `console/windows/run-security-tests.ps1` from the repository root.
+
+The suite covers trace identity and ownership boundaries, resource bounds, LLM judge output integrity, log hygiene, the AST security gate, and static checks of GitHub Actions workflows (SHA pinning, token permissions, credential persistence, and `workflow_run` guards).
+
+## Known Findings
+
+Weaknesses identified through internal review are tracked in `tests/security/js/known-findings.json` and pinned by tests marked `xfail(strict=True)`. When a fix lands, the corresponding test fails as an unexpected pass, so the finding must be reviewed and its exception removed before the suite is green again.
+
+| ID | Area | Severity | Status |
+| --- | --- | --- | --- |
+| NZ-SEC-002 | OTel `service.name` is producer controlled | Medium | Tracked, unresolved |
+| NZ-SEC-003 | Trace upsert permits application ownership takeover | Medium | Tracked, unresolved |
+| NZ-SEC-004 | Native tracer retains spans without a bound | Medium | Tracked, unresolved |
+| NZ-SEC-005 | `cohens_d` returns NaN for singleton samples | Low | Tracked, unresolved |
+| NZ-SEC-006 | LLM judge silently clamps invalid scores | Medium | Tracked, unresolved |
+| NZ-SEC-007 | Collector queue is unbounded | Medium | Tracked, unresolved |
+| NZ-SEC-008 | CRLF log injection | Low | Fixed on `main`, not yet released |
+
+Several of these assume untrusted or semi-trusted producers, a long-lived process, or sustained load, and some may be constrained by deployment-level controls. Operators who ingest traces from sources they do not fully control should account for them. Tracked findings do not replace private reporting: if you find a new issue, or a way to exploit a tracked one beyond what is described, please report it as described above.
 
 ## Dependency Management
 
