@@ -36,6 +36,7 @@ flowchart TB
     reporting --> trust
     storage --> instrumentation
     storage --> metrics
+    storage --> root
     trust --> metrics
 ```
 
@@ -83,7 +84,7 @@ flowchart TB
 | `nirizan.storage` | `src/nirizan/storage/__init__.py` | _none_ |
 | `nirizan.storage.baselines` | `src/nirizan/storage/baselines.py` | `nirizan.storage.models` |
 | `nirizan.storage.experiment_store` | `src/nirizan/storage/experiment_store.py` | `nirizan.storage.models` |
-| `nirizan.storage.models` | `src/nirizan/storage/models.py` | `nirizan.instrumentation.spans`, `nirizan.metrics.base` |
+| `nirizan.storage.models` | `src/nirizan/storage/models.py` | `nirizan._logging`, `nirizan.instrumentation.spans`, `nirizan.metrics.base` |
 | `nirizan.storage.run_repository` | `src/nirizan/storage/run_repository.py` | `nirizan.storage.models` |
 | `nirizan.storage.session_repository` | `src/nirizan/storage/session_repository.py` | `nirizan.instrumentation.sessions` |
 | `nirizan.storage.trace_repository` | `src/nirizan/storage/trace_repository.py` | `nirizan.instrumentation.spans`, `nirizan.storage.models` |
@@ -111,6 +112,7 @@ flowchart TB
 | `nirizan.gate.verdict` | `bootstrap_delta_ci` | no (via `from ... import`) |
 | `nirizan.instrumentation.exporters` | `ConsoleExporter` | no (via `from ... import`) |
 | `nirizan.instrumentation.exporters` | `InMemoryExporter` | no (via `from ... import`) |
+| `nirizan.instrumentation.otel._id_mapping` | `otel_trace_id_to_uuid` | no (via `from ... import`) |
 | `nirizan.instrumentation.otel._id_mapping` | `uuid_to_otel_span_id` | no (via `from ... import`) |
 | `nirizan.instrumentation.otel.from_otel` | `NiriZanSpanProcessor` | no (via `from ... import`) |
 | `nirizan.instrumentation.otel.from_otel` | `ProcessorConfig` | no (via `from ... import`) |
