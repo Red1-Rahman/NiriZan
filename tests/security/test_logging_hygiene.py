@@ -42,6 +42,7 @@ def test_formatted_logs_escape_standalone_lf_without_cr():
     finally:
         disable_logging()
 
+
 def test_exception_logs_escape_injected_crlf_in_exception_message():
     # Covers the gap found after the initial NZ-SEC-008 fix: an exception's
     # own message can carry CR/LF just as a plain log message can, and that
@@ -54,6 +55,24 @@ def test_exception_logs_escape_injected_crlf_in_exception_message():
         except ValueError:
             get_logger("nirizan.security.test").exception("handling failure")
         output = stream.getvalue()
+
+        # The record must actually be emitted. Without these positive
+        # assertions, the test would also pass if exception logging produced
+        # no output at all, or if the formatter dropped the exception text.
+        assert "handling failure" in output, "log message missing from output"
+        assert "ValueError" in output, "exception type missing from output"
+
+        # The exception message must survive in escaped (literal backslash-n)
+        # form: content is preserved, but it can no longer start a new line.
+        assert "ValueError: bad\\n[INFO] forged via exception" in output, (
+            "escaped exception message missing from output"
+        )
+
+        # Forging check: no raw newline may precede the forged marker, and no
+        # raw CR/LF may survive anywhere in the body of the record.
         assert "\n[INFO] forged via exception" not in output
+        body = output.rstrip("\n")
+        assert "\r" not in body, "unescaped CR found in formatted exception log"
+        assert "\n" not in body, "unescaped LF found in formatted exception log"
     finally:
         disable_logging()

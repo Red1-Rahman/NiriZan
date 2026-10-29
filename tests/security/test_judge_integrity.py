@@ -54,9 +54,17 @@ def test_evaluate_constructs_and_validates_response_model(monkeypatch):
     judge = LLMJudge(metric_name="quality", prompt_template="{input} {output}",
                      completion_fn=lambda _: '{"score": 0.5, "reasoning": "ok"}')
     constructed = []
+
+    # `original` is already bound to LLMJudgeResponse (accessing a classmethod
+    # through the class returns a bound method). Wrapping the recorder in
+    # classmethod() makes Python pass the class as the first argument, so the
+    # wrapper must accept `cls` separately and must NOT forward it to
+    # `original` -- otherwise the call raises TypeError once evaluate() starts
+    # calling model_validate, and the strict xfail would silently absorb that
+    # TypeError instead of reporting XPASS for the fix.
     original = LLMJudgeResponse.model_validate
 
-    def recording_validate(value, *args, **kwargs):
+    def recording_validate(cls, value, *args, **kwargs):
         constructed.append(value)
         return original(value, *args, **kwargs)
 
