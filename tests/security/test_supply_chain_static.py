@@ -64,7 +64,7 @@ def test_workflow_run_branch_filter_review_notice(capsys):
         lines = path.read_text(encoding="utf-8").splitlines()
         for i, line in enumerate(lines):
             if re.match(r"\s*workflow_run:\s*$", line):
-                block = "\n".join(lines[i:i + 12])
+                block = "\n".join(lines[i : i + 12])
                 if "branches:" in block and "head_repository.full_name" not in "\n".join(lines):
                     notices.append(f"{path.name}: workflow_run branches filter needs manual review")
     print("\n".join(notices))

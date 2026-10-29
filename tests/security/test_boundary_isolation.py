@@ -13,8 +13,14 @@ from nirizan.storage.trace_repository import SQLiteTraceRepository
 
 def _trace(trace_id: UUID, span_id: UUID, app: str = "producer") -> Trace:
     now = datetime.now(UTC)
-    span = Span(span_id=span_id, trace_id=trace_id, kind=SpanKind.GENERATION,
-                name="root", started_at=now, ended_at=now)
+    span = Span(
+        span_id=span_id,
+        trace_id=trace_id,
+        kind=SpanKind.GENERATION,
+        name="root",
+        started_at=now,
+        ended_at=now,
+    )
     return Trace(trace_id=trace_id, application_name=app, spans=[span], created_at=now)
 
 

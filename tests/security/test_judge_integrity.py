@@ -22,8 +22,11 @@ def test_judge_rejects_nonfinite_or_out_of_range_scores(completion):
     # invalid (e.g. a None score, an error field, or a raised
     # LLMJudgeResponse validation error) so callers can tell "judge said 0"
     # from "judge response was garbage".
-    judge = LLMJudge(metric_name="quality", prompt_template="{input} {output}",
-                     completion_fn=lambda _: completion)
+    judge = LLMJudge(
+        metric_name="quality",
+        prompt_template="{input} {output}",
+        completion_fn=lambda _: completion,
+    )
     raised_or_marked_invalid = False
     try:
         result = judge.evaluate(input_text="x", output_text="y")
@@ -33,8 +36,7 @@ def test_judge_rejects_nonfinite_or_out_of_range_scores(completion):
         # Accept any explicit invalidity signal the eventual fix chooses to
         # expose; adjust this once NZ-SEC-006's result contract is decided.
         raised_or_marked_invalid = (
-            getattr(result, "score", None) is None
-            or getattr(result, "is_valid", True) is False
+            getattr(result, "score", None) is None or getattr(result, "is_valid", True) is False
         )
 
     assert raised_or_marked_invalid, (
@@ -49,8 +51,11 @@ def test_evaluate_constructs_and_validates_response_model(monkeypatch):
     # Finding NZ-SEC-006b: LLMJudgeResponse exists but evaluate() never
     # constructs or validates against it, so malformed completions bypass
     # whatever validation the model defines.
-    judge = LLMJudge(metric_name="quality", prompt_template="{input} {output}",
-                     completion_fn=lambda _: '{"score": 0.5, "reasoning": "ok"}')
+    judge = LLMJudge(
+        metric_name="quality",
+        prompt_template="{input} {output}",
+        completion_fn=lambda _: '{"score": 0.5, "reasoning": "ok"}',
+    )
     constructed = []
     original = LLMJudgeResponse.model_validate
 

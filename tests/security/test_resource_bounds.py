@@ -27,6 +27,7 @@ def test_trace_collector_queue_has_a_finite_capacity():
     class Repository:
         async def save(self, trace):
             pass
+
     assert TraceCollector(Repository()).queue.maxsize > 0
 
 
