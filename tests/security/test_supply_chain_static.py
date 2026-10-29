@@ -10,8 +10,6 @@ ROOT = Path(__file__).resolve().parents[2]
 # *.yml silently skips any workflow using the .yaml extension.
 WORKFLOW_PATTERNS = ("*.yml", "*.yaml")
 
-_UNPINNED_INSTALL_ALLOWLIST = r"--require-hashes|@[0-9a-f]{40}"
-
 
 def _workflow_paths():
     paths = []
@@ -36,9 +34,19 @@ def test_privileged_workflows_do_not_install_unpinned_packages_before_publish():
         text = path.read_text(encoding="utf-8")
         if "id-token: write" in text:
             for n, line in enumerate(text.splitlines(), 1):
-                has_install = re.search(r"\bpip install\b", line)
-                is_allowlisted = re.search(_UNPINNED_INSTALL_ALLOWLIST, line)
-                if has_install and not is_allowlisted:
+                install_match = re.search(r"\bpip3?\s+install\b(?P<rest>.*)", line)
+                if not install_match:
+                    continue
+                rest = install_match.group("rest")
+                # The pin/hash exemption must belong to the install command
+                # itself -- checking the whole line let an unrelated
+                # trailing comment containing a SHA-looking string (e.g.
+                # "pip install requests  # @0000...0000") falsely satisfy
+                # the allowlist for a genuinely unpinned install.
+                is_pinned_or_hashed = re.search(r"--require-hashes", rest) or re.search(
+                    r"[\w.-]+@[0-9a-f]{40}\b", rest
+                )
+                if not is_pinned_or_hashed:
                     issues.append(f"{path.name}:{n}: {line.strip()}")
     assert not issues, "Unpinned installs in id-token jobs:\n" + "\n".join(issues)
 
@@ -64,7 +72,7 @@ def test_workflow_run_branch_filter_review_notice(capsys):
         lines = path.read_text(encoding="utf-8").splitlines()
         for i, line in enumerate(lines):
             if re.match(r"\s*workflow_run:\s*$", line):
-                block = "\n".join(lines[i : i + 12])
+                block = "\n".join(lines[i:i + 12])
                 if "branches:" in block and "head_repository.full_name" not in "\n".join(lines):
                     notices.append(f"{path.name}: workflow_run branches filter needs manual review")
     print("\n".join(notices))
