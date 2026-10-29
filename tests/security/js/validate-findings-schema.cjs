@@ -19,8 +19,29 @@ for (const [i, f] of (entries || []).entries()) {
   if (f.status === 'needs_validation' ? f.severity !== null : typeof f.severity !== 'string') errors.push(`${line}: severity must be null only for needs_validation`);
   if (typeof f.confidence !== 'number' || f.confidence < 0 || f.confidence > 1) errors.push(`${line}: confidence must be in [0,1]`);
   for (const k of required.filter(k => !['severity','confidence','source_refs','unresolved'].includes(k))) if (typeof f[k] !== 'string' || !f[k].trim()) errors.push(`${line}: ${k} must be a non-empty string`);
-  if (!Array.isArray(f.source_refs) || !f.source_refs.length) errors.push(`${line}: source_refs must be a non-empty array`);
-  else f.source_refs.forEach((r, n) => { for (const k of ['file','function','line','statement']) if (!(k in r)) errors.push(`${line}: source_refs[${n}] missing ${k}`); });
+  if (!Array.isArray(f.source_refs) || !f.source_refs.length) {
+    errors.push(`${line}: source_refs must be a non-empty array`);
+  } else {
+    f.source_refs.forEach((r, n) => {
+      if (!r || typeof r !== 'object' || Array.isArray(r)) { errors.push(`${line}: source_refs[${n}] must be an object`); return; }
+      // Presence alone is not enough: {file:null, function:false, line:"?", statement:""}
+      // satisfies `k in r` for every key while carrying no usable attribution.
+      // Require file/function/statement to be populated strings and line to be
+      // a positive integer (or a string that parses as one, for "12-34" ranges).
+      for (const k of ['file', 'function', 'statement']) {
+        if (!(k in r)) errors.push(`${line}: source_refs[${n}] missing ${k}`);
+        else if (typeof r[k] !== 'string' || !r[k].trim()) errors.push(`${line}: source_refs[${n}].${k} must be a non-empty string`);
+      }
+      if (!('line' in r)) {
+        errors.push(`${line}: source_refs[${n}] missing line`);
+      } else {
+        const lineVal = r.line;
+        const isPositiveInt = typeof lineVal === 'number' && Number.isInteger(lineVal) && lineVal > 0;
+        const isValidRangeString = typeof lineVal === 'string' && /^\d+(-\d+)?$/.test(lineVal.trim());
+        if (!isPositiveInt && !isValidRangeString) errors.push(`${line}: source_refs[${n}].line must be a positive integer or a "N" / "N-M" string`);
+      }
+    });
+  }
   if (typeof f.unresolved !== 'boolean') errors.push(`${line}: unresolved must be boolean`);
 }
 if (errors.length) { console.error(errors.join('\n')); process.exit(1); }
