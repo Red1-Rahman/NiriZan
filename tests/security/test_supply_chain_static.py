@@ -1,14 +1,26 @@
+# tests/security/test_supply_chain_static.py
 """Static checks over GitHub Actions workflow source."""
 
-from pathlib import Path
 import re
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
+
+# GitHub Actions accepts both .yml and .yaml for workflow files; scanning only
+# *.yml silently skips any workflow using the .yaml extension.
+WORKFLOW_PATTERNS = ("*.yml", "*.yaml")
+
+
+def _workflow_paths():
+    paths = []
+    for pattern in WORKFLOW_PATTERNS:
+        paths.extend((ROOT / ".github/workflows").glob(pattern))
+    return sorted(set(paths))
 
 
 def test_workflow_action_refs_are_full_sha_pinned():
     issues = []
-    for path in sorted((ROOT / ".github/workflows").glob("*.yml")):
+    for path in _workflow_paths():
         for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
             match = re.search(r"\buses:\s*([^\s#]+)", line)
             if match and not re.search(r"@[0-9a-fA-F]{40}$", match.group(1)):
@@ -18,7 +30,7 @@ def test_workflow_action_refs_are_full_sha_pinned():
 
 def test_privileged_workflows_do_not_install_unpinned_packages_before_publish():
     issues = []
-    for path in sorted((ROOT / ".github/workflows").glob("*.yml")):
+    for path in _workflow_paths():
         text = path.read_text(encoding="utf-8")
         if "id-token: write" in text:
             for n, line in enumerate(text.splitlines(), 1):
@@ -29,7 +41,7 @@ def test_privileged_workflows_do_not_install_unpinned_packages_before_publish():
 
 def test_write_permission_checkout_disables_persisted_credentials():
     issues = []
-    for path in sorted((ROOT / ".github/workflows").glob("*.yml")):
+    for path in _workflow_paths():
         text = path.read_text(encoding="utf-8")
         if not re.search(r"(?:contents|pull-requests):\s*write", text):
             continue
@@ -41,7 +53,7 @@ def test_write_permission_checkout_disables_persisted_credentials():
 
 def test_workflow_run_branch_filter_review_notice(capsys):
     notices = []
-    for path in sorted((ROOT / ".github/workflows").glob("*.yml")):
+    for path in _workflow_paths():
         lines = path.read_text(encoding="utf-8").splitlines()
         for i, line in enumerate(lines):
             if re.match(r"\s*workflow_run:\s*$", line):
