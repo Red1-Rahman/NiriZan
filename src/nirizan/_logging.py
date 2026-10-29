@@ -32,12 +32,13 @@ def _escape_control_chars(text: str) -> str:
     """Neutralize CR/LF so a single log call cannot forge additional log lines.
 
     Producer- or model-influenced strings (span names, raw LLM completions,
-    attribute values) can reach formatted log records via `%`-style args.
-    Without this, a value containing `\\r` or `\\n` lets that content render
-    as what looks like a second, independent `[LEVEL] ...` record -- a log
-    forging vector. Escaping (not stripping) preserves the original content
-    for anyone reading the raw text, while guaranteeing one log call still
-    produces exactly one visual line.
+    attribute values, exception messages) can reach formatted log records via
+    `%`-style args or via `str(exception)`. Without this, a value containing
+    `\\r` or `\\n` lets that content render as what looks like a second,
+    independent `[LEVEL] ...` record -- a log forging vector. Escaping (not
+    stripping) preserves the original content for anyone reading the raw
+    text, while guaranteeing one log call still produces exactly one visual
+    line.
     """
     return text.replace("\r\n", "\\r\\n").replace("\r", "\\r").replace("\n", "\\n")
 
@@ -51,6 +52,16 @@ class NiriZanFormatter(logging.Formatter):
     carry producer- or model-influenced content via %-style args) is escaped
     rather than passed through verbatim, so one log call cannot be used to
     forge what looks like an additional, independent log record.
+
+    Exception text is also escaped: an exception's own message (e.g.
+    str(exc)) can carry the same kind of attacker-influenced content, and
+    that message is embedded verbatim inside the traceback text that
+    formatException() produces. The trusted scaffolding around it (frame
+    file paths, "Traceback (most recent call last):", etc.) is normally
+    free of embedded CR/LF, so escaping the whole rendered exception text
+    closes the forging path at the cost of very rarely escaping a benign
+    newline inside otherwise-trusted traceback structure -- an acceptable
+    tradeoff versus leaving exception messages as a forging vector.
     """
 
     def format(self, record: logging.LogRecord) -> str:
@@ -67,10 +78,10 @@ class NiriZanFormatter(logging.Formatter):
         if record.exc_info:
             if not record.exc_text:
                 record.exc_text = self.formatException(record.exc_info)
-            msg = f"{msg}\n{record.exc_text}"
+            msg = f"{msg}\n{_escape_control_chars(record.exc_text)}"
 
         if record.stack_info:
-            msg = f"{msg}\n{self.formatStack(record.stack_info)}"
+            msg = f"{msg}\n{_escape_control_chars(self.formatStack(record.stack_info))}"
 
         return msg
 
