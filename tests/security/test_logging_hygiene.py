@@ -41,3 +41,19 @@ def test_formatted_logs_escape_standalone_lf_without_cr():
         assert output.count("[INFO]") == 1
     finally:
         disable_logging()
+
+def test_exception_logs_escape_injected_crlf_in_exception_message():
+    # Covers the gap found after the initial NZ-SEC-008 fix: an exception's
+    # own message can carry CR/LF just as a plain log message can, and that
+    # text is embedded verbatim inside formatException()'s output.
+    stream = io.StringIO()
+    try:
+        enable_logging("INFO", stream)
+        try:
+            raise ValueError("bad\n[INFO] forged via exception")
+        except ValueError:
+            get_logger("nirizan.security.test").exception("handling failure")
+        output = stream.getvalue()
+        assert "\n[INFO] forged via exception" not in output
+    finally:
+        disable_logging()
