@@ -8,8 +8,24 @@ const dir = path.join(root, '.github', 'workflows');
 const failures = [];
 
 const WORKFLOW_EXT = /\.ya?ml$/;
-const INSTALL_RE = /\b(pip install|npm install|npm ci)\b/;
-const PRIVILEGED_KEYS = ['contents', 'pull-requests', 'id-token'];
+
+// Package-manager install detection, covering common executable forms.
+// pip3/pip, npm (install/ci), pnpm (add/install), yarn add -- not an
+// exhaustive list of every package manager, but covers the ones realistic
+// in a GitHub Actions Python/Node workflow.
+const INSTALL_RE = /\b(pip3?\s+install|npm\s+(install|ci)|pnpm\s+(add|install)|yarn\s+add)\b/;
+
+// GitHub recognizes a scalar `permissions: write-all` (grants every scope
+// write) in addition to the per-scope object form. Treating only the three
+// hardcoded keys as "privileged" missed write-all entirely, and missed any
+// other write-scoped key (packages, actions, checks, etc.) beyond the three
+// originally checked.
+const WRITE_ALL = 'write-all';
+function isPrivileged(perms) {
+  if (perms === WRITE_ALL) return true;
+  if (!perms || typeof perms !== 'object') return false;
+  return Object.values(perms).some(v => v === 'write' || v === WRITE_ALL);
+}
 
 for (const file of fs.readdirSync(dir).filter(f => WORKFLOW_EXT.test(f)).sort()) {
   const source = fs.readFileSync(path.join(dir, file), 'utf8');
@@ -21,16 +37,12 @@ for (const file of fs.readdirSync(dir).filter(f => WORKFLOW_EXT.test(f)).sort())
       console.warn(`${file}: SHA pin ${ref} has no # vX.Y.Z comment`);
   }
 
-  const workflowPerms = doc.permissions || {};
+  const workflowPerms = doc.permissions;
   for (const [id, job] of Object.entries(doc.jobs || {})) {
-    const perms = job.permissions || workflowPerms;
+    const perms = job.permissions !== undefined ? job.permissions : workflowPerms;
     const steps = job.steps || [];
-    const privileged = PRIVILEGED_KEYS.some(k => perms[k] === 'write');
+    const privileged = isPrivileged(perms);
 
-    // Flag ANY install anywhere in a privileged job: in the same run: block as
-    // other commands, or before any later step. Do not require a later step
-    // to exist; the install itself runs with the job's elevated token the
-    // moment it executes, regardless of what (if anything) follows it.
     const installSteps = steps
       .map((s, i) => ({ i, run: `${s.run || ''}` }))
       .filter(s => INSTALL_RE.test(s.run));
@@ -54,24 +66,34 @@ for (const file of fs.readdirSync(dir).filter(f => WORKFLOW_EXT.test(f)).sort())
 
   const trigger = doc.on?.workflow_run;
   if (trigger) {
-    const hasBranches = Boolean(trigger.branches);
     const annotation = /# security-reviewed:\s*\d{4}-\d{2}-\d{2}\s*\n\s*workflow_run:/.test(source);
 
-    // Evaluate EVERY job in this workflow, not just whether at least one job
-    // is guarded. A workflow_run trigger exposes the triggering ref's commits
-    // to every job in the file, and GitHub grants workflow_run jobs secrets
-    // and write-scoped tokens by default -- an unguarded sibling job is a
-    // real exposure even when another job in the same file is guarded.
+    // A workflow_run job gets secrets and write-scoped tokens regardless of
+    // whether `branches` is set -- `branches` only narrows WHICH triggering
+    // runs fire the workflow, it is not a trust boundary. Every job in a
+    // workflow_run-triggered workflow needs its own evaluation.
+    //
+    // "Guarded" requires the job's `if:` to actually RESTRICT execution to
+    // the trusted repository, not merely mention head_repository.full_name
+    // anywhere in the condition -- a condition like
+    // `head_repository.full_name != github.repository` mentions the field
+    // but selects EXTERNAL repos, the opposite of a guard. We require the
+    // comparison to be an equality check against github.repository (the
+    // one safe, common pattern); anything else is flagged for manual
+    // review rather than silently trusted, since condition expressions are
+    // too varied to fully parse here.
+    const GUARD_RE = /head_repository\.full_name\s*==\s*github\.repository/;
+
     const jobEntries = Object.entries(doc.jobs || {});
     const unguardedJobs = jobEntries
-      .filter(([, j]) => !/head_repository\.full_name/.test(j.if || ''))
+      .filter(([, j]) => !GUARD_RE.test(j.if || ''))
       .map(([id]) => id);
 
-    console.log(`${file} | workflow_run branches=${hasBranches} unguarded_jobs=${unguardedJobs.join(',') || 'none'}`);
+    console.log(`${file} | workflow_run trigger present | unguarded_jobs=${unguardedJobs.join(',') || 'none'}`);
 
-    if (hasBranches && unguardedJobs.length > 0 && !annotation) {
+    if (unguardedJobs.length > 0 && !annotation) {
       for (const id of unguardedJobs) {
-        failures.push(`${file}:${id}: workflow_run branch filter lacks head_repository.full_name guard on this job`);
+        failures.push(`${file}:${id}: workflow_run trigger lacks a head_repository.full_name == github.repository guard on this job`);
       }
     }
   }
