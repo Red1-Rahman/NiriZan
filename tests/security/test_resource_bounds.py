@@ -1,6 +1,5 @@
+# tests/security/test_resource_bounds.py
 """Resource exhaustion regression tests."""
-
-import asyncio
 
 import numpy as np
 import pytest
