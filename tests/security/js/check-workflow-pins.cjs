@@ -41,6 +41,11 @@ for (const file of fs.readdirSync(dir).filter(f => WORKFLOW_EXT.test(f)).sort())
   for (const [id, job] of Object.entries(doc.jobs || {})) {
     const perms = job.permissions !== undefined ? job.permissions : workflowPerms;
     const steps = job.steps || [];
+    // When both the workflow and the job omit `permissions`, the effective
+    // GITHUB_TOKEN scope comes from the repository/organization default,
+    // which this static check cannot see (it may be read-write). Treat that
+    // as unresolved rather than as unprivileged.
+    const permissionsOmitted = perms === undefined;
     const privileged = isPrivileged(perms);
 
     const installSteps = steps
@@ -49,7 +54,11 @@ for (const file of fs.readdirSync(dir).filter(f => WORKFLOW_EXT.test(f)).sort())
 
     const checkoutUnsafe = steps.some(s => `${s.uses || ''}`.startsWith('actions/checkout@') && s.with?.['persist-credentials'] !== false);
 
-    console.log(`${file} | ${job.name || id} | ${JSON.stringify(perms)} | installs=${installSteps.length}, unsafe-checkout=${checkoutUnsafe}`);
+    console.log(`${file} | ${job.name || id} | ${permissionsOmitted ? '<omitted>' : JSON.stringify(perms)} | installs=${installSteps.length}, unsafe-checkout=${checkoutUnsafe}`);
+
+    if (permissionsOmitted && installSteps.length > 0) {
+      failures.push(`${file}:${id}: package install has unresolved token permissions; declare permissions explicitly`);
+    }
 
     if (privileged && installSteps.length > 0) {
       for (const { i, run } of installSteps) {
