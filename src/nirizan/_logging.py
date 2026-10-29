@@ -28,19 +28,40 @@ def get_logger(module_name: str) -> logging.Logger:
     return logging.getLogger(module_name)
 
 
+def _escape_control_chars(text: str) -> str:
+    """Neutralize CR/LF so a single log call cannot forge additional log lines.
+
+    Producer- or model-influenced strings (span names, raw LLM completions,
+    attribute values) can reach formatted log records via `%`-style args.
+    Without this, a value containing `\\r` or `\\n` lets that content render
+    as what looks like a second, independent `[LEVEL] ...` record -- a log
+    forging vector. Escaping (not stripping) preserves the original content
+    for anyone reading the raw text, while guaranteeing one log call still
+    produces exactly one visual line.
+    """
+    return text.replace("\r\n", "\\r\\n").replace("\r", "\\r").replace("\n", "\\n")
+
+
 class NiriZanFormatter(logging.Formatter):
     """Formats a record with millisecond precision and full exception trace support:
 
     [INFO] 2026-08-07 14:40:23.279 [NiriZan] tracer.py:182 Started trace 4baf5d17
+
+    Any CR/LF present in the formatted message (record.getMessage(), which may
+    carry producer- or model-influenced content via %-style args) is escaped
+    rather than passed through verbatim, so one log call cannot be used to
+    forge what looks like an additional, independent log record.
     """
 
     def format(self, record: logging.LogRecord) -> str:
         ts = self.formatTime(record, "%Y-%m-%d %H:%M:%S")
         ts = f"{ts}.{int(record.msecs):03d}"
 
+        safe_message = _escape_control_chars(record.getMessage())
+
         msg = (
             f"[{record.levelname}] {ts} [NiriZan] "
-            f"{record.filename}:{record.lineno} {record.getMessage()}"
+            f"{record.filename}:{record.lineno} {safe_message}"
         )
 
         if record.exc_info:
