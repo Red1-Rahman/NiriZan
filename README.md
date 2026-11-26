@@ -25,6 +25,7 @@
 <br>
 <!-- Documentation: how to learn it -->
 [![Documentation](https://img.shields.io/badge/Docs-Read%20the%20Docs-blue)](https://nirizan.readthedocs.io/en/latest/)
+[![Video Series](https://img.shields.io/badge/Video%20Series-The%20Math%20Behind%20NiriZan-E4405F?logo=instagram&logoColor=white)](#the-math-behind-nirizan-video-series)
 </div>
 
 ---
@@ -81,6 +82,22 @@ Unlike orchestration frameworks that focus on building AI applications, NiriZan 
 ### Vision
 
 The long-term vision of NiriZan is to become the **engineering quality layer for production AI**, ensuring that every AI application can be continuously measured before, during, and after deployment.
+
+---
+
+## The Math Behind NiriZan (Video Series)
+
+Short explainer reels that walk through the statistics NiriZan is built on, one idea per episode. Each episode is under two minutes and is designed to be watched in order, since later episodes build on earlier ones.
+
+| Episode | Topic | What it covers | Watch |
+|---|---|---|---|
+| **EP 01** | Holm-Bonferroni | Why testing many metrics at once piles up false alarms, how a shared error budget (alpha) works, and how Holm's step-down procedure keeps more real detections than plain Bonferroni while still holding the family-wise error rate at alpha. | [![Watch EP 01](https://img.shields.io/badge/Watch-EP%2001-E4405F?logo=instagram&logoColor=white)](https://www.instagram.com/reel/Dfjl7gYTtXP/) |
+| **EP 02** | Permutation Tests | How NiriZan detects changes in how metrics vary together, such as a flipped correlation, that per-metric tests cannot see. Covers label shuffling, the null distribution, the `(k+1)/(R+1)` p-value, and why structure verdicts are capped at warning in default mode. | [![Watch EP 02](https://img.shields.io/badge/Watch-EP%2002-E4405F?logo=instagram&logoColor=white)](https://www.instagram.com/reel/Df99D6lz_AQ/) |
+| **EP 03** | Bootstrap and Judge Drift | How to tell whether the system or the judge moved. Covers bootstrap confidence bands, fixed anchor sets rescored on demand, and the four-way verdict: none, judge drift, system drift, or joint drift. | [![Watch EP 03](https://img.shields.io/badge/Watch-EP%2003-E4405F?logo=instagram&logoColor=white)](https://www.instagram.com/reel/DgNB8oKTh_g/) |
+
+> All numbers shown in the videos are illustrative, not NiriZan benchmark results.
+
+For the written treatment of the same ideas, see the [Read More](#read-more) section below and the [`docs/`](docs/) folder.
 
 ---
 
